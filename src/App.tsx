@@ -33,6 +33,7 @@ type Role = 'admin' | 'sales' | 'partner' | 'customer'
 type Language = 'zh' | 'en'
 type NavKey =
   | 'dashboard'
+  | 'profiles'
   | 'vehicles'
   | 'quotes'
   | 'orders'
@@ -71,6 +72,8 @@ type StaffUser = {
 
 type Vehicle = {
   id: string
+  profileId: number | null
+  profile: VehicleProfile | null
   model: string
   trim: string
   year: string
@@ -98,6 +101,43 @@ type Vehicle = {
   cost?: number
   visiblePrice: number
   priceLabel: string
+}
+
+type VehicleProfile = {
+  id: number
+  brand: string
+  model: string
+  year: string
+  trim: string
+  energyType: string
+  batteryCapacity: string
+  rangeKm: number
+  drivetrain: string
+  bodyType: string
+  dimensions: string
+  wheelbase: string
+  motorPower: string
+  seats: string
+  fastChargeTime: string
+  slowChargeTime: string
+  officialPrice: string
+  features: string
+  sourceUrl: string
+  notes: string
+  specs: VehicleProfileSpec[]
+  createdAt: string
+  updatedAt: string
+}
+
+type VehicleProfileSpec = {
+  id: number
+  groupName: string
+  name: string
+  value: string
+  sortOrder: number
+  sourceName: string
+  sourceUrl: string
+  updatedAt: string
 }
 
 type PriceHistoryEntry = {
@@ -289,6 +329,7 @@ type LogisticsStep = {
 type AppData = {
   user: User
   permissions: Permissions
+  vehicleProfiles: VehicleProfile[]
   vehicles: Vehicle[]
   inquiries: Inquiry[]
   quotes: Quote[]
@@ -318,6 +359,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { key: 'dashboard', icon: LayoutDashboard, roles: ['admin', 'sales', 'partner', 'customer'] },
+  { key: 'profiles', icon: FileText, roles: ['admin', 'sales'] },
   { key: 'vehicles', icon: Car, roles: ['admin', 'sales', 'partner', 'customer'] },
   { key: 'quotes', icon: ClipboardList, roles: ['admin', 'sales', 'partner', 'customer'] },
   { key: 'orders', icon: PackageCheck, roles: ['admin', 'partner', 'customer'] },
@@ -348,6 +390,7 @@ const translations: Record<Language, Record<string, string>> = {
     pieces: '条',
     view: '视图',
     nav_dashboard: '首页看板',
+    nav_profiles: '车型库',
     nav_vehicles: '车辆资源',
     nav_quotes: '询价管理',
     nav_orders: '订单管理',
@@ -361,6 +404,7 @@ const translations: Record<Language, Record<string, string>> = {
     role_partner: '合作伙伴',
     role_customer: '客户',
     vehiclesSubtitle: '按车型集合查看配置版本、现车数量、预订周期和价格有效期。',
+    profilesSubtitle: '维护车型参数资料，并按同一车型的不同年款和版本进行横向对比。',
     quotesSubtitle: '查看每笔询价，并在详情中处理报价版本、修改记录和 PI。',
     ordersSubtitle: '订单聚合报价、车辆、收款和物流。',
     customerOrdersSubtitle: '查看自己的订单、付款状态和交付进度。',
@@ -421,6 +465,7 @@ const translations: Record<Language, Record<string, string>> = {
     pieces: 'items',
     view: 'View',
     nav_dashboard: 'Dashboard',
+    nav_profiles: 'Vehicle Library',
     nav_vehicles: 'Vehicle Resources',
     nav_quotes: 'Inquiry Management',
     nav_orders: 'Orders',
@@ -434,6 +479,7 @@ const translations: Record<Language, Record<string, string>> = {
     role_partner: 'Partner',
     role_customer: 'Customer',
     vehiclesSubtitle: 'Browse model groups, trims, available stock, preorder lead time, and price validity.',
+    profilesSubtitle: 'Maintain model specifications and compare different model years and trims.',
     quotesSubtitle: 'Review each inquiry and manage quote versions, revisions, and PI actions.',
     ordersSubtitle: 'Orders aggregate quotes, vehicles, payments, and logistics.',
     customerOrdersSubtitle: 'View your orders, payment status, and delivery progress.',
@@ -521,6 +567,145 @@ const statusLabels: Record<string, { zh: string; en: string }> = {
   已处理: { zh: '已处理', en: 'Processed' },
 }
 
+const specGroupLabels: Record<string, { zh: string; en: string }> = {
+  基础信息: { zh: '基础信息', en: 'Basic Info' },
+  车身: { zh: '车身', en: 'Body' },
+  动力: { zh: '动力', en: 'Powertrain' },
+  '电池/续航': { zh: '电池/续航', en: 'Battery / Range' },
+  充电: { zh: '充电', en: 'Charging' },
+  能耗: { zh: '能耗', en: 'Energy Consumption' },
+  性能: { zh: '性能', en: 'Performance' },
+  '底盘/转向': { zh: '底盘/转向', en: 'Chassis / Steering' },
+  '制动/轮胎': { zh: '制动/轮胎', en: 'Brakes / Tires' },
+  外部配置: { zh: '外部配置', en: 'Exterior Features' },
+  安全配置: { zh: '安全配置', en: 'Safety' },
+  辅助驾驶: { zh: '辅助驾驶', en: 'Driver Assistance' },
+  '座舱/舒适': { zh: '座舱/舒适', en: 'Cabin / Comfort' },
+  配置: { zh: '配置', en: 'Features' },
+}
+
+const specNameLabels: Record<string, { zh: string; en: string }> = {
+  品牌: { zh: '品牌', en: 'Brand' },
+  车型: { zh: '车型', en: 'Model' },
+  年款: { zh: '年款', en: 'Model Year' },
+  版本: { zh: '版本', en: 'Trim' },
+  配置版本: { zh: '配置版本', en: 'Trim' },
+  能源类型: { zh: '能源类型', en: 'Energy Type' },
+  级别: { zh: '级别', en: 'Segment' },
+  国内指导价参考: { zh: '国内指导价参考', en: 'China MSRP Reference' },
+  官方指导价: { zh: '官方指导价', en: 'Official MSRP' },
+  长宽高: { zh: '长宽高', en: 'Length x Width x Height' },
+  轴距: { zh: '轴距', en: 'Wheelbase' },
+  车身结构: { zh: '车身结构', en: 'Body Structure' },
+  座位数: { zh: '座位数', en: 'Seats' },
+  电机功率: { zh: '电机功率', en: 'Motor Power' },
+  电机扭矩: { zh: '电机扭矩', en: 'Motor Torque' },
+  电机马力: { zh: '电机马力', en: 'Motor Horsepower' },
+  驱动方式: { zh: '驱动方式', en: 'Drive Type' },
+  电池容量: { zh: '电池容量', en: 'Battery Capacity' },
+  续航里程: { zh: '续航里程', en: 'Range' },
+  CLTC续航: { zh: 'CLTC续航', en: 'CLTC Range' },
+  'CLTC 续航': { zh: 'CLTC 续航', en: 'CLTC Range' },
+  电池类型: { zh: '电池类型', en: 'Battery Type' },
+  快充: { zh: '快充', en: 'Fast Charging' },
+  快充时间: { zh: '快充时间', en: 'Fast Charging Time' },
+  慢充时间: { zh: '慢充时间', en: 'AC Charging Time' },
+  快充功率: { zh: '快充功率', en: 'Fast Charging Power' },
+  快充电量范围: { zh: '快充电量范围', en: 'Fast Charging SOC Range' },
+  百公里耗电: { zh: '百公里耗电', en: 'Energy Consumption' },
+  最高车速: { zh: '最高车速', en: 'Top Speed' },
+  '0-50km/h 加速': { zh: '0-50km/h 加速', en: '0-50 km/h Acceleration' },
+  前悬架: { zh: '前悬架', en: 'Front Suspension' },
+  后悬架: { zh: '后悬架', en: 'Rear Suspension' },
+  转向助力: { zh: '转向助力', en: 'Power Steering' },
+  车体结构: { zh: '车体结构', en: 'Vehicle Body' },
+  前制动器: { zh: '前制动器', en: 'Front Brakes' },
+  后制动器: { zh: '后制动器', en: 'Rear Brakes' },
+  驻车制动: { zh: '驻车制动', en: 'Parking Brake' },
+  '轮毂/轮胎规格': { zh: '轮毂/轮胎规格', en: 'Wheel / Tire Size' },
+  天窗类型: { zh: '天窗类型', en: 'Sunroof Type' },
+  车顶行李架: { zh: '车顶行李架', en: 'Roof Rails' },
+  主动刹车: { zh: '主动刹车', en: 'AEB' },
+  '主动刹车 AEB': { zh: '主动刹车 AEB', en: 'AEB' },
+  车道偏离预警: { zh: '车道偏离预警', en: 'Lane Departure Warning' },
+  车身稳定控制: { zh: '车身稳定控制', en: 'ESC' },
+  胎压监测: { zh: '胎压监测', en: 'TPMS' },
+  驾驶辅助级别: { zh: '驾驶辅助级别', en: 'Driver Assistance Level' },
+  自适应巡航: { zh: '自适应巡航', en: 'Adaptive Cruise Control' },
+  '360 全景影像': { zh: '360 全景影像', en: '360 Camera' },
+  中控屏: { zh: '中控屏', en: 'Center Display' },
+  '车联网/OTA': { zh: '车联网/OTA', en: 'Connected Services / OTA' },
+  座椅功能: { zh: '座椅功能', en: 'Seat Functions' },
+  音响: { zh: '音响', en: 'Audio System' },
+  无线充电: { zh: '无线充电', en: 'Wireless Charging' },
+  热泵空调: { zh: '热泵空调', en: 'Heat Pump' },
+  代表配置: { zh: '代表配置', en: 'Key Features' },
+}
+
+const specValueTranslations: Array<[RegExp, string]> = [
+  [/深蓝智驾AD PRO纯电版/g, 'Deepal AD PRO BEV'],
+  [/乾崑智驾ADS SE纯电版/g, 'Qiankun ADS SE BEV'],
+  [/华为乾崑智驾/g, 'Huawei Qiankun AD'],
+  [/华为乾崑激光版/g, 'Huawei Qiankun LiDAR Edition'],
+  [/华为乾崑/g, 'Huawei Qiankun'],
+  [/比亚迪/g, 'BYD'],
+  [/吉利银河/g, 'Geely Galaxy'],
+  [/长安深蓝/g, 'Changan Deepal'],
+  [/宋PLUS EV/g, 'Song Plus EV'],
+  [/深蓝 S07/g, 'Deepal S07'],
+  [/银河 E5/g, 'Galaxy E5'],
+  [/豪华型/g, 'Luxury'],
+  [/尊贵型/g, 'Premium'],
+  [/旗舰型/g, 'Flagship'],
+  [/纯电版/g, 'BEV'],
+  [/启航版/g, 'Launch Edition'],
+  [/探索版/g, 'Explore Edition'],
+  [/远航版/g, 'Long Range Edition'],
+  [/探索\+版/g, 'Explore+ Edition'],
+  [/星舰版/g, 'Flagship Edition'],
+  [/纯电/g, 'BEV'],
+  [/紧凑型 SUV/g, 'Compact SUV'],
+  [/中型 SUV/g, 'Mid-size SUV'],
+  [/磷酸铁锂刀片电池/g, 'LFP Blade Battery'],
+  [/磷酸铁锂电池/g, 'LFP Battery'],
+  [/前置前驱/g, 'Front-motor FWD'],
+  [/后置后驱/g, 'Rear-motor RWD'],
+  [/前驱/g, 'FWD'],
+  [/后驱/g, 'RWD'],
+  [/5 门 5 座 SUV/g, '5-door 5-seat SUV'],
+  [/5 座/g, '5 seats'],
+  [/麦弗逊式独立悬架/g, 'MacPherson independent suspension'],
+  [/多连杆式独立悬架/g, 'Multi-link independent suspension'],
+  [/H 臂多连杆独立悬架/g, 'H-arm multi-link independent suspension'],
+  [/电动助力/g, 'Electric power steering'],
+  [/承载式/g, 'Unibody'],
+  [/通风盘式/g, 'Ventilated disc'],
+  [/盘式/g, 'Disc'],
+  [/电子驻车/g, 'Electronic parking brake'],
+  [/胎压显示/g, 'Tire pressure display'],
+  [/支持/g, 'Supported'],
+  [/标配/g, 'Standard'],
+  [/以版本配置为准/g, 'Depends on trim'],
+  [/以实车配置为准/g, 'Subject to actual vehicle configuration'],
+  [/以公开配置为准/g, 'Subject to public specification'],
+  [/以官方配置为准/g, 'Subject to official specification'],
+  [/可开启全景天窗/g, 'Openable panoramic sunroof'],
+  [/全景天窗/g, 'Panoramic sunroof'],
+  [/车顶行李架/g, 'Roof rails'],
+  [/加热/g, 'heating'],
+  [/通风/g, 'ventilation'],
+  [/按摩/g, 'massage'],
+  [/高阶音响/g, 'premium audio'],
+  [/激光版/g, 'LiDAR Edition'],
+  [/深蓝智驾/g, 'Deepal AD'],
+  [/按版本配置/g, 'depending on trim'],
+  [/左右/g, 'approx.'],
+  [/万元/g, 'RMB 10k'],
+  [/小时/g, 'h'],
+  [/分钟/g, 'min'],
+  [/约/g, 'approx. '],
+]
+
 const ALL_STATUSES = '__all__'
 const lockedQuoteRequestStatuses = new Set(['quote_accepted', 'pi_confirmed'])
 
@@ -530,6 +715,9 @@ type I18nContextValue = {
   t: (key: string) => string
   roleLabel: (role: Role) => string
   statusLabel: (label: string) => string
+  specGroupLabel: (label: string) => string
+  specNameLabel: (label: string) => string
+  specValueLabel: (value: string) => string
   formatDateText: (value: string | null) => string
 }
 
@@ -560,6 +748,24 @@ const formatProductionMonth = (value?: string) => {
   if (!value) return '生产年月待补充'
   const [year, month] = value.split('-')
   return `${year}年${Number(month)}月`
+}
+
+function translateSpecValue(value: string, language: Language) {
+  if (language === 'zh') return value
+  return specValueTranslations.reduce(
+    (translated, [pattern, replacement]) => translated.replace(pattern, replacement),
+    value,
+  )
+}
+
+function displayModelName(profile: Pick<VehicleProfile, 'brand' | 'model'>, language: Language) {
+  return language === 'zh'
+    ? `${profile.brand} ${profile.model}`
+    : translateSpecValue(`${profile.brand} ${profile.model}`, language)
+}
+
+function displayTrimName(trim: string, language: Language) {
+  return translateSpecValue(trim, language)
 }
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
@@ -607,6 +813,9 @@ function App() {
     t: (key: string) => translations[language][key] ?? key,
     roleLabel: (role: Role) => translations[language][`role_${role}`] ?? role,
     statusLabel: (label: string) => statusLabels[label]?.[language] ?? label,
+    specGroupLabel: (label: string) => specGroupLabels[label]?.[language] ?? label,
+    specNameLabel: (label: string) => specNameLabels[label]?.[language] ?? label,
+    specValueLabel: (value: string) => translateSpecValue(value, language),
     formatDateText: (value: string | null) => formatDateByLanguage(value, language),
   }), [language])
 
@@ -736,10 +945,19 @@ function App() {
         {active === 'dashboard' && (
           <Dashboard data={data} primaryOrder={primaryOrder} />
         )}
+        {active === 'profiles' && (
+          <DataPanel title={i18n.t('nav_profiles')} subtitle={i18n.t('profilesSubtitle')}>
+            <VehicleProfileLibraryPage
+              onChanged={loadData}
+              profiles={data.vehicleProfiles}
+            />
+          </DataPanel>
+        )}
         {active === 'vehicles' && (
           <DataPanel title={i18n.t('nav_vehicles')} subtitle={i18n.t('vehiclesSubtitle')}>
             <VehicleTable
               vehicles={data.vehicles}
+              vehicleProfiles={data.vehicleProfiles}
               canSeeCost={data.permissions.canSeeCost}
               canRequestQuote={data.permissions.canRequestQuote}
               onCreated={loadData}
@@ -1153,11 +1371,13 @@ function DataPanel({ title, subtitle, children }: { title: string; subtitle: str
 
 function VehicleTable({
   vehicles,
+  vehicleProfiles,
   canSeeCost,
   canRequestQuote,
   onCreated,
 }: {
   vehicles: Vehicle[]
+  vehicleProfiles: VehicleProfile[]
   canSeeCost: boolean
   canRequestQuote: boolean
   onCreated: () => Promise<void>
@@ -1175,6 +1395,8 @@ function VehicleTable({
   const [expandedModels, setExpandedModels] = useState<string[]>([])
   const [expandedVersions, setExpandedVersions] = useState<string[]>([])
   const [showVehicleForm, setShowVehicleForm] = useState(false)
+  const [showProfileManager, setShowProfileManager] = useState(false)
+  const [profileDetail, setProfileDetail] = useState<VehicleProfile | null>(null)
   const [sourceVehicle, setSourceVehicle] = useState<Vehicle | null>(null)
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null)
   const [priceVehicle, setPriceVehicle] = useState<Vehicle | null>(null)
@@ -1262,12 +1484,18 @@ function VehicleTable({
         <div className="vehicle-admin-bar">
           <div>
             <strong>管理员录入</strong>
-            <span>先建立车型配置，再为该配置添加一个或多个供应商车源。</span>
+            <span>先建立车型库资料，再从车型库选择并添加供应商车源。</span>
           </div>
-          <button onClick={() => setShowVehicleForm(true)} type="button">
-            <Plus size={17} />
-            新增车型配置
-          </button>
+          <div className="vehicle-admin-actions">
+            <button className="secondary-button compact-button" onClick={() => setShowProfileManager(true)} type="button">
+              <FileText size={17} />
+              车型库管理
+            </button>
+            <button onClick={() => setShowVehicleForm(true)} type="button">
+              <Plus size={17} />
+              新增车源配置
+            </button>
+          </div>
         </div>
       )}
       {canRequestQuote && (
@@ -1376,6 +1604,7 @@ function VehicleTable({
                             onAddSource={() => setSourceVehicle(vehicle)}
                             onEditSource={(source) => setEditingSource({ vehicle, source })}
                             onEditVehicle={() => setEditingVehicle(vehicle)}
+                            onViewProfile={() => setProfileDetail(vehicle.profile)}
                             onListingChanged={async () => {
                               await api(`/api/vehicles/${vehicle.id}/listing`, {
                                 method: 'PATCH',
@@ -1447,6 +1676,7 @@ function VehicleTable({
             setShowVehicleForm(false)
             await onCreated()
           }}
+          profiles={vehicleProfiles}
         />
       )}
       {editingVehicle && (
@@ -1456,7 +1686,21 @@ function VehicleTable({
             setEditingVehicle(null)
             await onCreated()
           }}
+          profiles={vehicleProfiles}
           vehicle={editingVehicle}
+        />
+      )}
+      {showProfileManager && (
+        <VehicleProfileManager
+          onChanged={onCreated}
+          onClose={() => setShowProfileManager(false)}
+          profiles={vehicleProfiles}
+        />
+      )}
+      {profileDetail && (
+        <VehicleProfileDetail
+          onClose={() => setProfileDetail(null)}
+          profile={profileDetail}
         />
       )}
       {priceVehicle && (
@@ -1499,6 +1743,7 @@ function VehicleResourceDetails({
   canSeeCost,
   onAddSource,
   onEditVehicle,
+  onViewProfile,
   onUpdatePrice,
   onListingChanged,
   onEditSource,
@@ -1508,6 +1753,7 @@ function VehicleResourceDetails({
   canSeeCost: boolean
   onAddSource: () => void
   onEditVehicle: () => void
+  onViewProfile: () => void
   onUpdatePrice: () => void
   onListingChanged: () => Promise<void>
   onEditSource: (source: SupplierSource) => void
@@ -1518,11 +1764,17 @@ function VehicleResourceDetails({
       {canSeeCost && (
         <div className="vehicle-management-actions">
           <button onClick={onEditVehicle} type="button"><Pencil size={15} />编辑车型资料</button>
+          <button disabled={!vehicle.profile} onClick={onViewProfile} type="button"><FileText size={15} />查看参数</button>
           <button onClick={onUpdatePrice} type="button"><CreditCard size={15} />更新合作价</button>
           <button className={vehicle.isListed ? 'danger-outline' : ''} onClick={onListingChanged} type="button">
             {vehicle.isListed ? <EyeOff size={15} /> : <Eye size={15} />}
             {vehicle.isListed ? '下架配置' : '恢复上架'}
           </button>
+        </div>
+      )}
+      {!canSeeCost && vehicle.profile && (
+        <div className="vehicle-management-actions public-actions">
+          <button onClick={onViewProfile} type="button"><FileText size={15} />查看车辆参数</button>
         </div>
       )}
       {(vehicle.imageUrl || vehicle.publicNotes) && (
@@ -1599,21 +1851,26 @@ function VehicleResourceDetails({
 function VehicleForm({
   onClose,
   onCreated,
+  profiles,
   vehicle,
 }: {
   onClose: () => void
   onCreated: () => Promise<void>
+  profiles: VehicleProfile[]
   vehicle?: Vehicle
 }) {
+  const { language } = useI18n()
+  const initialProfileId = vehicle?.profileId ? String(vehicle.profileId) : profiles[0] ? String(profiles[0].id) : ''
+  const initialProfile = profiles.find((profile) => String(profile.id) === initialProfileId)
   const [form, setForm] = useState({
-    brand: '',
-    model: vehicle?.model ?? '',
-    trim: vehicle?.trim ?? '',
-    year: vehicle?.year ?? String(new Date().getFullYear()),
-    energyType: vehicle?.energyType ?? '纯电',
-    rangeKm: vehicle?.rangeKm ? String(vehicle.rangeKm) : '',
-    batteryCapacity: vehicle?.batteryCapacity ?? '',
-    drivetrain: vehicle?.drivetrain ?? '前驱',
+    profileId: initialProfileId,
+    model: vehicle?.model ?? (initialProfile ? `${initialProfile.brand} ${initialProfile.model}` : ''),
+    trim: vehicle?.trim ?? initialProfile?.trim ?? '',
+    year: vehicle?.year ?? initialProfile?.year ?? String(new Date().getFullYear()),
+    energyType: vehicle?.energyType ?? initialProfile?.energyType ?? '纯电',
+    rangeKm: vehicle?.rangeKm ? String(vehicle.rangeKm) : initialProfile?.rangeKm ? String(initialProfile.rangeKm) : '',
+    batteryCapacity: vehicle?.batteryCapacity ?? initialProfile?.batteryCapacity ?? '',
+    drivetrain: vehicle?.drivetrain ?? initialProfile?.drivetrain ?? '前驱',
     availableColors: vehicle?.availableColors.join('、') ?? '',
     partnerPrice: vehicle ? String(vehicle.visiblePrice) : '',
     imageUrl: vehicle?.imageUrl ?? '',
@@ -1635,6 +1892,7 @@ function VehicleForm({
         method: vehicle ? 'PATCH' : 'POST',
         body: JSON.stringify({
           ...form,
+          profileId: Number(form.profileId),
           rangeKm: Number(form.rangeKm),
           partnerPrice: Number(form.partnerPrice),
           availableColors: form.availableColors.split(/[,，、]/).map((color) => color.trim()).filter(Boolean),
@@ -1652,19 +1910,41 @@ function VehicleForm({
     <div className="modal-backdrop">
       <form className="quote-form vehicle-entry-form" onSubmit={submit}>
         <div className="modal-title">
-          <div><p className="eyebrow">车辆资料管理</p><h2>{vehicle ? '编辑车型配置' : '新增车型配置'}</h2><span>这些资料将用于客户查看和发起询价</span></div>
+          <div><p className="eyebrow">车源资料管理</p><h2>{vehicle ? '编辑车源配置' : '新增车源配置'}</h2><span>新增车源前需要先在车型库建立车辆参数资料</span></div>
           <button aria-label="关闭" onClick={onClose} type="button">×</button>
         </div>
         <div className="form-section-label">基本信息</div>
         <div className="form-grid">
-          {!vehicle && <label>品牌<input onChange={(event) => update('brand', event.target.value)} placeholder="例如 BYD" required value={form.brand} /></label>}
-          <label>{vehicle ? '完整车型名称' : '车型'}<input onChange={(event) => update('model', event.target.value)} placeholder={vehicle ? '例如 BYD Song Plus EV' : '例如 Song Plus EV'} required value={form.model} /></label>
-          <label>配置版本<input onChange={(event) => update('trim', event.target.value)} placeholder="例如 旗舰型 605KM" required value={form.trim} /></label>
-          <label>年款<input onChange={(event) => update('year', event.target.value)} required value={form.year} /></label>
-          <label>能源类型<select onChange={(event) => update('energyType', event.target.value)} value={form.energyType}><option>纯电</option><option>插电混动</option><option>增程</option></select></label>
-          <label>驱动方式<select onChange={(event) => update('drivetrain', event.target.value)} value={form.drivetrain}><option>前驱</option><option>后驱</option><option>四驱</option></select></label>
-          <label>续航里程（KM）<input min="0" onChange={(event) => update('rangeKm', event.target.value)} type="number" value={form.rangeKm} /></label>
-          <label>电池容量<input onChange={(event) => update('batteryCapacity', event.target.value)} placeholder="例如 87 kWh" value={form.batteryCapacity} /></label>
+          {!vehicle && (
+            <label>选择车型库
+              <select onChange={(event) => {
+                const profile = profiles.find((item) => String(item.id) === event.target.value)
+                setForm((current) => ({
+                  ...current,
+                  profileId: event.target.value,
+                  model: profile ? `${profile.brand} ${profile.model}` : '',
+                  trim: profile?.trim ?? '',
+                  year: profile?.year ?? '',
+                  energyType: profile?.energyType ?? '纯电',
+                  rangeKm: profile?.rangeKm ? String(profile.rangeKm) : '',
+                  batteryCapacity: profile?.batteryCapacity ?? '',
+                  drivetrain: profile?.drivetrain ?? '前驱',
+                }))
+              }} required value={form.profileId}>
+                <option value="">请选择车型库资料</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>{displayModelName(profile, language)} · {profile.year} · {displayTrimName(profile.trim, language)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>{vehicle ? '完整车型名称' : '车型'}<input disabled={!vehicle} onChange={(event) => update('model', event.target.value)} placeholder="从车型库自动带出" required value={form.model} /></label>
+          <label>配置版本<input disabled={!vehicle} onChange={(event) => update('trim', event.target.value)} placeholder="例如 旗舰型 605KM" required value={form.trim} /></label>
+          <label>年款<input disabled={!vehicle} onChange={(event) => update('year', event.target.value)} required value={form.year} /></label>
+          <label>能源类型<select disabled={!vehicle} onChange={(event) => update('energyType', event.target.value)} value={form.energyType}><option>纯电</option><option>插电混动</option><option>增程</option></select></label>
+          <label>驱动方式<select disabled={!vehicle} onChange={(event) => update('drivetrain', event.target.value)} value={form.drivetrain}><option>前驱</option><option>后驱</option><option>四驱</option></select></label>
+          <label>续航里程（KM）<input disabled={!vehicle} min="0" onChange={(event) => update('rangeKm', event.target.value)} type="number" value={form.rangeKm} /></label>
+          <label>电池容量<input disabled={!vehicle} onChange={(event) => update('batteryCapacity', event.target.value)} placeholder="例如 87 kWh" value={form.batteryCapacity} /></label>
         </div>
         <label>可选颜色<input onChange={(event) => update('availableColors', event.target.value)} placeholder="冰川蓝、雪域白、曜石黑" value={form.availableColors} /></label>
         <div className="form-section-label">{vehicle ? '展示资料' : '价格与展示'}</div>
@@ -1680,6 +1960,481 @@ function VehicleForm({
           <button className="primary-button" disabled={busy} type="submit">{busy ? '保存中...' : vehicle ? '保存修改' : '保存车型配置'}</button>
         </div>
       </form>
+    </div>
+  )
+}
+
+const emptyProfileForm = {
+  brand: '',
+  model: '',
+  year: String(new Date().getFullYear()),
+  trim: '',
+  energyType: '纯电',
+  batteryCapacity: '',
+  rangeKm: '',
+  drivetrain: '',
+  bodyType: '',
+  dimensions: '',
+  wheelbase: '',
+  motorPower: '',
+  seats: '',
+  fastChargeTime: '',
+  slowChargeTime: '',
+  officialPrice: '',
+  features: '',
+  sourceUrl: '',
+  notes: '',
+}
+
+function VehicleProfileManager({
+  profiles,
+  onClose,
+  onChanged,
+}: {
+  profiles: VehicleProfile[]
+  onClose: () => void
+  onChanged: () => Promise<void>
+}) {
+  const { language, specValueLabel } = useI18n()
+  const [editingProfile, setEditingProfile] = useState<VehicleProfile | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [csv, setCsv] = useState('品牌,车型,年款,配置版本,能源类型,电池容量,续航里程,驱动方式,车身结构,长宽高,轴距,电机功率,座位数,快充时间,慢充时间,官方指导价,主要配置,资料来源,备注\n')
+  const [importResult, setImportResult] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function importCsv() {
+    setBusy(true)
+    setError('')
+    setImportResult('')
+    try {
+      const result = await api<{ imported: number; updated: number; errors: string[] }>('/api/vehicle-profiles/import', {
+        method: 'POST',
+        body: JSON.stringify({ csv }),
+      })
+      setImportResult(`新增 ${result.imported} 条，更新 ${result.updated} 条${result.errors.length ? `，错误：${result.errors.join('；')}` : ''}`)
+      await onChanged()
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : '导入失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="quote-form profile-library-modal">
+        <div className="modal-title">
+          <div><p className="eyebrow">车型资料库</p><h2>车型库管理</h2><span>先维护车型参数，再从车型库创建供应商车源。</span></div>
+          <button aria-label="关闭" onClick={onClose} type="button">×</button>
+        </div>
+        <div className="vehicle-profile-toolbar">
+          <button className="primary-button" onClick={() => { setEditingProfile(null); setShowForm(true) }} type="button"><Plus size={16} />新增车型资料</button>
+          <span>当前 {profiles.length} 条车型资料</span>
+        </div>
+        <div className="vehicle-profile-list">
+          {profiles.map((profile) => (
+            <button key={profile.id} onClick={() => { setEditingProfile(profile); setShowForm(true) }} type="button">
+              <strong>{displayModelName(profile, language)}</strong>
+              <span>{profile.year} · {displayTrimName(profile.trim, language)}</span>
+              <small>{profile.energyType ? specValueLabel(profile.energyType) : (language === 'zh' ? '能源待补充' : 'Energy type pending')} · {profile.rangeKm ? `${profile.rangeKm} KM` : (language === 'zh' ? '续航待补充' : 'Range pending')}</small>
+            </button>
+          ))}
+          {profiles.length === 0 && <div className="inventory-empty">还没有车型资料，请先新增或导入。</div>}
+        </div>
+        <div className="csv-import-box">
+          <strong>CSV 导入</strong>
+          <span>Excel 可另存为 CSV 后复制内容到这里。支持表头：品牌、车型、年款、配置版本、续航里程、电池容量等。</span>
+          <textarea onChange={(event) => setCsv(event.target.value)} value={csv} />
+          {error && <p className="form-error">{error}</p>}
+          {importResult && <p className="form-success">{importResult}</p>}
+          <button className="secondary-button" disabled={busy} onClick={importCsv} type="button">{busy ? '导入中...' : '导入 CSV'}</button>
+        </div>
+        {showForm && (
+          <VehicleProfileForm
+            onChanged={async () => {
+              setShowForm(false)
+              setEditingProfile(null)
+              await onChanged()
+            }}
+            onClose={() => {
+              setShowForm(false)
+              setEditingProfile(null)
+            }}
+            profile={editingProfile ?? undefined}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function VehicleProfileLibraryPage({
+  profiles,
+  onChanged,
+}: {
+  profiles: VehicleProfile[]
+  onChanged: () => Promise<void>
+}) {
+  const { language, specGroupLabel, specNameLabel, specValueLabel } = useI18n()
+  const [query, setQuery] = useState('')
+  const [selectedKey, setSelectedKey] = useState('')
+  const [editingProfile, setEditingProfile] = useState<VehicleProfile | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [csv, setCsv] = useState('品牌,车型,年款,配置版本,能源类型,电池容量,续航里程,驱动方式,车身结构,长宽高,轴距,电机功率,座位数,快充时间,慢充时间,官方指导价,主要配置,资料来源,备注\n')
+  const [importResult, setImportResult] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const groups = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    const grouped = new Map<string, VehicleProfile[]>()
+    for (const profile of profiles) {
+      const key = `${profile.brand} ${profile.model}`
+      const text = `${profile.brand} ${profile.model} ${profile.year} ${profile.trim}`.toLowerCase()
+      if (keyword && !text.includes(keyword)) continue
+      grouped.set(key, [...(grouped.get(key) ?? []), profile])
+    }
+    return [...grouped.entries()]
+      .map(([key, items]) => ({
+        key,
+        brand: items[0]?.brand ?? '',
+        model: items[0]?.model ?? '',
+        profiles: items.sort((a, b) => `${b.year} ${b.trim}`.localeCompare(`${a.year} ${a.trim}`)),
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key))
+  }, [profiles, query])
+
+  const selectedGroup = groups.find((group) => group.key === selectedKey) ?? groups[0] ?? null
+  const comparedProfiles = useMemo(() => selectedGroup?.profiles ?? [], [selectedGroup])
+  const comparisonRows = useMemo(() => buildProfileComparisonRows(comparedProfiles), [comparedProfiles])
+
+  async function importCsv() {
+    setBusy(true)
+    setError('')
+    setImportResult('')
+    try {
+      const result = await api<{ imported: number; updated: number; errors: string[] }>('/api/vehicle-profiles/import', {
+        method: 'POST',
+        body: JSON.stringify({ csv }),
+      })
+      setImportResult(`新增 ${result.imported} 条，更新 ${result.updated} 条${result.errors.length ? `，错误：${result.errors.join('；')}` : ''}`)
+      await onChanged()
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : '导入失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`profile-library-page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <aside className="profile-library-sidebar">
+        <button className="profile-sidebar-toggle" onClick={() => setSidebarCollapsed(true)} type="button">
+          {language === 'zh' ? '收起列表' : 'Collapse List'}
+          <ChevronRight size={15} />
+        </button>
+        <div className="profile-library-actions">
+          <button className="primary-button" onClick={() => { setEditingProfile(null); setShowForm(true) }} type="button"><Plus size={16} />{language === 'zh' ? '新增车型' : 'Add Model'}</button>
+          <button className="secondary-button compact-button" onClick={() => setShowImport((value) => !value)} type="button"><FileText size={16} />{language === 'zh' ? 'CSV 导入' : 'Import CSV'}</button>
+        </div>
+        <label className="inventory-search">
+          <Search size={17} />
+          <input onChange={(event) => setQuery(event.target.value)} placeholder={language === 'zh' ? '搜索品牌、车型、版本' : 'Search brand, model, trim'} value={query} />
+        </label>
+        <div className="profile-model-list">
+          {groups.map((group) => (
+            <button className={selectedGroup?.key === group.key ? 'active' : ''} key={group.key} onClick={() => setSelectedKey(group.key)} type="button">
+              <strong>{displayModelName(group, language)}</strong>
+              <span>{group.profiles.length} {language === 'zh' ? '个年款/版本' : 'model years / trims'}</span>
+            </button>
+          ))}
+          {groups.length === 0 && <div className="inventory-empty">{language === 'zh' ? '没有找到车型资料' : 'No model profiles found'}</div>}
+        </div>
+        {showImport && (
+          <div className="csv-import-box page-import">
+            <strong>{language === 'zh' ? 'CSV 导入' : 'CSV Import'}</strong>
+            <span>{language === 'zh' ? 'Excel 可另存为 CSV 后复制内容到这里。字段支持品牌、车型、年款、配置版本、续航里程、电池容量等。' : 'Save Excel as CSV and paste it here. Supported columns include brand, model, year, trim, range, battery capacity, etc.'}</span>
+            <textarea onChange={(event) => setCsv(event.target.value)} value={csv} />
+            {error && <p className="form-error">{error}</p>}
+            {importResult && <p className="form-success">{importResult}</p>}
+            <button className="secondary-button" disabled={busy} onClick={importCsv} type="button">{busy ? (language === 'zh' ? '导入中...' : 'Importing...') : (language === 'zh' ? '导入 CSV' : 'Import CSV')}</button>
+          </div>
+        )}
+      </aside>
+
+      <section className="profile-comparison-panel">
+        {selectedGroup ? (
+          <>
+            <div className="profile-comparison-header">
+              <div>
+                <p className="eyebrow">{language === 'zh' ? '车型参数对比' : 'Model Specification Comparison'}</p>
+                <h2>{displayModelName(selectedGroup, language)}</h2>
+                <span>{comparedProfiles.length} {language === 'zh' ? '个年款/版本' : 'model years / trims'}，{comparisonRows.length} {language === 'zh' ? '个参数项' : 'spec items'}</span>
+              </div>
+              {sidebarCollapsed && (
+                <button className="profile-sidebar-restore" onClick={() => setSidebarCollapsed(false)} type="button">
+                  <ChevronRight size={15} />
+                  {language === 'zh' ? '展开车型列表' : 'Show Model List'}
+                </button>
+              )}
+            </div>
+            <div className="profile-version-strip">
+              {comparedProfiles.map((profile) => (
+                <button key={profile.id} onClick={() => { setEditingProfile(profile); setShowForm(true) }} type="button">
+                  <strong>{profile.year}</strong>
+                  <span>{displayTrimName(profile.trim, language)}</span>
+                  <small>{language === 'zh' ? '编辑资料' : 'Edit'}</small>
+                </button>
+              ))}
+            </div>
+            <div className="profile-comparison-table-wrap">
+              <table className="profile-comparison-table">
+                <thead>
+                  <tr>
+                    <th>{language === 'zh' ? '参数分组' : 'Group'}</th>
+                    <th>{language === 'zh' ? '参数名称' : 'Specification'}</th>
+                    {comparedProfiles.map((profile) => (
+                      <th key={profile.id}>{profile.year}<br /><span>{displayTrimName(profile.trim, language)}</span></th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisonRows.map((row) => (
+                    <tr key={`${row.groupName}-${row.name}`}>
+                      <td>{specGroupLabel(row.groupName)}</td>
+                      <td>{specNameLabel(row.name)}</td>
+                      {comparedProfiles.map((profile) => (
+                        <td key={profile.id}>{row.values[profile.id] ? specValueLabel(row.values[profile.id]) : '-'}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="profile-source-list page-sources">
+              {[...new Map(comparedProfiles.flatMap((profile) => profile.specs).filter((spec) => spec.sourceName || spec.sourceUrl).map((spec) => [`${spec.sourceName}|${spec.sourceUrl}`, spec])).values()].map((source) => (
+                source.sourceUrl
+                  ? <a className="profile-source-link" href={source.sourceUrl} key={`${source.sourceName}-${source.sourceUrl}`} rel="noreferrer" target="_blank">{source.sourceName || source.sourceUrl}</a>
+                  : <span key={source.sourceName}>{source.sourceName}</span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <EmptyState text={language === 'zh' ? '还没有车型资料，请先新增或导入。' : 'No model profiles yet. Add or import profiles first.'} />
+        )}
+      </section>
+
+      {showForm && (
+        <VehicleProfileForm
+          onChanged={async () => {
+            setShowForm(false)
+            setEditingProfile(null)
+            await onChanged()
+          }}
+          onClose={() => {
+            setShowForm(false)
+            setEditingProfile(null)
+          }}
+          profile={editingProfile ?? undefined}
+        />
+      )}
+    </div>
+  )
+}
+
+function buildProfileComparisonRows(profiles: VehicleProfile[]) {
+  const rowMap = new Map<string, { groupName: string; name: string; sortOrder: number; values: Record<number, string> }>()
+  for (const profile of profiles) {
+    for (const spec of profile.specs) {
+      const key = `${spec.groupName}|||${spec.name}`
+      const row = rowMap.get(key) ?? {
+        groupName: spec.groupName,
+        name: spec.name,
+        sortOrder: spec.sortOrder,
+        values: {},
+      }
+      row.sortOrder = Math.min(row.sortOrder, spec.sortOrder)
+      row.values[profile.id] = spec.value
+      rowMap.set(key, row)
+    }
+  }
+  return [...rowMap.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.groupName.localeCompare(b.groupName) || a.name.localeCompare(b.name))
+}
+
+function VehicleProfileForm({
+  profile,
+  onClose,
+  onChanged,
+}: {
+  profile?: VehicleProfile
+  onClose: () => void
+  onChanged: () => Promise<void>
+}) {
+  const [form, setForm] = useState({
+    ...emptyProfileForm,
+    ...(profile ? {
+      brand: profile.brand,
+      model: profile.model,
+      year: profile.year,
+      trim: profile.trim,
+      energyType: profile.energyType,
+      batteryCapacity: profile.batteryCapacity,
+      rangeKm: profile.rangeKm ? String(profile.rangeKm) : '',
+      drivetrain: profile.drivetrain,
+      bodyType: profile.bodyType,
+      dimensions: profile.dimensions,
+      wheelbase: profile.wheelbase,
+      motorPower: profile.motorPower,
+      seats: profile.seats,
+      fastChargeTime: profile.fastChargeTime,
+      slowChargeTime: profile.slowChargeTime,
+      officialPrice: profile.officialPrice,
+      features: profile.features,
+      sourceUrl: profile.sourceUrl,
+      notes: profile.notes,
+    } : {}),
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  function update(field: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [field]: value }))
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await api(profile ? `/api/vehicle-profiles/${profile.id}` : '/api/vehicle-profiles', {
+        method: profile ? 'PATCH' : 'POST',
+        body: JSON.stringify({ ...form, rangeKm: Number(form.rangeKm) }),
+      })
+      await onChanged()
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="nested-modal">
+      <form className="quote-form profile-entry-form" onSubmit={submit}>
+        <div className="modal-title">
+          <div><p className="eyebrow">车型参数</p><h2>{profile ? '编辑车型资料' : '新增车型资料'}</h2></div>
+          <button aria-label="关闭" onClick={onClose} type="button">×</button>
+        </div>
+        <div className="form-grid">
+          <label>品牌<input onChange={(event) => update('brand', event.target.value)} required value={form.brand} /></label>
+          <label>车型<input onChange={(event) => update('model', event.target.value)} required value={form.model} /></label>
+          <label>年款<input onChange={(event) => update('year', event.target.value)} required value={form.year} /></label>
+          <label>配置版本<input onChange={(event) => update('trim', event.target.value)} required value={form.trim} /></label>
+          <label>能源类型<input onChange={(event) => update('energyType', event.target.value)} value={form.energyType} /></label>
+          <label>电池容量<input onChange={(event) => update('batteryCapacity', event.target.value)} value={form.batteryCapacity} /></label>
+          <label>续航里程（KM）<input min="0" onChange={(event) => update('rangeKm', event.target.value)} type="number" value={form.rangeKm} /></label>
+          <label>驱动方式<input onChange={(event) => update('drivetrain', event.target.value)} value={form.drivetrain} /></label>
+          <label>车身结构<input onChange={(event) => update('bodyType', event.target.value)} value={form.bodyType} /></label>
+          <label>长宽高<input onChange={(event) => update('dimensions', event.target.value)} value={form.dimensions} /></label>
+          <label>轴距<input onChange={(event) => update('wheelbase', event.target.value)} value={form.wheelbase} /></label>
+          <label>电机功率<input onChange={(event) => update('motorPower', event.target.value)} value={form.motorPower} /></label>
+          <label>座位数<input onChange={(event) => update('seats', event.target.value)} value={form.seats} /></label>
+          <label>快充时间<input onChange={(event) => update('fastChargeTime', event.target.value)} value={form.fastChargeTime} /></label>
+          <label>慢充时间<input onChange={(event) => update('slowChargeTime', event.target.value)} value={form.slowChargeTime} /></label>
+          <label>官方指导价<input onChange={(event) => update('officialPrice', event.target.value)} value={form.officialPrice} /></label>
+        </div>
+        <label>主要配置<textarea onChange={(event) => update('features', event.target.value)} value={form.features} /></label>
+        <label>资料来源<input onChange={(event) => update('sourceUrl', event.target.value)} placeholder="公开资料链接，可选" value={form.sourceUrl} /></label>
+        <label>备注<textarea onChange={(event) => update('notes', event.target.value)} value={form.notes} /></label>
+        {error && <p className="form-error">{error}</p>}
+        <div className="form-actions">
+          <button className="secondary-button" onClick={onClose} type="button">取消</button>
+          <button className="primary-button" disabled={busy} type="submit">{busy ? '保存中...' : '保存车型资料'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function VehicleProfileDetail({ profile, onClose }: { profile: VehicleProfile; onClose: () => void }) {
+  const { language, specGroupLabel, specNameLabel, specValueLabel } = useI18n()
+  const groupedSpecs = profile.specs.reduce<Record<string, VehicleProfileSpec[]>>((groups, spec) => {
+    groups[spec.groupName] = [...(groups[spec.groupName] ?? []), spec]
+    return groups
+  }, {})
+  const specSources = [
+    ...new Map(
+      profile.specs
+        .filter((spec) => spec.sourceName || spec.sourceUrl)
+        .map((spec) => [`${spec.sourceName}|${spec.sourceUrl}`, spec]),
+    ).values(),
+  ]
+  const specs = [
+    ['品牌', translateSpecValue(profile.brand, language)],
+    ['车型', displayModelName(profile, language)],
+    ['年款', profile.year],
+    ['配置版本', displayTrimName(profile.trim, language)],
+    ['能源类型', profile.energyType],
+    ['电池容量', profile.batteryCapacity],
+    ['续航里程', profile.rangeKm ? `${profile.rangeKm} KM` : '待补充'],
+    ['驱动方式', profile.drivetrain],
+    ['车身结构', profile.bodyType],
+    ['长宽高', profile.dimensions],
+    ['轴距', profile.wheelbase],
+    ['电机功率', profile.motorPower],
+    ['座位数', profile.seats],
+    ['快充时间', profile.fastChargeTime],
+    ['慢充时间', profile.slowChargeTime],
+    ['官方指导价', profile.officialPrice],
+  ]
+  return (
+    <div className="modal-backdrop">
+      <div className="quote-form profile-detail-modal">
+        <div className="modal-title">
+          <div><p className="eyebrow">{language === 'zh' ? '车辆参数' : 'Vehicle Specifications'}</p><h2>{displayModelName(profile, language)}</h2><span>{profile.year} · {displayTrimName(profile.trim, language)}</span></div>
+          <button aria-label="关闭" onClick={onClose} type="button">×</button>
+        </div>
+        <div className="resource-specs profile-specs">
+          {specs.map(([label, value]) => (
+            <div key={label}><span>{specNameLabel(label)}</span><strong>{value ? specValueLabel(String(value)) : (language === 'zh' ? '待补充' : 'To be completed')}</strong></div>
+          ))}
+        </div>
+        {Object.entries(groupedSpecs).length > 0 && (
+          <div className="profile-spec-groups">
+            {Object.entries(groupedSpecs).map(([groupName, groupSpecs]) => (
+              <section key={groupName}>
+                <h3>{specGroupLabel(groupName)}</h3>
+                <div className="profile-spec-table">
+                  {groupSpecs.map((spec) => (
+                    <div key={spec.id}>
+                      <span>{specNameLabel(spec.name)}</span>
+                      <strong>{specValueLabel(spec.value)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+        {profile.features && <div className="profile-text-block"><strong>{language === 'zh' ? '主要配置' : 'Key Features'}</strong><p>{specValueLabel(profile.features)}</p></div>}
+        {profile.notes && <div className="profile-text-block"><strong>{language === 'zh' ? '备注' : 'Notes'}</strong><p>{specValueLabel(profile.notes)}</p></div>}
+        {(profile.sourceUrl || specSources.length > 0) && (
+          <div className="profile-text-block">
+            <strong>{language === 'zh' ? '资料来源' : 'Sources'}</strong>
+            <div className="profile-source-list">
+              {profile.sourceUrl && <a className="profile-source-link" href={profile.sourceUrl} rel="noreferrer" target="_blank">车型资料来源</a>}
+              {specSources.map((source) => (
+                source.sourceUrl
+                  ? <a className="profile-source-link" href={source.sourceUrl} key={`${source.sourceName}-${source.sourceUrl}`} rel="noreferrer" target="_blank">{source.sourceName || source.sourceUrl}</a>
+                  : <span key={source.sourceName}>{source.sourceName}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

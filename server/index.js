@@ -82,6 +82,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS vehicles (
     id TEXT PRIMARY KEY,
+    profile_id INTEGER,
     model TEXT NOT NULL,
     trim TEXT NOT NULL,
     year TEXT NOT NULL,
@@ -106,6 +107,47 @@ db.exec(`
     cost REAL NOT NULL,
     partner_price REAL NOT NULL,
     customer_price REAL NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS vehicle_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    brand TEXT NOT NULL,
+    model TEXT NOT NULL,
+    year TEXT NOT NULL,
+    trim TEXT NOT NULL,
+    energy_type TEXT NOT NULL DEFAULT '纯电',
+    battery_capacity TEXT NOT NULL DEFAULT '',
+    range_km INTEGER NOT NULL DEFAULT 0,
+    drivetrain TEXT NOT NULL DEFAULT '',
+    body_type TEXT NOT NULL DEFAULT '',
+    dimensions TEXT NOT NULL DEFAULT '',
+    wheelbase TEXT NOT NULL DEFAULT '',
+    motor_power TEXT NOT NULL DEFAULT '',
+    seats TEXT NOT NULL DEFAULT '',
+    fast_charge_time TEXT NOT NULL DEFAULT '',
+    slow_charge_time TEXT NOT NULL DEFAULT '',
+    official_price TEXT NOT NULL DEFAULT '',
+    features TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (brand, model, year, trim)
+  );
+
+  CREATE TABLE IF NOT EXISTS vehicle_profile_specs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id INTEGER NOT NULL,
+    group_name TEXT NOT NULL,
+    spec_name TEXT NOT NULL,
+    spec_value TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    source_name TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES vehicle_profiles(id),
+    UNIQUE (profile_id, group_name, spec_name)
   );
 
   CREATE TABLE IF NOT EXISTS quote_requests (
@@ -293,6 +335,7 @@ if (!vehicleColumns.some((column) => column.name === 'stock_quantity')) {
   db.exec('ALTER TABLE vehicles ADD COLUMN stock_quantity INTEGER NOT NULL DEFAULT 1')
 }
 const vehicleColumnMigrations = [
+  ['profile_id', 'INTEGER'],
   ['preorder_min_days', 'INTEGER NOT NULL DEFAULT 7'],
   ['preorder_max_days', 'INTEGER NOT NULL DEFAULT 14'],
   ['available_colors', "TEXT NOT NULL DEFAULT '[]'"],
@@ -312,6 +355,472 @@ for (const [name, definition] of vehicleColumnMigrations) {
     db.exec(`ALTER TABLE vehicles ADD COLUMN ${name} ${definition}`)
   }
 }
+
+const vehiclesMissingProfiles = db.prepare('SELECT * FROM vehicles WHERE profile_id IS NULL').all()
+if (vehiclesMissingProfiles.length > 0) {
+  const now = new Date().toISOString()
+  const findProfile = db.prepare(`
+    SELECT * FROM vehicle_profiles
+    WHERE brand = ? AND model = ? AND year = ? AND trim = ?
+  `)
+  const insertProfile = db.prepare(`
+    INSERT INTO vehicle_profiles (
+      brand, model, year, trim, energy_type, battery_capacity, range_km,
+      drivetrain, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const updateVehicleProfile = db.prepare('UPDATE vehicles SET profile_id = ? WHERE id = ?')
+  db.exec('BEGIN')
+  try {
+    for (const vehicle of vehiclesMissingProfiles) {
+      const modelParts = String(vehicle.model).trim().split(/\s+/)
+      const guessedBrand = modelParts[0] || 'Unknown'
+      const guessedModel = modelParts.slice(1).join(' ') || vehicle.model
+      let profile = findProfile.get(guessedBrand, guessedModel, vehicle.year, vehicle.trim)
+      if (!profile) {
+        const result = insertProfile.run(
+          guessedBrand,
+          guessedModel,
+          vehicle.year,
+          vehicle.trim,
+          vehicle.energy_type || '纯电',
+          vehicle.battery_capacity || '',
+          Number(vehicle.range_km) || 0,
+          vehicle.drivetrain || '',
+          vehicle.public_notes || '',
+          now,
+          now,
+        )
+        profile = { id: result.lastInsertRowid }
+      }
+      updateVehicleProfile.run(profile.id, vehicle.id)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+function commonEvSuvSpecs({
+  brand,
+  model,
+  version,
+  level,
+  price,
+  dimensions,
+  wheelbase,
+  seats = '5 座',
+  bodyStructure = '5 门 5 座 SUV',
+  motorPower,
+  motorTorque = '',
+  drivetrain,
+  batteryCapacity,
+  range,
+  batteryType,
+  fastCharge = '',
+  slowCharge = '',
+  energyConsumption = '',
+  maxSpeed = '',
+  sunroof = '以实车配置为准',
+  wheelSize = '以实车配置为准',
+  driverAssist = '以版本配置为准',
+  panoramicCamera = '以版本配置为准',
+  seatFeatures = '以版本配置为准',
+  audio = '以版本配置为准',
+  ota = '支持',
+}) {
+  return [
+    ['基础信息', '品牌', brand],
+    ['基础信息', '车型', model],
+    ['基础信息', '版本', version],
+    ['基础信息', '能源类型', '纯电'],
+    ['基础信息', '级别', level],
+    ['基础信息', '国内指导价参考', price],
+    ['车身', '长宽高', dimensions],
+    ['车身', '轴距', wheelbase],
+    ['车身', '车身结构', bodyStructure],
+    ['车身', '座位数', seats],
+    ['动力', '电机功率', motorPower],
+    ['动力', '电机扭矩', motorTorque || '以公开配置为准'],
+    ['动力', '驱动方式', drivetrain],
+    ['电池/续航', '电池容量', batteryCapacity],
+    ['电池/续航', 'CLTC 续航', range],
+    ['电池/续航', '电池类型', batteryType],
+    ['充电', '快充时间', fastCharge || '以公开配置为准'],
+    ['充电', '慢充时间', slowCharge || '以公开配置为准'],
+    ['能耗', '百公里耗电', energyConsumption || '以公开配置为准'],
+    ['性能', '最高车速', maxSpeed || '以公开配置为准'],
+    ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+    ['底盘/转向', '后悬架', '多连杆式独立悬架'],
+    ['底盘/转向', '转向助力', '电动助力'],
+    ['底盘/转向', '车体结构', '承载式'],
+    ['制动/轮胎', '前制动器', '通风盘式'],
+    ['制动/轮胎', '后制动器', '盘式'],
+    ['制动/轮胎', '驻车制动', '电子驻车'],
+    ['制动/轮胎', '轮毂/轮胎规格', wheelSize],
+    ['外部配置', '天窗类型', sunroof],
+    ['外部配置', '车顶行李架', '以版本配置为准'],
+    ['安全配置', '主动刹车 AEB', '以版本配置为准'],
+    ['安全配置', '车身稳定控制', '标配'],
+    ['安全配置', '胎压监测', '胎压显示'],
+    ['辅助驾驶', '驾驶辅助级别', driverAssist],
+    ['辅助驾驶', '自适应巡航', '以版本配置为准'],
+    ['辅助驾驶', '360 全景影像', panoramicCamera],
+    ['座舱/舒适', '中控屏', '以实车配置为准'],
+    ['座舱/舒适', '车联网/OTA', ota],
+    ['座舱/舒适', '座椅功能', seatFeatures],
+    ['座舱/舒适', '音响', audio],
+  ]
+}
+
+const officialProfileSeeds = [
+  { brand: 'BYD', model: 'Song Plus EV', year: '2025', trim: 'EV 520KM 豪华型', energyType: '纯电', batteryCapacity: '71.8 kWh', rangeKm: 520, drivetrain: '前置前驱', sourceUrl: 'https://auto.ifeng.com/c/8cB5Xo5a8xI', notes: '2025款宋PLUS EV官方/主流公开资料版本' },
+  { brand: 'BYD', model: 'Song Plus EV', year: '2025', trim: 'EV 520KM 尊贵型', energyType: '纯电', batteryCapacity: '71.8 kWh', rangeKm: 520, drivetrain: '前置前驱', sourceUrl: 'https://auto.ifeng.com/c/8cB5Xo5a8xI', notes: '2025款宋PLUS EV官方/主流公开资料版本' },
+  { brand: 'BYD', model: 'Song Plus EV', year: '2025', trim: 'EV 605KM 旗舰型', energyType: '纯电', batteryCapacity: '87.04 kWh', rangeKm: 605, drivetrain: '前置前驱', sourceUrl: 'https://auto.ifeng.com/c/8cB5Xo5a8xI', notes: '2025款宋PLUS EV官方/主流公开资料版本' },
+  { brand: 'Geely', model: 'Galaxy E5', year: '2026', trim: '530KM 启航版', energyType: '纯电', batteryCapacity: '60.22 kWh', rangeKm: 530, drivetrain: '前驱', sourceUrl: 'https://chejiahao.m.autohome.com.cn/info/21218270', notes: '2026款银河E5公开上市版本' },
+  { brand: 'Geely', model: 'Galaxy E5', year: '2026', trim: '530KM 探索版', energyType: '纯电', batteryCapacity: '60.22 kWh', rangeKm: 530, drivetrain: '前驱', sourceUrl: 'https://chejiahao.m.autohome.com.cn/info/21218270', notes: '2026款银河E5公开上市版本' },
+  { brand: 'Geely', model: 'Galaxy E5', year: '2026', trim: '610KM 远航版', energyType: '纯电', batteryCapacity: '68.39 kWh', rangeKm: 610, drivetrain: '前驱', sourceUrl: 'https://chejiahao.m.autohome.com.cn/info/21218270', notes: '2026款银河E5公开上市版本' },
+  { brand: 'Geely', model: 'Galaxy E5', year: '2026', trim: '610KM 探索+版', energyType: '纯电', batteryCapacity: '68.39 kWh', rangeKm: 610, drivetrain: '前驱', sourceUrl: 'https://chejiahao.m.autohome.com.cn/info/21218270', notes: '2026款银河E5公开上市版本' },
+  { brand: 'Geely', model: 'Galaxy E5', year: '2026', trim: '610KM 星舰版', energyType: '纯电', batteryCapacity: '68.39 kWh', rangeKm: 610, drivetrain: '前驱', sourceUrl: 'https://chejiahao.m.autohome.com.cn/info/21218270', notes: '2026款银河E5公开上市版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2025', trim: '520Max 深蓝智驾AD PRO纯电版', energyType: '纯电', batteryCapacity: '68.82 kWh', rangeKm: 520, drivetrain: '后置后驱', sourceUrl: 'https://car.autohome.com.cn/config/spec/71632.html', notes: '2025款深蓝S07纯电公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2025', trim: '628Max 乾崑智驾ADS SE纯电版', energyType: '纯电', batteryCapacity: '79.97 kWh', rangeKm: 628, drivetrain: '后置后驱', sourceUrl: 'https://price.pcauto.com.cn/m132566/config.html', notes: '2025款深蓝S07纯电公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '550Max 华为乾崑ADS SE版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 550, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '550Ultra 华为乾崑ADS SE版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 550, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '630Max 华为乾崑ADS SE版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 630, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '630Ultra 华为乾崑ADS SE版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 630, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '630Max+ 华为乾崑激光版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 630, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+  { brand: 'Changan', model: 'Deepal S07', year: '2026', trim: '630Ultra 华为乾崑激光版', energyType: '纯电', batteryCapacity: '以官方配置为准', rangeKm: 630, drivetrain: '后置后驱', sourceUrl: 'https://www.qichejingwei.com/brand/range_diff-1118.html', notes: '2026款深蓝S07公开资料版本' },
+]
+
+const sampleProfileSpecs = [
+  {
+    match: { brand: 'BYD', model: 'Song Plus EV', trimIncludes: '605' },
+    sourceName: '汽车之家 / 智车派 / BitAuto',
+    sourceUrl: 'https://car.autohome.com.cn/config/spec/71481.html',
+    specs: [
+      ['基础信息', '品牌', 'BYD / 比亚迪'],
+      ['基础信息', '车型', 'Song Plus EV / 宋PLUS EV'],
+      ['基础信息', '版本', '605km 旗舰型'],
+      ['基础信息', '能源类型', '纯电'],
+      ['基础信息', '级别', '紧凑型 SUV'],
+      ['基础信息', '国内指导价参考', '17.58 万元'],
+      ['车身', '长宽高', '4785 × 1890 × 1660 mm'],
+      ['车身', '轴距', '2765 mm'],
+      ['车身', '座位数', '5 座'],
+      ['动力', '电机功率', '160 kW'],
+      ['动力', '驱动方式', '前置前驱'],
+      ['电池/续航', '电池容量', '87.04 kWh'],
+      ['电池/续航', 'CLTC 续航', '605 km'],
+      ['电池/续航', '电池类型', '磷酸铁锂刀片电池'],
+      ['充电', '快充', '30%-80% 约 30 分钟'],
+      ['充电', '快充功率', '最大约 140 kW'],
+      ['能耗', '百公里耗电', '约 13.7 kWh/100km'],
+      ['性能', '最高车速', '175 km/h'],
+      ['性能', '0-50km/h 加速', '约 4 秒'],
+      ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+      ['底盘/转向', '后悬架', '多连杆式独立悬架'],
+      ['底盘/转向', '转向助力', '电动助力'],
+      ['底盘/转向', '车体结构', '承载式'],
+      ['制动/轮胎', '前制动器', '通风盘式'],
+      ['制动/轮胎', '后制动器', '盘式'],
+      ['制动/轮胎', '驻车制动', '电子驻车'],
+      ['安全配置', '主动刹车', '标配/以实车配置为准'],
+      ['安全配置', '车身稳定控制', '标配'],
+      ['安全配置', '胎压监测', '胎压显示'],
+      ['辅助驾驶', '驾驶辅助级别', 'L2 级辅助驾驶（以版本配置为准）'],
+      ['辅助驾驶', '自适应巡航', '标配/以实车配置为准'],
+      ['辅助驾驶', '360 全景影像', '标配/以实车配置为准'],
+      ['座舱/舒适', '中控屏', '旋转中控大屏（尺寸以实车配置为准）'],
+      ['座舱/舒适', '车联网/OTA', '支持'],
+      ['座舱/舒适', '热泵空调', '支持'],
+    ],
+  },
+  {
+    match: { brand: 'BYD', model: 'Song Plus EV', trimIncludes: '520' },
+    sourceName: '公开参数页整理',
+    sourceUrl: 'https://car.autohome.com.cn/config/series/5761.html',
+    specs: [
+      ['基础信息', '品牌', 'BYD / 比亚迪'],
+      ['基础信息', '车型', 'Song Plus EV / 宋PLUS EV'],
+      ['基础信息', '版本', '520km 版本'],
+      ['基础信息', '能源类型', '纯电'],
+      ['基础信息', '级别', '紧凑型 SUV'],
+      ['车身', '长宽高', '4785 × 1890 × 1660 mm'],
+      ['车身', '轴距', '2765 mm'],
+      ['车身', '座位数', '5 座'],
+      ['动力', '电机功率', '150 kW'],
+      ['动力', '驱动方式', '前置前驱'],
+      ['电池/续航', '电池容量', '71.8 kWh'],
+      ['电池/续航', 'CLTC 续航', '520 km'],
+      ['电池/续航', '电池类型', '磷酸铁锂刀片电池'],
+      ['充电', '快充', '30%-80% 约 30 分钟'],
+      ['充电', '快充功率', '最大约 90 kW'],
+      ['能耗', '百公里耗电', '约 13.7 kWh/100km'],
+      ['性能', '最高车速', '175 km/h'],
+      ['性能', '0-50km/h 加速', '约 4 秒'],
+      ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+      ['底盘/转向', '后悬架', '多连杆式独立悬架'],
+      ['底盘/转向', '转向助力', '电动助力'],
+      ['底盘/转向', '车体结构', '承载式'],
+      ['制动/轮胎', '前制动器', '通风盘式'],
+      ['制动/轮胎', '后制动器', '盘式'],
+      ['制动/轮胎', '驻车制动', '电子驻车'],
+      ['安全配置', '主动刹车', '标配/以实车配置为准'],
+      ['安全配置', '车身稳定控制', '标配'],
+      ['安全配置', '胎压监测', '胎压显示'],
+      ['辅助驾驶', '驾驶辅助级别', 'L2 级辅助驾驶（以版本配置为准）'],
+      ['辅助驾驶', '自适应巡航', '标配/以实车配置为准'],
+      ['辅助驾驶', '360 全景影像', '标配/以实车配置为准'],
+      ['座舱/舒适', '中控屏', '旋转中控大屏（尺寸以实车配置为准）'],
+      ['座舱/舒适', '车联网/OTA', '支持'],
+      ['座舱/舒适', '热泵空调', '支持'],
+    ],
+  },
+  {
+    match: { brand: 'Changan', model: 'Deepal S07' },
+    sourceName: '新出行 / 汽车之家 / Changan Europe',
+    sourceUrl: 'https://car.autohome.com.cn/config/spec/71635.html',
+    specs: [
+      ['基础信息', '品牌', 'Changan Deepal / 长安深蓝'],
+      ['基础信息', '车型', 'Deepal S07 / 深蓝 S07'],
+      ['基础信息', '版本', '520 Pro / 520Max Pro'],
+      ['基础信息', '能源类型', '纯电'],
+      ['基础信息', '级别', '中型 SUV'],
+      ['基础信息', '国内指导价参考', '17.99 万元左右'],
+      ['车身', '长宽高', '4750 × 1930 × 1625 mm'],
+      ['车身', '轴距', '2900 mm'],
+      ['车身', '座位数', '5 座'],
+      ['动力', '电机功率', '190 kW'],
+      ['动力', '电机马力', '258 Ps'],
+      ['动力', '驱动方式', '后置后驱'],
+      ['电池/续航', '电池容量', '68.82 kWh'],
+      ['电池/续航', 'CLTC 续航', '520 km'],
+      ['电池/续航', '电池类型', '磷酸铁锂电池'],
+      ['充电', '快充时间', '约 0.25 小时'],
+      ['充电', '快充电量范围', '30%-80%'],
+      ['性能', '最高车速', '180 km/h'],
+      ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+      ['底盘/转向', '后悬架', 'H 臂多连杆独立悬架'],
+      ['底盘/转向', '转向助力', '电动助力'],
+      ['底盘/转向', '车体结构', '承载式'],
+      ['制动/轮胎', '前制动器', '通风盘式'],
+      ['制动/轮胎', '后制动器', '盘式'],
+      ['制动/轮胎', '驻车制动', '电子驻车'],
+      ['安全配置', '主动刹车', '标配/以实车配置为准'],
+      ['安全配置', '车道偏离预警', '标配/以实车配置为准'],
+      ['安全配置', '车身稳定控制', '标配'],
+      ['安全配置', '胎压监测', '胎压显示'],
+      ['辅助驾驶', '驾驶辅助级别', 'L2 级辅助驾驶（以版本配置为准）'],
+      ['辅助驾驶', '自适应巡航', '标配/以实车配置为准'],
+      ['辅助驾驶', '360 全景影像', '标配/以实车配置为准'],
+      ['座舱/舒适', '中控屏', '悬浮式中控屏（尺寸以实车配置为准）'],
+      ['座舱/舒适', '车联网/OTA', '支持'],
+      ['座舱/舒适', '座椅功能', '加热/通风按版本配置'],
+    ],
+  },
+  {
+    match: { brand: 'Geely', model: 'Galaxy E5', trimIncludes: '530' },
+    sourceName: '吉利银河官网 / 官方配置表 / 汽车之家',
+    sourceUrl: 'https://www.galaxy-geely.com/E5',
+    specs: [
+      ['基础信息', '品牌', 'Geely Galaxy / 吉利银河'],
+      ['基础信息', '车型', 'Galaxy E5 / 银河 E5'],
+      ['基础信息', '版本', '530km 探索版'],
+      ['基础信息', '能源类型', '纯电'],
+      ['基础信息', '级别', '紧凑型 SUV'],
+      ['基础信息', '国内指导价参考', '11.98 万元'],
+      ['车身', '长宽高', '4615 × 1901 × 1670 mm'],
+      ['车身', '轴距', '2750 mm'],
+      ['车身', '车身结构', '5 门 5 座 SUV'],
+      ['动力', '电机功率', '160 kW'],
+      ['动力', '电机扭矩', '320 N·m'],
+      ['动力', '驱动方式', '前驱'],
+      ['电池/续航', '电池容量', '60.22 kWh'],
+      ['电池/续航', 'CLTC 续航', '530 km'],
+      ['电池/续航', '电池类型', '磷酸铁锂电池'],
+      ['能耗', '百公里耗电', '约 12.1 kWh/100km'],
+      ['配置', '代表配置', '全景天窗、16 扬声器、前排座椅加热/通风、50W 无线充、L2 辅助驾驶、AEB'],
+      ['充电', '快充时间', '约 0.33 小时'],
+      ['充电', '慢充时间', '约 9 小时'],
+      ['性能', '最高车速', '175 km/h'],
+      ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+      ['底盘/转向', '后悬架', '多连杆式独立悬架'],
+      ['底盘/转向', '转向助力', '电动助力'],
+      ['底盘/转向', '车体结构', '承载式'],
+      ['制动/轮胎', '前制动器', '通风盘式'],
+      ['制动/轮胎', '后制动器', '盘式'],
+      ['制动/轮胎', '驻车制动', '电子驻车'],
+      ['安全配置', '主动刹车 AEB', '标配/以实车配置为准'],
+      ['安全配置', '车身稳定控制', '标配'],
+      ['安全配置', '胎压监测', '胎压显示'],
+      ['辅助驾驶', '驾驶辅助级别', 'L2 级辅助驾驶（以版本配置为准）'],
+      ['辅助驾驶', '360 全景影像', '标配/以实车配置为准'],
+      ['座舱/舒适', '中控屏', 'Flyme Auto 智能座舱大屏（以实车配置为准）'],
+      ['座舱/舒适', '车联网/OTA', '支持'],
+      ['座舱/舒适', '无线充电', '50W（以版本配置为准）'],
+      ['座舱/舒适', '音响', '16 扬声器（以版本配置为准）'],
+    ],
+  },
+  {
+    match: { brand: 'Geely', model: 'Galaxy E5', trimIncludes: '440' },
+    sourceName: '吉利银河官方配置表',
+    sourceUrl: 'https://global.geely.com/-/media/project/web-portal/parallel-car/e5/geely-galaxy-e5-specification-table.pdf',
+    specs: [
+      ['基础信息', '品牌', 'Geely Galaxy / 吉利银河'],
+      ['基础信息', '车型', 'Galaxy E5 / 银河 E5'],
+      ['基础信息', '版本', '440km 版本'],
+      ['基础信息', '能源类型', '纯电'],
+      ['基础信息', '级别', '紧凑型 SUV'],
+      ['车身', '长宽高', '4615 × 1901 × 1670 mm'],
+      ['车身', '轴距', '2750 mm'],
+      ['车身', '车身结构', '5 门 5 座 SUV'],
+      ['动力', '电机功率', '160 kW'],
+      ['动力', '电机扭矩', '320 N·m'],
+      ['动力', '驱动方式', '前驱'],
+      ['电池/续航', '电池容量', '49.52 kWh'],
+      ['电池/续航', 'CLTC 续航', '440 km'],
+      ['电池/续航', '电池类型', '磷酸铁锂电池'],
+      ['能耗', '百公里耗电', '约 11.9 kWh/100km'],
+      ['充电', '快充时间', '约 0.33 小时'],
+      ['充电', '慢充时间', '约 9 小时'],
+      ['性能', '最高车速', '175 km/h'],
+      ['底盘/转向', '前悬架', '麦弗逊式独立悬架'],
+      ['底盘/转向', '后悬架', '多连杆式独立悬架'],
+      ['底盘/转向', '转向助力', '电动助力'],
+      ['底盘/转向', '车体结构', '承载式'],
+      ['制动/轮胎', '前制动器', '通风盘式'],
+      ['制动/轮胎', '后制动器', '盘式'],
+      ['制动/轮胎', '驻车制动', '电子驻车'],
+      ['安全配置', '主动刹车 AEB', '按版本配置'],
+      ['安全配置', '车身稳定控制', '标配'],
+      ['安全配置', '胎压监测', '胎压显示'],
+      ['辅助驾驶', '驾驶辅助级别', '按版本配置'],
+      ['辅助驾驶', '360 全景影像', '按版本配置'],
+      ['座舱/舒适', '中控屏', 'Flyme Auto 智能座舱大屏（以实车配置为准）'],
+      ['座舱/舒适', '车联网/OTA', '支持'],
+    ],
+  },
+  ...officialProfileSeeds.map((profile) => ({
+    match: { brand: profile.brand, model: profile.model, year: profile.year, trim: profile.trim },
+    sourceName: profile.notes,
+    sourceUrl: profile.sourceUrl,
+    specs: commonEvSuvSpecs({
+      brand: `${profile.brand}${profile.brand === 'BYD' ? ' / 比亚迪' : profile.brand === 'Geely' ? ' Galaxy / 吉利银河' : ' Deepal / 长安深蓝'}`,
+      model: profile.model,
+      version: `${profile.year} ${profile.trim}`,
+      level: profile.model === 'Deepal S07' ? '中型 SUV' : '紧凑型 SUV',
+      price: profile.trim.includes('豪华') ? '14.98 万元左右'
+        : profile.trim.includes('尊贵') ? '15.98 万元左右'
+          : profile.trim.includes('605') ? '17.58 万元左右'
+            : profile.trim.includes('610') ? '12.58-14.58 万元区间（按版本）'
+              : profile.trim.includes('630') ? '16.49-17.49 万元区间（按版本）'
+                : '以官方上市价格为准',
+      dimensions: profile.model === 'Song Plus EV'
+        ? '4785 × 1890 × 1660 mm'
+        : profile.model === 'Deepal S07'
+          ? '4750 × 1930 × 1625 mm'
+          : '4615 × 1901 × 1670 mm',
+      wheelbase: profile.model === 'Deepal S07' ? '2900 mm' : profile.model === 'Song Plus EV' ? '2765 mm' : '2750 mm',
+      motorPower: profile.model === 'Deepal S07' ? (profile.trim.includes('630') ? '200 kW' : '190 kW') : profile.model === 'Song Plus EV' ? (profile.trim.includes('605') ? '160 kW' : '150 kW') : '160 kW',
+      motorTorque: profile.model === 'Galaxy E5' ? '320 N·m' : '以官方配置为准',
+      drivetrain: profile.drivetrain,
+      batteryCapacity: profile.batteryCapacity,
+      range: `${profile.rangeKm} km`,
+      batteryType: profile.model === 'Song Plus EV' ? '磷酸铁锂刀片电池' : '磷酸铁锂电池',
+      fastCharge: profile.model === 'Deepal S07' ? '约 0.25 小时' : '约 0.33-0.5 小时',
+      slowCharge: '以官方配置为准',
+      energyConsumption: profile.model === 'Galaxy E5' ? (profile.trim.includes('610') ? '以官方配置为准' : '约 12 kWh/100km') : '以官方配置为准',
+      maxSpeed: profile.model === 'Deepal S07' ? '180 km/h' : '175 km/h',
+      sunroof: profile.model === 'Galaxy E5'
+        ? '全景天窗（以版本配置为准）'
+        : '全景天窗/可开启全景天窗以版本配置为准',
+      wheelSize: profile.model === 'Galaxy E5' ? '18/19 英寸（以版本配置为准）' : '以版本配置为准',
+      driverAssist: profile.model === 'Deepal S07'
+        ? (profile.trim.includes('乾崑') || profile.trim.includes('华为') ? '华为乾崑智驾/ADS SE（以版本配置为准）' : '深蓝智驾 AD PRO')
+        : 'L2 级辅助驾驶（以版本配置为准）',
+      panoramicCamera: profile.trim.includes('豪华') || profile.trim.includes('启航') ? '以版本配置为准' : '标配/以实车配置为准',
+      seatFeatures: profile.trim.includes('星舰') || profile.trim.includes('Ultra') ? '加热/通风/按摩按版本配置' : '加热/通风按版本配置',
+      audio: profile.trim.includes('星舰') || profile.trim.includes('探索') ? '高阶音响按版本配置' : '以版本配置为准',
+    }),
+  })),
+]
+
+function seedOfficialVehicleProfiles() {
+  const now = new Date().toISOString()
+  const insertProfile = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_profiles (
+      brand, model, year, trim, energy_type, battery_capacity, range_km,
+      drivetrain, source_url, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  db.exec('BEGIN')
+  try {
+    for (const profile of officialProfileSeeds) {
+      insertProfile.run(
+        profile.brand,
+        profile.model,
+        profile.year,
+        profile.trim,
+        profile.energyType,
+        profile.batteryCapacity,
+        profile.rangeKm,
+        profile.drivetrain,
+        profile.sourceUrl,
+        profile.notes,
+        now,
+        now,
+      )
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+function seedVehicleProfileSpecs() {
+  const now = new Date().toISOString()
+  const profiles = db.prepare('SELECT * FROM vehicle_profiles').all()
+  const insertSpec = db.prepare(`
+    INSERT OR IGNORE INTO vehicle_profile_specs (
+      profile_id, group_name, spec_name, spec_value, sort_order, source_name, source_url, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  db.exec('BEGIN')
+  try {
+    for (const profile of profiles) {
+      const matched = sampleProfileSpecs.find((sample) =>
+        profile.brand === sample.match.brand &&
+        profile.model === sample.match.model &&
+        (!sample.match.year || String(profile.year) === sample.match.year) &&
+        (!sample.match.trim || String(profile.trim) === sample.match.trim) &&
+        (!sample.match.trimIncludes || String(profile.trim).includes(sample.match.trimIncludes)),
+      )
+      if (!matched) continue
+      matched.specs.forEach(([groupName, specName, specValue], index) => {
+        insertSpec.run(
+          profile.id,
+          groupName,
+          specName,
+          specValue,
+          index + 1,
+          matched.sourceName,
+          matched.sourceUrl,
+          now,
+          now,
+        )
+      })
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+seedOfficialVehicleProfiles()
+seedVehicleProfileSpecs()
 
 const supplierSourceColumns = db.prepare('PRAGMA table_info(supplier_sources)').all()
 if (!supplierSourceColumns.some((column) => column.name === 'can_preorder')) {
@@ -742,6 +1251,48 @@ function publicUser(user) {
   }
 }
 
+function serializeVehicleProfile(row) {
+  const specs = db.prepare(`
+    SELECT * FROM vehicle_profile_specs
+    WHERE profile_id = ?
+    ORDER BY sort_order, id
+  `).all(row.id).map((spec) => ({
+    id: Number(spec.id),
+    groupName: spec.group_name,
+    name: spec.spec_name,
+    value: spec.spec_value,
+    sortOrder: Number(spec.sort_order),
+    sourceName: spec.source_name,
+    sourceUrl: spec.source_url,
+    updatedAt: spec.updated_at,
+  }))
+  return {
+    id: Number(row.id),
+    brand: row.brand,
+    model: row.model,
+    year: row.year,
+    trim: row.trim,
+    energyType: row.energy_type,
+    batteryCapacity: row.battery_capacity,
+    rangeKm: Number(row.range_km),
+    drivetrain: row.drivetrain,
+    bodyType: row.body_type,
+    dimensions: row.dimensions,
+    wheelbase: row.wheelbase,
+    motorPower: row.motor_power,
+    seats: row.seats,
+    fastChargeTime: row.fast_charge_time,
+    slowChargeTime: row.slow_charge_time,
+    officialPrice: row.official_price,
+    features: row.features,
+    sourceUrl: row.source_url,
+    notes: row.notes,
+    specs,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 function serializeStaffUser(user) {
   return {
     id: Number(user.id),
@@ -752,6 +1303,106 @@ function serializeStaffUser(user) {
     createdAt: user.created_at,
   }
 }
+
+function normalizeVehicleProfileInput(body) {
+  const profile = {
+    brand: String(body?.brand ?? '').trim(),
+    model: String(body?.model ?? '').trim(),
+    year: String(body?.year ?? '').trim(),
+    trim: String(body?.trim ?? '').trim(),
+    energyType: String(body?.energyType ?? body?.energy_type ?? '纯电').trim() || '纯电',
+    batteryCapacity: String(body?.batteryCapacity ?? body?.battery_capacity ?? '').trim(),
+    rangeKm: Math.max(0, Number(body?.rangeKm ?? body?.range_km) || 0),
+    drivetrain: String(body?.drivetrain ?? '').trim(),
+    bodyType: String(body?.bodyType ?? body?.body_type ?? '').trim(),
+    dimensions: String(body?.dimensions ?? '').trim(),
+    wheelbase: String(body?.wheelbase ?? '').trim(),
+    motorPower: String(body?.motorPower ?? body?.motor_power ?? '').trim(),
+    seats: String(body?.seats ?? '').trim(),
+    fastChargeTime: String(body?.fastChargeTime ?? body?.fast_charge_time ?? '').trim(),
+    slowChargeTime: String(body?.slowChargeTime ?? body?.slow_charge_time ?? '').trim(),
+    officialPrice: String(body?.officialPrice ?? body?.official_price ?? '').trim(),
+    features: String(body?.features ?? '').trim(),
+    sourceUrl: String(body?.sourceUrl ?? body?.source_url ?? '').trim(),
+    notes: String(body?.notes ?? '').trim(),
+  }
+  if (!profile.brand || !profile.model || !profile.year || !profile.trim) {
+    throw new Error('请填写品牌、车型、年款和配置版本')
+  }
+  return profile
+}
+
+function parseCsvLine(line) {
+  const cells = []
+  let cell = ''
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    const next = line[index + 1]
+    if (char === '"' && quoted && next === '"') {
+      cell += '"'
+      index += 1
+    } else if (char === '"') {
+      quoted = !quoted
+    } else if (char === ',' && !quoted) {
+      cells.push(cell.trim())
+      cell = ''
+    } else {
+      cell += char
+    }
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+function normalizeCsvHeader(header) {
+  return String(header).trim().toLowerCase().replace(/\s+/g, '')
+}
+
+const profileCsvHeaderMap = new Map([
+  ['brand', 'brand'],
+  ['品牌', 'brand'],
+  ['model', 'model'],
+  ['车型', 'model'],
+  ['year', 'year'],
+  ['年款', 'year'],
+  ['trim', 'trim'],
+  ['version', 'trim'],
+  ['配置', 'trim'],
+  ['版本', 'trim'],
+  ['配置版本', 'trim'],
+  ['energytype', 'energyType'],
+  ['能源类型', 'energyType'],
+  ['batterycapacity', 'batteryCapacity'],
+  ['电池容量', 'batteryCapacity'],
+  ['rangekm', 'rangeKm'],
+  ['续航', 'rangeKm'],
+  ['续航里程', 'rangeKm'],
+  ['drivetrain', 'drivetrain'],
+  ['驱动方式', 'drivetrain'],
+  ['bodytype', 'bodyType'],
+  ['车身结构', 'bodyType'],
+  ['dimensions', 'dimensions'],
+  ['长宽高', 'dimensions'],
+  ['wheelbase', 'wheelbase'],
+  ['轴距', 'wheelbase'],
+  ['motorpower', 'motorPower'],
+  ['电机功率', 'motorPower'],
+  ['seats', 'seats'],
+  ['座位数', 'seats'],
+  ['fastchargetime', 'fastChargeTime'],
+  ['快充时间', 'fastChargeTime'],
+  ['slowchargetime', 'slowChargeTime'],
+  ['慢充时间', 'slowChargeTime'],
+  ['officialprice', 'officialPrice'],
+  ['官方指导价', 'officialPrice'],
+  ['features', 'features'],
+  ['主要配置', 'features'],
+  ['sourceurl', 'sourceUrl'],
+  ['资料来源', 'sourceUrl'],
+  ['notes', 'notes'],
+  ['备注', 'notes'],
+])
 
 function filterByCustomer(items, user) {
   return user.role === 'customer' || user.role === 'partner'
@@ -776,11 +1427,16 @@ function canManageQuoteRequest(user, request) {
 }
 
 function serializeVehicle(row, role) {
+  const profileRow = row.profile_id
+    ? db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(row.profile_id)
+    : null
   const priceValidUntil = row.price_valid_until
   const isPriceValid =
     Boolean(priceValidUntil) && new Date(priceValidUntil).getTime() >= Date.now()
   const base = {
     id: row.id,
+    profileId: row.profile_id ? Number(row.profile_id) : null,
+    profile: profileRow ? serializeVehicleProfile(profileRow) : null,
     model: row.model,
     trim: row.trim,
     year: row.year,
@@ -1233,31 +1889,176 @@ app.post(
 )
 
 app.post(
+  '/api/vehicle-profiles',
+  requireAuth,
+  requireRole('admin', 'sales'),
+  (req, res) => {
+    let profile
+    try {
+      profile = normalizeVehicleProfileInput(req.body)
+    } catch (error) {
+      return res.status(400).json({ error: error.message })
+    }
+    const now = new Date().toISOString()
+    try {
+      const result = db.prepare(`
+        INSERT INTO vehicle_profiles (
+          brand, model, year, trim, energy_type, battery_capacity, range_km,
+          drivetrain, body_type, dimensions, wheelbase, motor_power, seats,
+          fast_charge_time, slow_charge_time, official_price, features,
+          source_url, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        profile.brand, profile.model, profile.year, profile.trim, profile.energyType,
+        profile.batteryCapacity, profile.rangeKm, profile.drivetrain, profile.bodyType,
+        profile.dimensions, profile.wheelbase, profile.motorPower, profile.seats,
+        profile.fastChargeTime, profile.slowChargeTime, profile.officialPrice,
+        profile.features, profile.sourceUrl, profile.notes, now, now,
+      )
+      const created = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(result.lastInsertRowid)
+      res.status(201).json({ vehicleProfile: serializeVehicleProfile(created) })
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE')) {
+        return res.status(400).json({ error: '车型库中已存在同品牌、车型、年款和版本' })
+      }
+      throw error
+    }
+  },
+)
+
+app.patch(
+  '/api/vehicle-profiles/:profileId',
+  requireAuth,
+  requireRole('admin', 'sales'),
+  (req, res) => {
+    const existing = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(req.params.profileId)
+    if (!existing) return res.status(404).json({ error: '车型资料不存在' })
+    let profile
+    try {
+      profile = normalizeVehicleProfileInput(req.body)
+    } catch (error) {
+      return res.status(400).json({ error: error.message })
+    }
+    try {
+      db.prepare(`
+        UPDATE vehicle_profiles
+        SET brand = ?, model = ?, year = ?, trim = ?, energy_type = ?,
+            battery_capacity = ?, range_km = ?, drivetrain = ?, body_type = ?,
+            dimensions = ?, wheelbase = ?, motor_power = ?, seats = ?,
+            fast_charge_time = ?, slow_charge_time = ?, official_price = ?,
+            features = ?, source_url = ?, notes = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        profile.brand, profile.model, profile.year, profile.trim, profile.energyType,
+        profile.batteryCapacity, profile.rangeKm, profile.drivetrain, profile.bodyType,
+        profile.dimensions, profile.wheelbase, profile.motorPower, profile.seats,
+        profile.fastChargeTime, profile.slowChargeTime, profile.officialPrice,
+        profile.features, profile.sourceUrl, profile.notes, new Date().toISOString(), existing.id,
+      )
+      const updated = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(existing.id)
+      res.json({ vehicleProfile: serializeVehicleProfile(updated) })
+    } catch (error) {
+      if (String(error.message).includes('UNIQUE')) {
+        return res.status(400).json({ error: '车型库中已存在同品牌、车型、年款和版本' })
+      }
+      throw error
+    }
+  },
+)
+
+app.post(
+  '/api/vehicle-profiles/import',
+  requireAuth,
+  requireRole('admin', 'sales'),
+  (req, res) => {
+    const csv = String(req.body?.csv ?? '').trim()
+    if (!csv) return res.status(400).json({ error: '请粘贴 CSV 内容' })
+    const lines = csv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV 至少需要表头和一行数据' })
+    const headers = parseCsvLine(lines[0]).map((header) =>
+      profileCsvHeaderMap.get(normalizeCsvHeader(header)) ?? normalizeCsvHeader(header),
+    )
+    let imported = 0
+    let updated = 0
+    const errors = []
+    const now = new Date().toISOString()
+    const findProfile = db.prepare('SELECT * FROM vehicle_profiles WHERE brand = ? AND model = ? AND year = ? AND trim = ?')
+    const insertProfile = db.prepare(`
+      INSERT INTO vehicle_profiles (
+        brand, model, year, trim, energy_type, battery_capacity, range_km,
+        drivetrain, body_type, dimensions, wheelbase, motor_power, seats,
+        fast_charge_time, slow_charge_time, official_price, features,
+        source_url, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    const updateProfile = db.prepare(`
+      UPDATE vehicle_profiles
+      SET energy_type = ?, battery_capacity = ?, range_km = ?, drivetrain = ?,
+          body_type = ?, dimensions = ?, wheelbase = ?, motor_power = ?,
+          seats = ?, fast_charge_time = ?, slow_charge_time = ?,
+          official_price = ?, features = ?, source_url = ?, notes = ?, updated_at = ?
+      WHERE id = ?
+    `)
+    db.exec('BEGIN')
+    try {
+      for (const [lineIndex, line] of lines.slice(1).entries()) {
+        const values = parseCsvLine(line)
+        const row = {}
+        headers.forEach((header, index) => {
+          row[header] = values[index] ?? ''
+        })
+        let profile
+        try {
+          profile = normalizeVehicleProfileInput(row)
+        } catch (error) {
+          errors.push(`第 ${lineIndex + 2} 行：${error.message}`)
+          continue
+        }
+        const existing = findProfile.get(profile.brand, profile.model, profile.year, profile.trim)
+        if (existing) {
+          updateProfile.run(
+            profile.energyType, profile.batteryCapacity, profile.rangeKm, profile.drivetrain,
+            profile.bodyType, profile.dimensions, profile.wheelbase, profile.motorPower,
+            profile.seats, profile.fastChargeTime, profile.slowChargeTime, profile.officialPrice,
+            profile.features, profile.sourceUrl, profile.notes, now, existing.id,
+          )
+          updated += 1
+        } else {
+          insertProfile.run(
+            profile.brand, profile.model, profile.year, profile.trim, profile.energyType,
+            profile.batteryCapacity, profile.rangeKm, profile.drivetrain, profile.bodyType,
+            profile.dimensions, profile.wheelbase, profile.motorPower, profile.seats,
+            profile.fastChargeTime, profile.slowChargeTime, profile.officialPrice,
+            profile.features, profile.sourceUrl, profile.notes, now, now,
+          )
+          imported += 1
+        }
+      }
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+    res.json({ imported, updated, errors })
+  },
+)
+
+app.post(
   '/api/vehicles',
   requireAuth,
   requireRole('admin', 'sales'),
   (req, res) => {
     const {
-      brand,
-      model,
-      trim,
-      year,
-      energyType = '纯电',
-      rangeKm = 0,
-      batteryCapacity = '',
-      drivetrain = '',
+      profileId,
       availableColors = [],
       partnerPrice,
       imageUrl = '',
       publicNotes = '',
     } = req.body ?? {}
-    const normalizedBrand = String(brand ?? '').trim()
-    const normalizedModel = String(model ?? '').trim()
-    const normalizedTrim = String(trim ?? '').trim()
-    const normalizedYear = String(year ?? '').trim()
+    const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(profileId)
     const price = Number(partnerPrice)
-    if (!normalizedBrand || !normalizedModel || !normalizedTrim || !normalizedYear) {
-      return res.status(400).json({ error: '请填写品牌、车型、配置版本和年款' })
+    if (!profile) {
+      return res.status(400).json({ error: '请先选择车型库中的车型资料' })
     }
     if (!Number.isFinite(price) || price <= 0) {
       return res.status(400).json({ error: '基础合作价必须大于 0' })
@@ -1270,23 +2071,24 @@ app.post(
     const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     db.prepare(`
       INSERT INTO vehicles (
-        id, model, trim, year, color, location, status, stock_quantity,
+        id, profile_id, model, trim, year, color, location, status, stock_quantity,
         preorder_min_days, preorder_max_days, available_colors, stock_colors,
         battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
         price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price
-      ) VALUES (?, ?, ?, ?, ?, '', ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, '', ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
     `).run(
       id,
-      `${normalizedBrand} ${normalizedModel}`,
-      normalizedTrim,
-      normalizedYear,
+      profile.id,
+      `${profile.brand} ${profile.model}`,
+      profile.trim,
+      profile.year,
       colors.length > 0 ? '颜色可选' : '待确认',
       VEHICLE_STATUS.unavailable,
       JSON.stringify(colors),
-      String(batteryCapacity ?? '').trim(),
-      Math.max(0, Number(rangeKm) || 0),
-      String(drivetrain ?? '').trim(),
-      String(energyType ?? '纯电').trim(),
+      profile.battery_capacity,
+      Number(profile.range_km) || 0,
+      profile.drivetrain,
+      profile.energy_type,
       String(imageUrl ?? '').trim(),
       String(publicNotes ?? '').trim(),
       now.toISOString(),
@@ -2117,6 +2919,9 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
       canCreateQuotes: isInternal,
       canRequestQuote: user.role === 'partner' || user.role === 'customer',
     },
+    vehicleProfiles: isInternal
+      ? db.prepare('SELECT * FROM vehicle_profiles ORDER BY brand, model, year DESC, trim').all().map(serializeVehicleProfile)
+      : [],
     vehicles: vehicleRows.map((vehicle) => serializeVehicle(vehicle, user.role)),
     inquiries: user.role === 'sales' ? [] : filterByCustomer(inquiries, user),
     quotes: user.role === 'sales' ? [] : filterByCustomer(quotes, user),
