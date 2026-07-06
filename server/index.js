@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { setupSourceImportWorkbench } from './sourceImports.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const dataDir = resolve(__dirname, '../data')
@@ -20,6 +21,13 @@ const VEHICLE_STATUS = {
   inStock: 'in_stock',
   preorder: 'preorder',
   unavailable: 'temporarily_unavailable',
+}
+
+const COOPERATION_PRICE_MARKUP_USD = 100
+
+function calculateCooperationPrice(supplierPrice) {
+  const price = Number(supplierPrice)
+  return Number.isFinite(price) && price > 0 ? price + COOPERATION_PRICE_MARKUP_USD : 0
 }
 
 const QUOTE_REQUEST_STATUS = {
@@ -799,6 +807,7 @@ function seedVehicleProfileSpecs() {
       )
       if (!matched) continue
       matched.specs.forEach(([groupName, specName, specValue], index) => {
+        if (groupName === '基础信息') return
         insertSpec.run(
           profile.id,
           groupName,
@@ -1459,6 +1468,7 @@ function serializeVehicle(row, role) {
     isPriceValid,
     isListed: Boolean(row.is_listed),
     vin: role === 'customer' ? `${row.vin.slice(0, 6)}******${row.vin.slice(-4)}` : row.vin,
+    canSeePrice: role === 'admin' || role === 'sales' || role === 'partner',
   }
   if (role === 'admin' || role === 'sales') {
     const supplierSources = db
@@ -1501,7 +1511,7 @@ function serializeVehicle(row, role) {
   if (role === 'partner') {
     return { ...base, visiblePrice: row.partner_price, priceLabel: '合作报价' }
   }
-  return { ...base, visiblePrice: row.customer_price, priceLabel: '客户报价' }
+  return { ...base, visiblePrice: 0, priceLabel: '询价后报价' }
 }
 
 function nextVehicleId() {
@@ -1513,8 +1523,10 @@ function nextVehicleId() {
   return `EV-${String(maxId + 1).padStart(3, '0')}`
 }
 
-function syncVehicleAvailability(vehicleId) {
+function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = '') {
   const sources = db.prepare('SELECT * FROM supplier_sources WHERE vehicle_id = ?').all(vehicleId)
+  const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(vehicleId)
+  if (!vehicle) return
   const stockQuantity = sources.reduce((sum, source) => sum + Number(source.stock_quantity), 0)
   const colorTotals = new Map()
   for (const source of sources) {
@@ -1536,10 +1548,17 @@ function syncVehicleAvailability(vehicleId) {
     : 0
   const supplierPrices = sources.map((source) => Number(source.supplier_price)).filter((price) => price > 0)
   const cost = supplierPrices.length > 0 ? Math.min(...supplierPrices) : 0
+  const cooperationPrice = calculateCooperationPrice(cost)
+  const now = new Date()
+  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
   db.prepare(`
     UPDATE vehicles
     SET status = ?, stock_quantity = ?, stock_colors = ?,
-        preorder_min_days = ?, preorder_max_days = ?, cost = ?
+        preorder_min_days = ?, preorder_max_days = ?, cost = ?,
+        partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
+        customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
+        price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
+        price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
     WHERE id = ?
   `).run(
     status,
@@ -1548,8 +1567,30 @@ function syncVehicleAvailability(vehicleId) {
     preorderMinDays,
     preorderMaxDays,
     cost,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    now.toISOString(),
+    cooperationPrice,
+    validUntil.toISOString(),
     vehicleId,
   )
+  if (cooperationPrice > 0 && Number(vehicle.partner_price) !== cooperationPrice) {
+    db.prepare(`
+      INSERT INTO vehicle_price_history (
+        vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      vehicleId,
+      cooperationPrice,
+      now.toISOString(),
+      validUntil.toISOString(),
+      changedBy,
+      priceNote || `按最低供应商报价自动生成：${cost} + ${COOPERATION_PRICE_MARKUP_USD}`,
+    )
+  }
 }
 
 function normalizeSourceInput(body) {
@@ -1569,7 +1610,6 @@ function normalizeSourceInput(body) {
       .map((entry) => ({
         color: String(entry?.color ?? '').trim(),
         quantity: Math.max(0, Math.floor(Number(entry?.quantity) || 0)),
-        productionMonth: String(entry?.productionMonth ?? '').trim(),
       }))
       .filter((entry) => entry.color && entry.quantity > 0)
     : []
@@ -1578,9 +1618,6 @@ function normalizeSourceInput(body) {
   const maxDays = Math.max(0, Math.floor(Number(preorderMaxDays) || 0))
   if (!normalizedSupplierName) throw new Error('请填写供应商名称')
   if (!Number.isFinite(price) || price <= 0) throw new Error('供应商价格必须大于 0')
-  if (colors.some((entry) => !/^\d{4}-(0[1-9]|1[0-2])$/.test(entry.productionMonth))) {
-    throw new Error('每个现车批次都需要填写正确的生产年月')
-  }
   if (canPreorder && (minDays < 1 || maxDays < minDays)) {
     throw new Error('请填写正确的预订周期')
   }
@@ -1597,6 +1634,7 @@ function normalizeSourceInput(body) {
 }
 
 function serializeQuoteRequest(row, user) {
+  const canSeeRequestPricing = user.role !== 'customer'
   const itemRows = db
     .prepare('SELECT * FROM quote_request_items WHERE quote_request_id = ? ORDER BY id')
     .all(row.id)
@@ -1610,12 +1648,12 @@ function serializeQuoteRequest(row, user) {
       vehicleModel: item.vehicle_model,
       vehicleTrim: item.vehicle_trim,
       vehicleColor: item.vehicle_color,
-      basePriceSnapshot: Number(item.base_price_snapshot),
+      basePriceSnapshot: canSeeRequestPricing ? Number(item.base_price_snapshot) : 0,
       quantity: Number(item.quantity),
-      suggestedProfit: Number(item.suggested_profit),
-      agreedProfit,
-      unitPrice,
-      subtotal: unitPrice * Number(item.quantity),
+      suggestedProfit: canSeeRequestPricing ? Number(item.suggested_profit) : 0,
+      agreedProfit: canSeeRequestPricing ? agreedProfit : null,
+      unitPrice: canSeeRequestPricing ? unitPrice : 0,
+      subtotal: canSeeRequestPricing ? unitPrice * Number(item.quantity) : 0,
     }
   })
   const vehicleSubtotal = items.reduce((sum, item) => sum + item.subtotal, 0)
@@ -1723,22 +1761,22 @@ function serializeQuoteRequest(row, user) {
     customerId: row.customer_id,
     vehicleId: row.vehicle_id,
     vehicleModel: items.length === 1 ? items[0].vehicleModel : `${items.length} 款车辆`,
-    basePriceSnapshot: Number(row.base_price_snapshot),
+    basePriceSnapshot: canSeeRequestPricing ? Number(row.base_price_snapshot) : 0,
     quantity: items.reduce((sum, item) => sum + item.quantity, 0),
-    suggestedProfit: Number(row.suggested_profit),
-    agreedProfit: row.agreed_profit === null ? null : Number(row.agreed_profit),
+    suggestedProfit: canSeeRequestPricing ? Number(row.suggested_profit) : 0,
+    agreedProfit: canSeeRequestPricing && row.agreed_profit !== null ? Number(row.agreed_profit) : null,
     items,
     versions,
     revisionRequests,
     destinationPort: row.destination_port,
     tradeTerm: row.trade_term,
-    freight: Number(row.freight),
-    otherFees: Number(row.other_fees),
+    freight: canSeeRequestPricing ? Number(row.freight) : 0,
+    otherFees: canSeeRequestPricing ? Number(row.other_fees) : 0,
     notes: row.notes,
     status: normalizeStatus(row.status),
     piNumber: row.pi_number,
-    vehicleUnitPrice: items.length === 1 ? items[0].unitPrice : 0,
-    total,
+    vehicleUnitPrice: canSeeRequestPricing && items.length === 1 ? items[0].unitPrice : 0,
+    total: canSeeRequestPricing ? total : 0,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -2051,57 +2089,92 @@ app.post(
     const {
       profileId,
       availableColors = [],
-      partnerPrice,
       imageUrl = '',
       publicNotes = '',
+      initialSource = null,
     } = req.body ?? {}
     const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(profileId)
-    const price = Number(partnerPrice)
     if (!profile) {
       return res.status(400).json({ error: '请先选择车型库中的车型资料' })
     }
-    if (!Number.isFinite(price) || price <= 0) {
-      return res.status(400).json({ error: '基础合作价必须大于 0' })
+    if (!initialSource) {
+      return res.status(400).json({ error: '请录入供应商车源和供应商报价' })
     }
+    let source
+    try {
+      source = normalizeSourceInput(initialSource)
+    } catch (error) {
+      return res.status(400).json({ error: error.message })
+    }
+    const price = calculateCooperationPrice(source.supplierPrice)
     const colors = Array.isArray(availableColors)
       ? [...new Set(availableColors.map((color) => String(color).trim()).filter(Boolean))]
       : []
     const id = nextVehicleId()
     const now = new Date()
     const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-    db.prepare(`
-      INSERT INTO vehicles (
-        id, profile_id, model, trim, year, color, location, status, stock_quantity,
-        preorder_min_days, preorder_max_days, available_colors, stock_colors,
-        battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
-        price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price
-      ) VALUES (?, ?, ?, ?, ?, ?, '', ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
-    `).run(
-      id,
-      profile.id,
-      `${profile.brand} ${profile.model}`,
-      profile.trim,
-      profile.year,
-      colors.length > 0 ? '颜色可选' : '待确认',
-      VEHICLE_STATUS.unavailable,
-      JSON.stringify(colors),
-      profile.battery_capacity,
-      Number(profile.range_km) || 0,
-      profile.drivetrain,
-      profile.energy_type,
-      String(imageUrl ?? '').trim(),
-      String(publicNotes ?? '').trim(),
-      now.toISOString(),
-      validUntil.toISOString(),
-      `RESOURCE-${id}`,
-      price,
-      price,
-    )
-    db.prepare(`
-      INSERT INTO vehicle_price_history (
-        vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
-      ) VALUES (?, ?, ?, ?, ?, '首次录入')
-    `).run(id, price, now.toISOString(), validUntil.toISOString(), req.user.username)
+    try {
+      db.exec('BEGIN')
+      db.prepare(`
+        INSERT INTO vehicles (
+          id, profile_id, model, trim, year, color, location, status, stock_quantity,
+          preorder_min_days, preorder_max_days, available_colors, stock_colors,
+          battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
+          price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price
+        ) VALUES (?, ?, ?, ?, ?, ?, '', ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+      `).run(
+        id,
+        profile.id,
+        `${profile.brand} ${profile.model}`,
+        profile.trim,
+        profile.year,
+        colors.length > 0 ? '颜色可选' : '待确认',
+        VEHICLE_STATUS.unavailable,
+        JSON.stringify(colors),
+        profile.battery_capacity,
+        Number(profile.range_km) || 0,
+        profile.drivetrain,
+        profile.energy_type,
+        String(imageUrl ?? '').trim(),
+        String(publicNotes ?? '').trim(),
+        now.toISOString(),
+        validUntil.toISOString(),
+        `RESOURCE-${id}`,
+        source.supplierPrice,
+        price,
+        price,
+      )
+      db.prepare(`
+        INSERT INTO vehicle_price_history (
+          vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
+        ) VALUES (?, ?, ?, ?, ?, '首次录入')
+      `).run(id, price, now.toISOString(), validUntil.toISOString(), req.user.username)
+      db.prepare(`
+        INSERT INTO supplier_sources (
+          vehicle_id, supplier_name, stock_quantity, stock_colors,
+          preorder_min_days, preorder_max_days, can_preorder,
+          supplier_price, created_by, updated_by, updated_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        source.supplierName,
+        source.stockQuantity,
+        JSON.stringify(source.stockColors),
+        source.preorderMinDays,
+        source.preorderMaxDays,
+        source.canPreorder ? 1 : 0,
+        source.supplierPrice,
+        req.user.username,
+        req.user.username,
+        now.toISOString(),
+        source.notes,
+      )
+      syncVehicleAvailability(id, req.user.username, `首次录入：供应商报价 + ${COOPERATION_PRICE_MARKUP_USD}`)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      return res.status(400).json({ error: error.message })
+    }
     const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(id)
     res.status(201).json({ vehicle: serializeVehicle(vehicle, req.user.role) })
   },
@@ -2243,7 +2316,7 @@ app.post(
       new Date().toISOString(),
       source.notes,
     )
-    syncVehicleAvailability(vehicle.id)
+    syncVehicleAvailability(vehicle.id, req.user.username)
     const updated = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(vehicle.id)
     res.status(201).json({ vehicle: serializeVehicle(updated, req.user.role) })
   },
@@ -2284,7 +2357,7 @@ app.patch(
       sourceRow.id,
       sourceRow.vehicle_id,
     )
-    syncVehicleAvailability(sourceRow.vehicle_id)
+    syncVehicleAvailability(sourceRow.vehicle_id, req.user.username)
     const updated = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(sourceRow.vehicle_id)
     res.json({ vehicle: serializeVehicle(updated, req.user.role) })
   },
@@ -2300,7 +2373,7 @@ app.delete(
       .get(req.params.sourceId, req.params.vehicleId)
     if (!source) return res.status(404).json({ error: '供应商车源不存在' })
     db.prepare('DELETE FROM supplier_sources WHERE id = ?').run(source.id)
-    syncVehicleAvailability(source.vehicle_id)
+    syncVehicleAvailability(source.vehicle_id, req.user.username, '删除供应商车源后自动重算合作价')
     res.status(204).end()
   },
 )
@@ -2891,6 +2964,8 @@ app.post(
     res.json({ quoteRequest: serializeQuoteRequest(updated, req.user) })
   },
 )
+
+setupSourceImportWorkbench({ app, db, requireAuth, requireRole, dataDir })
 
 app.get('/api/bootstrap', requireAuth, (req, res) => {
   const user = req.user

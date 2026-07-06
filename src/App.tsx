@@ -7,23 +7,29 @@ import {
   CheckCircle2,
   ClipboardList,
   CreditCard,
+  Database,
+  Download,
   FileText,
   FileCheck2,
   Eye,
   EyeOff,
+  Link2,
   LayoutDashboard,
   LogOut,
   Menu,
   PackageCheck,
   Pencil,
   Plus,
+  Save,
   RotateCcw,
   Search,
   Send,
   ShieldCheck,
   Ship,
   Trash2,
+  Upload,
   Users,
+  X,
 } from 'lucide-react'
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -35,6 +41,7 @@ type NavKey =
   | 'dashboard'
   | 'profiles'
   | 'vehicles'
+  | 'sourceImports'
   | 'quotes'
   | 'orders'
   | 'payments'
@@ -99,6 +106,7 @@ type Vehicle = {
   priceHistory?: PriceHistoryEntry[]
   vin: string
   cost?: number
+  canSeePrice: boolean
   visiblePrice: number
   priceLabel: string
 }
@@ -153,7 +161,7 @@ type SupplierSource = {
   id: number
   supplierName: string
   stockQuantity: number
-  stockColors: { color: string; quantity: number; productionMonth?: string }[]
+  stockColors: { color: string; quantity: number }[]
   preorderMinDays: number
   preorderMaxDays: number
   canPreorder: boolean
@@ -351,6 +359,163 @@ type NotificationItem = {
   createdAt: string
 }
 
+type SourceImportSummary = {
+  total: number
+  approved: number
+  needsReview: number
+  withIssues: number
+  missing: number
+}
+
+type SourceImportBatch = {
+  id: number
+  supplierName: string
+  snapshotName: string
+  snapshotTime: string
+  importedBy: string
+  status: string
+  notes: string
+  createdAt: string
+  updatedAt: string
+  summary: SourceImportSummary
+}
+
+type SourceImportFile = {
+  id: number
+  batchId: number
+  originalName: string
+  storedName: string
+  mimeType: string
+  fileSize: number
+  fileType: string
+  parseStatus: string
+  parserNotes: string
+  rawText: string
+  createdAt: string
+}
+
+type SourceImportCandidate = {
+  id: number
+  batchId: number
+  snapshotId: number
+  fileId: number | null
+  sourceSheet: string
+  rowIndex: number
+  fingerprint: string
+  rawFields: Record<string, string>
+  rawText: string
+  brand: string
+  modelName: string
+  year: string
+  trimName: string
+  exteriorColor: string
+  interiorColor: string
+  stockQuantity: number
+  supplierPrice: number
+  currency: string
+  tradeTerm: string
+  location: string
+  preorderMinDays: number
+  preorderMaxDays: number
+  canPreorder: boolean
+  notes: string
+  profileId: number | null
+  matchStatus: string
+  matchConfidence: number
+  reviewStatus: string
+  issueTags: string[]
+  changeStatus: string
+  duplicateScore: number
+  canonicalAction: string
+  reviewedBy: string
+  reviewedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+type SourceImportDuplicate = {
+  id: number
+  batchId: number
+  snapshotId: number
+  candidateId: number
+  matchedCandidateId: number
+  score: number
+  reason: string
+  status: string
+  resolution: string
+  confirmedBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+type SourceImportRule = {
+  id: number
+  ruleType: string
+  scope: string
+  supplierName: string
+  sourceKey: string
+  sourceValue: string
+  targetField: string
+  targetValue: string
+  metadata: Record<string, unknown>
+  confidence: string
+  status: string
+  usageCount: number
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+type SourceSupplier = {
+  id: number
+  supplierName: string
+  contactName: string
+  phone: string
+  wechat: string
+  location: string
+  channelType: string
+  notes: string
+  isActive: boolean
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+type SourceImportSnapshot = {
+  id: number
+  batchId: number
+  supplierName: string
+  snapshotTime: string
+  versionNo: number
+  previousSnapshotId: number | null
+  status: string
+  activeCount: number
+  newCount: number
+  changedCount: number
+  missingCount: number
+  duplicateCount: number
+  createdAt: string
+}
+
+type SourceImportListResponse = {
+  batches: SourceImportBatch[]
+  suppliers: SourceSupplier[]
+  rules: SourceImportRule[]
+  metrics: {
+    totalCandidates: number
+    needsReview: number
+    duplicateRisk: number
+  }
+}
+
+type SourceImportBatchDetail = {
+  batch: SourceImportBatch
+  files: SourceImportFile[]
+  candidates: SourceImportCandidate[]
+  duplicates: SourceImportDuplicate[]
+  snapshots: SourceImportSnapshot[]
+}
+
 type NavItem = {
   key: NavKey
   icon: typeof LayoutDashboard
@@ -361,6 +526,7 @@ const navItems: NavItem[] = [
   { key: 'dashboard', icon: LayoutDashboard, roles: ['admin', 'sales', 'partner', 'customer'] },
   { key: 'profiles', icon: FileText, roles: ['admin', 'sales'] },
   { key: 'vehicles', icon: Car, roles: ['admin', 'sales', 'partner', 'customer'] },
+  { key: 'sourceImports', icon: Database, roles: ['admin', 'sales'] },
   { key: 'quotes', icon: ClipboardList, roles: ['admin', 'sales', 'partner', 'customer'] },
   { key: 'orders', icon: PackageCheck, roles: ['admin', 'partner', 'customer'] },
   { key: 'payments', icon: CreditCard, roles: ['admin'] },
@@ -392,6 +558,7 @@ const translations: Record<Language, Record<string, string>> = {
     nav_dashboard: '首页看板',
     nav_profiles: '车型库',
     nav_vehicles: '车辆资源',
+    nav_sourceImports: '车源导入',
     nav_quotes: '询价管理',
     nav_orders: '订单管理',
     nav_payments: '收款财务',
@@ -404,6 +571,7 @@ const translations: Record<Language, Record<string, string>> = {
     role_partner: '合作伙伴',
     role_customer: '客户',
     vehiclesSubtitle: '按车型集合查看配置版本、现车数量、预订周期和价格有效期。',
+    sourceImportsSubtitle: '把供应商文件转成可审核的车源快照，沉淀字段、车型和同源库存规则。',
     profilesSubtitle: '维护车型参数资料，并按同一车型的不同年款和版本进行横向对比。',
     quotesSubtitle: '查看每笔询价，并在详情中处理报价版本、修改记录和 PI。',
     ordersSubtitle: '订单聚合报价、车辆、收款和物流。',
@@ -467,6 +635,7 @@ const translations: Record<Language, Record<string, string>> = {
     nav_dashboard: 'Dashboard',
     nav_profiles: 'Vehicle Library',
     nav_vehicles: 'Vehicle Resources',
+    nav_sourceImports: 'Source Imports',
     nav_quotes: 'Inquiry Management',
     nav_orders: 'Orders',
     nav_payments: 'Payments',
@@ -479,6 +648,7 @@ const translations: Record<Language, Record<string, string>> = {
     role_partner: 'Partner',
     role_customer: 'Customer',
     vehiclesSubtitle: 'Browse model groups, trims, available stock, preorder lead time, and price validity.',
+    sourceImportsSubtitle: 'Convert supplier files into reviewable stock snapshots and reusable matching rules.',
     profilesSubtitle: 'Maintain model specifications and compare different model years and trims.',
     quotesSubtitle: 'Review each inquiry and manage quote versions, revisions, and PI actions.',
     ordersSubtitle: 'Orders aggregate quotes, vehicles, payments, and logistics.',
@@ -540,6 +710,24 @@ const statusLabels: Record<string, { zh: string; en: string }> = {
   preorder: { zh: '可预订', en: 'Preorder' },
   temporarily_unavailable: { zh: '暂时缺货', en: 'Temporarily Unavailable' },
   delisted: { zh: '已下架', en: 'Delisted' },
+  imported: { zh: '已导入', en: 'Imported' },
+  parsing: { zh: '解析中', en: 'Parsing' },
+  needs_review: { zh: '待审核', en: 'Needs Review' },
+  reviewed: { zh: '已审核', en: 'Reviewed' },
+  exported: { zh: '已导出', en: 'Exported' },
+  approved: { zh: '已确认', en: 'Approved' },
+  rejected: { zh: '已驳回', en: 'Rejected' },
+  new: { zh: '新增', en: 'New' },
+  unchanged: { zh: '未变化', en: 'Unchanged' },
+  changed: { zh: '有变化', en: 'Changed' },
+  missing_from_latest_snapshot: { zh: '本次未出现', en: 'Missing From Latest' },
+  matched: { zh: '已匹配', en: 'Matched' },
+  needs_confirmation: { zh: '待确认匹配', en: 'Needs Confirmation' },
+  unmatched: { zh: '未匹配', en: 'Unmatched' },
+  attachment_only: { zh: '附件待解析', en: 'Attachment Only' },
+  count_inventory: { zh: '计入库存', en: 'Count Inventory' },
+  same_origin_channel: { zh: '同源渠道', en: 'Same-Origin Channel' },
+  do_not_count: { zh: '不计入库存', en: 'Do Not Count' },
   active: { zh: '已启用', en: 'Active' },
   disabled: { zh: '已停用', en: 'Disabled' },
   deposit_received: { zh: '已收定金', en: 'Deposit Received' },
@@ -568,7 +756,6 @@ const statusLabels: Record<string, { zh: string; en: string }> = {
 }
 
 const specGroupLabels: Record<string, { zh: string; en: string }> = {
-  基础信息: { zh: '基础信息', en: 'Basic Info' },
   车身: { zh: '车身', en: 'Body' },
   动力: { zh: '动力', en: 'Powertrain' },
   '电池/续航': { zh: '电池/续航', en: 'Battery / Range' },
@@ -583,6 +770,8 @@ const specGroupLabels: Record<string, { zh: string; en: string }> = {
   '座舱/舒适': { zh: '座舱/舒适', en: 'Cabin / Comfort' },
   配置: { zh: '配置', en: 'Features' },
 }
+
+const hiddenSpecGroups = new Set(['基础信息'])
 
 const specNameLabels: Record<string, { zh: string; en: string }> = {
   品牌: { zh: '品牌', en: 'Brand' },
@@ -611,7 +800,10 @@ const specNameLabels: Record<string, { zh: string; en: string }> = {
   快充时间: { zh: '快充时间', en: 'Fast Charging Time' },
   慢充时间: { zh: '慢充时间', en: 'AC Charging Time' },
   快充功率: { zh: '快充功率', en: 'Fast Charging Power' },
+  快充功能: { zh: '快充功能', en: 'Fast Charging Support' },
   快充电量范围: { zh: '快充电量范围', en: 'Fast Charging SOC Range' },
+  快充接口位置: { zh: '快充接口位置', en: 'DC Charging Port Position' },
+  慢充接口位置: { zh: '慢充接口位置', en: 'AC Charging Port Position' },
   百公里耗电: { zh: '百公里耗电', en: 'Energy Consumption' },
   最高车速: { zh: '最高车速', en: 'Top Speed' },
   '0-50km/h 加速': { zh: '0-50km/h 加速', en: '0-50 km/h Acceleration' },
@@ -623,22 +815,77 @@ const specNameLabels: Record<string, { zh: string; en: string }> = {
   后制动器: { zh: '后制动器', en: 'Rear Brakes' },
   驻车制动: { zh: '驻车制动', en: 'Parking Brake' },
   '轮毂/轮胎规格': { zh: '轮毂/轮胎规格', en: 'Wheel / Tire Size' },
+  轮胎规格: { zh: '轮胎规格', en: 'Tire Size' },
+  前轮胎规格: { zh: '前轮胎规格', en: 'Front Tire Size' },
+  后轮胎规格: { zh: '后轮胎规格', en: 'Rear Tire Size' },
   天窗类型: { zh: '天窗类型', en: 'Sunroof Type' },
   车顶行李架: { zh: '车顶行李架', en: 'Roof Rails' },
+  远光灯光源: { zh: '远光灯光源', en: 'High Beam Light Source' },
+  近光灯光源: { zh: '近光灯光源', en: 'Low Beam Light Source' },
+  外后视镜功能: { zh: '外后视镜功能', en: 'Exterior Mirror Functions' },
   主动刹车: { zh: '主动刹车', en: 'AEB' },
   '主动刹车 AEB': { zh: '主动刹车 AEB', en: 'AEB' },
+  '主动刹车/主动安全系统': { zh: '主动刹车/主动安全系统', en: 'AEB / Active Safety' },
   车道偏离预警: { zh: '车道偏离预警', en: 'Lane Departure Warning' },
+  车道偏离预警系统: { zh: '车道偏离预警系统', en: 'Lane Departure Warning' },
+  车道保持辅助系统: { zh: '车道保持辅助系统', en: 'Lane Keeping Assist' },
+  车道居中保持: { zh: '车道居中保持', en: 'Lane Centering' },
+  辅助泊车入位: { zh: '辅助泊车入位', en: 'Parking Assist' },
   车身稳定控制: { zh: '车身稳定控制', en: 'ESC' },
   胎压监测: { zh: '胎压监测', en: 'TPMS' },
+  '主/副驾驶座安全气囊': { zh: '主/副驾驶座安全气囊', en: 'Front Airbags' },
+  '前/后排侧气囊': { zh: '前/后排侧气囊', en: 'Side Airbags' },
+  '前/后排头部气囊(气帘)': { zh: '前/后排头部气囊(气帘)', en: 'Curtain Airbags' },
+  前排中间气囊: { zh: '前排中间气囊', en: 'Front Center Airbag' },
+  ISOFIX儿童座椅接口: { zh: 'ISOFIX儿童座椅接口', en: 'ISOFIX Child Seat Anchors' },
   驾驶辅助级别: { zh: '驾驶辅助级别', en: 'Driver Assistance Level' },
   自适应巡航: { zh: '自适应巡航', en: 'Adaptive Cruise Control' },
   '360 全景影像': { zh: '360 全景影像', en: '360 Camera' },
+  驾驶辅助影像: { zh: '驾驶辅助影像', en: 'Camera Assistance' },
+  '透明底盘/540度影像': { zh: '透明底盘/540度影像', en: 'Transparent Chassis / 540 Camera' },
+  巡航系统: { zh: '巡航系统', en: 'Cruise Control System' },
+  '前/后驻车雷达': { zh: '前/后驻车雷达', en: 'Front / Rear Parking Radar' },
+  超声波雷达数量: { zh: '超声波雷达数量', en: 'Ultrasonic Radar Count' },
+  毫米波雷达数量: { zh: '毫米波雷达数量', en: 'Millimeter-wave Radar Count' },
+  激光雷达数量: { zh: '激光雷达数量', en: 'LiDAR Count' },
+  激光雷达线数: { zh: '激光雷达线数', en: 'LiDAR Lines' },
+  激光雷达品牌: { zh: '激光雷达品牌', en: 'LiDAR Brand' },
+  激光雷达型号: { zh: '激光雷达型号', en: 'LiDAR Model' },
   中控屏: { zh: '中控屏', en: 'Center Display' },
+  中控彩色屏幕: { zh: '中控彩色屏幕', en: 'Center Display' },
+  中控屏幕类型: { zh: '中控屏幕类型', en: 'Display Type' },
+  中控屏幕尺寸: { zh: '中控屏幕尺寸', en: 'Display Size' },
+  中控屏幕分辨率: { zh: '中控屏幕分辨率', en: 'Display Resolution' },
+  车机智能芯片: { zh: '车机智能芯片', en: 'Infotainment Chip' },
+  '车机系统内存(GB)': { zh: '车机系统内存(GB)', en: 'System RAM (GB)' },
+  '车机系统存储(GB)': { zh: '车机系统存储(GB)', en: 'System Storage (GB)' },
   '车联网/OTA': { zh: '车联网/OTA', en: 'Connected Services / OTA' },
+  车联网: { zh: '车联网', en: 'Connected Services' },
+  OTA升级: { zh: 'OTA升级', en: 'OTA Updates' },
   座椅功能: { zh: '座椅功能', en: 'Seat Functions' },
+  座椅材质: { zh: '座椅材质', en: 'Seat Material' },
+  主座椅调节方式: { zh: '主座椅调节方式', en: 'Driver Seat Adjustment' },
+  副座椅调节方式: { zh: '副座椅调节方式', en: 'Passenger Seat Adjustment' },
+  前排座椅功能: { zh: '前排座椅功能', en: 'Front Seat Functions' },
+  第二排座椅调节: { zh: '第二排座椅调节', en: 'Second-row Seat Adjustment' },
+  第二排座椅功能: { zh: '第二排座椅功能', en: 'Second-row Seat Functions' },
+  后排座椅放倒形式: { zh: '后排座椅放倒形式', en: 'Rear Seat Folding' },
+  电动座椅记忆功能: { zh: '电动座椅记忆功能', en: 'Power Seat Memory' },
+  零重力座椅: { zh: '零重力座椅', en: 'Zero-gravity Seat' },
+  无钥匙进入功能: { zh: '无钥匙进入功能', en: 'Keyless Entry' },
+  无钥匙启动系统: { zh: '无钥匙启动系统', en: 'Keyless Start' },
+  钥匙类型: { zh: '钥匙类型', en: 'Key Type' },
+  空调温度控制方式: { zh: '空调温度控制方式', en: 'Climate Control Type' },
+  后排独立空调: { zh: '后排独立空调', en: 'Rear Independent AC' },
   音响: { zh: '音响', en: 'Audio System' },
+  音响品牌: { zh: '音响品牌', en: 'Audio Brand' },
+  扬声器数量: { zh: '扬声器数量', en: 'Speaker Count' },
+  扬声器品牌名称: { zh: '扬声器品牌名称', en: 'Speaker Brand' },
   无线充电: { zh: '无线充电', en: 'Wireless Charging' },
+  手机无线充电功能: { zh: '手机无线充电功能', en: 'Wireless Phone Charging' },
   热泵空调: { zh: '热泵空调', en: 'Heat Pump' },
+  对外放电: { zh: '对外放电', en: 'Vehicle-to-load' },
+  '对外放电功率(kW)': { zh: '对外放电功率(kW)', en: 'V2L Power (kW)' },
   代表配置: { zh: '代表配置', en: 'Key Features' },
 }
 
@@ -649,11 +896,55 @@ const specValueTranslations: Array<[RegExp, string]> = [
   [/华为乾崑激光版/g, 'Huawei Qiankun LiDAR Edition'],
   [/华为乾崑/g, 'Huawei Qiankun'],
   [/比亚迪/g, 'BYD'],
+  [/方程豹/g, 'Fangchengbao'],
+  [/零跑/g, 'Leapmotor'],
   [/吉利银河/g, 'Geely Galaxy'],
+  [/雷达/g, 'Radar'],
+  [/极氪/g, 'Zeekr'],
+  [/领克/g, 'Lynk & Co'],
+  [/埃安/g, 'AION'],
+  [/昊铂/g, 'HYPTEC'],
+  [/东风/g, 'Dongfeng'],
+  [/长安/g, 'Changan'],
   [/长安深蓝/g, 'Changan Deepal'],
+  [/名爵/g, 'MG'],
+  [/丰田/g, 'Toyota'],
+  [/铂智3X/g, 'bZ3X'],
+  [/奇瑞/g, 'Chery'],
+  [/五菱/g, 'Wuling'],
+  [/极狐/g, 'ARCFOX'],
+  [/元PLUS/g, 'Yuan PLUS'],
+  [/元UP/g, 'Yuan UP'],
+  [/宋PLUS新能源/g, 'Song PLUS New Energy'],
   [/宋PLUS EV/g, 'Song Plus EV'],
+  [/唐L/g, 'Tang L'],
+  [/海狮07 EV/g, 'Sealion 07 EV'],
+  [/海鸥/g, 'Seagull'],
+  [/海豚/g, 'Dolphin'],
+  [/钛3/g, 'Tai 3'],
+  [/豹5/g, 'Bao 5'],
+  [/豹8/g, 'Bao 8'],
+  [/星愿/g, 'Xingyuan'],
+  [/银河E5/g, 'Galaxy E5'],
+  [/极氪7X/g, '7X'],
+  [/极氪X/g, 'X'],
+  [/领克Z10/g, 'Z10'],
+  [/纳米01/g, 'Nammi 01'],
+  [/风神L7 EV/g, 'Aeolus L7 EV'],
   [/深蓝 S07/g, 'Deepal S07'],
+  [/深蓝S05/g, 'Deepal S05'],
+  [/深蓝S07/g, 'Deepal S07'],
+  [/启源Q05/g, 'Qiyuan Q05'],
+  [/星光730 EV/g, 'Xingguang 730 EV'],
+  [/星光S EV/g, 'Xingguang S EV'],
+  [/星光 EV/g, 'Xingguang EV'],
+  [/星光L/g, 'Xingguang L'],
+  [/华境S/g, 'Huajing S'],
+  [/阿尔法T5/g, 'Alpha T5'],
   [/银河 E5/g, 'Galaxy E5'],
+  [/纯电动/g, 'BEV'],
+  [/插电式混合动力/g, 'PHEV'],
+  [/增程式/g, 'EREV'],
   [/豪华型/g, 'Luxury'],
   [/尊贵型/g, 'Premium'],
   [/旗舰型/g, 'Flagship'],
@@ -666,6 +957,10 @@ const specValueTranslations: Array<[RegExp, string]> = [
   [/纯电/g, 'BEV'],
   [/紧凑型 SUV/g, 'Compact SUV'],
   [/中型 SUV/g, 'Mid-size SUV'],
+  [/中大型 SUV/g, 'Mid-to-large SUV'],
+  [/大型 SUV/g, 'Large SUV'],
+  [/紧凑型 MPV/g, 'Compact MPV'],
+  [/紧凑型车/g, 'Compact car'],
   [/磷酸铁锂刀片电池/g, 'LFP Blade Battery'],
   [/磷酸铁锂电池/g, 'LFP Battery'],
   [/前置前驱/g, 'Front-motor FWD'],
@@ -744,12 +1039,6 @@ const formatDateByLanguage = (value: string | null, language: Language) =>
     ? new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US', { dateStyle: 'medium' }).format(new Date(value))
     : language === 'zh' ? '未设置' : 'Not set'
 
-const formatProductionMonth = (value?: string) => {
-  if (!value) return '生产年月待补充'
-  const [year, month] = value.split('-')
-  return `${year}年${Number(month)}月`
-}
-
 function translateSpecValue(value: string, language: Language) {
   if (language === 'zh') return value
   return specValueTranslations.reduce(
@@ -769,9 +1058,10 @@ function displayTrimName(trim: string, language: Language) {
 }
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
+  const isFormData = options?.body instanceof FormData
   const response = await fetch(url, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: isFormData ? options?.headers : { 'Content-Type': 'application/json', ...options?.headers },
   })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: '请求失败' }))
@@ -961,6 +1251,14 @@ function App() {
               canSeeCost={data.permissions.canSeeCost}
               canRequestQuote={data.permissions.canRequestQuote}
               onCreated={loadData}
+            />
+          </DataPanel>
+        )}
+        {active === 'sourceImports' && (
+          <DataPanel title={i18n.t('nav_sourceImports')} subtitle={i18n.t('sourceImportsSubtitle')}>
+            <SourceImportWorkbench
+              currentUser={data.user}
+              profiles={data.vehicleProfiles}
             />
           </DataPanel>
         )}
@@ -1369,6 +1667,560 @@ function DataPanel({ title, subtitle, children }: { title: string; subtitle: str
   return <section className="panel full"><div className="section-title"><h2>{title}</h2><p>{subtitle}</p></div>{children}</section>
 }
 
+function formatFileSize(size: number) {
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${size} B`
+}
+
+function issueLabel(issue: string) {
+  const labels: Record<string, string> = {
+    missing_model: '缺车型',
+    missing_trim: '缺配置',
+    missing_price: '缺价格',
+    missing_stock: '缺数量',
+    missing_currency: '缺币种',
+    missing_trade_term: '缺条款',
+    missing_location: '缺地点',
+    unmatched_profile: '未匹配车型库',
+    profile_needs_confirmation: '车型待确认',
+    duplicate_risk: '疑似同源重复',
+    missing_from_latest_snapshot: '本次未出现',
+    attachment_pending_parser: '附件待解析',
+  }
+  return labels[issue] ?? issue
+}
+
+function SourceImportWorkbench({
+  currentUser,
+  profiles,
+}: {
+  currentUser: User
+  profiles: VehicleProfile[]
+}) {
+  const { statusLabel } = useI18n()
+  const [list, setList] = useState<SourceImportListResponse | null>(null)
+  const [detail, setDetail] = useState<SourceImportBatchDetail | null>(null)
+  const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null)
+  const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null)
+  const [supplierName, setSupplierName] = useState('')
+  const [snapshotTime, setSnapshotTime] = useState(() => new Date().toISOString().slice(0, 10))
+  const [importedBy, setImportedBy] = useState(currentUser.displayName)
+  const [notes, setNotes] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [showSupplierForm, setShowSupplierForm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [candidateFilter, setCandidateFilter] = useState('all')
+
+  async function loadList() {
+    const response = await api<SourceImportListResponse>('/api/source-imports')
+    setList(response)
+    if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
+  }
+
+  async function loadBatch(batchId: number) {
+    const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${batchId}`)
+    setDetail(response)
+    setSelectedCandidateId((current) => {
+      if (current && response.candidates.some((candidate) => candidate.id === current)) return current
+      return response.candidates[0]?.id ?? null
+    })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(async () => {
+      const response = await api<SourceImportListResponse>('/api/source-imports')
+      if (cancelled) return
+      setList(response)
+      if (response.batches[0]) setSelectedBatchId(response.batches[0].id)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedBatchId) return
+    let cancelled = false
+    void Promise.resolve().then(async () => {
+      const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${selectedBatchId}`)
+      if (cancelled) return
+      setDetail(response)
+      setSelectedCandidateId((current) => {
+        if (current && response.candidates.some((candidate) => candidate.id === current)) return current
+        return response.candidates[0]?.id ?? null
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedBatchId])
+
+  async function uploadBatch(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('supplierName', supplierName)
+      form.append('snapshotTime', snapshotTime)
+      form.append('importedBy', importedBy)
+      form.append('notes', notes)
+      files.forEach((file) => form.append('files', file))
+      const response = await api<{ batch: SourceImportBatch }>('/api/source-imports/batches', {
+        method: 'POST',
+        body: form,
+      })
+      setSupplierName('')
+      setNotes('')
+      setFiles([])
+      setSelectedBatchId(response.batch.id)
+      await loadList()
+      await loadBatch(response.batch.id)
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : '导入失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function downloadExport(batchId: number) {
+    const response = await fetch(`/api/source-imports/batches/${batchId}/export`)
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({ error: '导出失败' }))
+      throw new Error(body.error || '导出失败')
+    }
+    const blob = await response.blob()
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    const match = disposition.match(/filename\*=UTF-8''([^;]+)/)
+    const filename = match ? decodeURIComponent(match[1]) : `source-import-${batchId}.xlsx`
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    window.URL.revokeObjectURL(url)
+    await loadList()
+  }
+
+  async function resolveDuplicate(duplicateId: number, resolution: 'same_origin' | 'not_duplicate' | 'defer') {
+    await api(`/api/source-imports/duplicates/${duplicateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ resolution }),
+    })
+    if (selectedBatchId) await loadBatch(selectedBatchId)
+    await loadList()
+  }
+
+  const filteredCandidates = useMemo(() => {
+    const candidates = detail?.candidates ?? []
+    if (candidateFilter === 'all') return candidates
+    if (candidateFilter === 'issues') return candidates.filter((candidate) => candidate.issueTags.length > 0)
+    if (candidateFilter === 'duplicates') return candidates.filter((candidate) => candidate.issueTags.includes('duplicate_risk'))
+    if (candidateFilter === 'missing') return candidates.filter((candidate) => candidate.changeStatus === 'missing_from_latest_snapshot')
+    return candidates.filter((candidate) => candidate.reviewStatus === candidateFilter)
+  }, [detail, candidateFilter])
+
+  const selectedCandidate = detail?.candidates.find((candidate) => candidate.id === selectedCandidateId) ?? null
+
+  return (
+    <div className="source-import-workbench">
+      <form className="source-import-upload" onSubmit={uploadBatch}>
+        <div>
+          <strong>导入供应商快照</strong>
+          <span>供应商每次发来的表都作为一个时间点声明；快照名称会自动按“供应商-范围-车源-日期-序号”生成。</span>
+        </div>
+        <div className="source-upload-grid">
+          <div className="supplier-select-field">
+            <label>供应商
+              <select onChange={(event) => setSupplierName(event.target.value)} required value={supplierName}>
+                <option value="">选择供应商</option>
+                {list?.suppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.supplierName}>{supplier.supplierName}</option>
+                ))}
+              </select>
+            </label>
+            <button className="supplier-add-button" onClick={() => setShowSupplierForm(true)} type="button">
+              <Plus size={15} />
+              新增
+            </button>
+          </div>
+          <label>快照日期
+            <input onChange={(event) => setSnapshotTime(event.target.value)} type="date" value={snapshotTime} />
+          </label>
+          <label>导入人
+            <input onChange={(event) => setImportedBy(event.target.value)} value={importedBy} />
+          </label>
+        </div>
+        <label className="source-file-picker">
+          <Upload size={18} />
+          <span>{files.length > 0 ? `${files.length} 个文件已选择` : '选择 Excel、TXT、图片、PDF、PPT 等供应商文件'}</span>
+          <input
+            multiple
+            onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+            type="file"
+          />
+        </label>
+        {files.length > 0 && (
+          <div className="selected-source-files">
+            {files.map((file) => <span key={`${file.name}-${file.size}`}>{file.name} · {formatFileSize(file.size)}</span>)}
+          </div>
+        )}
+        <textarea onChange={(event) => setNotes(event.target.value)} placeholder="本批次备注，例如部分库存已售、供应商口头说明、价格有效期等" value={notes} />
+        {showSupplierForm && (
+          <SourceSupplierQuickForm
+            onClose={() => setShowSupplierForm(false)}
+            onCreated={async (supplier) => {
+              setShowSupplierForm(false)
+              setSupplierName(supplier.supplierName)
+              await loadList()
+            }}
+          />
+        )}
+        <button disabled={busy || !supplierName || files.length === 0} type="submit">
+          <Upload size={16} />
+          {busy ? '导入中...' : '导入并解析'}
+        </button>
+        {error && <p className="form-error">{error}</p>}
+      </form>
+
+      <div className="source-import-layout">
+        <aside className="source-batch-list">
+          <header>
+            <strong>导入批次</strong>
+            <span>{list?.batches.length ?? 0} 批</span>
+          </header>
+          {list?.batches.map((batch) => (
+            <button
+              className={selectedBatchId === batch.id ? 'active' : ''}
+              key={batch.id}
+              onClick={() => setSelectedBatchId(batch.id)}
+              type="button"
+            >
+              <div>
+                <strong>{batch.supplierName}</strong>
+                <span>{batch.snapshotName || `快照 V${batch.id}`} · {batch.snapshotTime}</span>
+              </div>
+              <Badge label={batch.status} />
+              <small>{batch.summary.total} 条 · {batch.summary.needsReview} 待审 · {batch.summary.withIssues} 有问题</small>
+            </button>
+          ))}
+          {list?.batches.length === 0 && <p>暂无导入批次</p>}
+        </aside>
+
+        <section className="source-import-main">
+          {detail ? (
+            <>
+              <div className="source-import-summary">
+                <Metric label="候选车源" value={`${detail.batch.summary.total}`} note={`${detail.batch.summary.approved} 已确认`} />
+                <Metric label="待处理" value={`${detail.batch.summary.needsReview}`} note={`${detail.batch.summary.withIssues} 条带问题标签`} />
+                <Metric label="同源风险" value={`${detail.duplicates.filter((duplicate) => duplicate.status !== 'resolved').length}`} note="跨供应商疑似重复" />
+                <Metric label="快照变化" value={`${detail.snapshots[0]?.changedCount ?? 0}`} note={`${detail.snapshots[0]?.missingCount ?? 0} 条本次未出现`} />
+              </div>
+              <div className="source-batch-toolbar">
+                <div>
+                  <strong>{detail.batch.supplierName}</strong>
+                  <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
+                </div>
+                <button onClick={() => void downloadExport(detail.batch.id)} type="button">
+                  <Download size={16} />
+                  导出飞书 Excel
+                </button>
+              </div>
+              <div className="source-file-list">
+                {detail.files.map((file) => (
+                  <div key={file.id}>
+                    <FileText size={16} />
+                    <span>{file.originalName}</span>
+                    <small>{statusLabel(file.parseStatus)} · {file.parserNotes || formatFileSize(file.fileSize)}</small>
+                  </div>
+                ))}
+              </div>
+              <div className="source-candidate-tools">
+                <select onChange={(event) => setCandidateFilter(event.target.value)} value={candidateFilter}>
+                  <option value="all">全部候选</option>
+                  <option value="needs_review">待审核</option>
+                  <option value="approved">已确认</option>
+                  <option value="issues">有问题标签</option>
+                  <option value="duplicates">疑似同源</option>
+                  <option value="missing">本次未出现</option>
+                  <option value="rejected">已驳回</option>
+                </select>
+                <span>{filteredCandidates.length} 条</span>
+              </div>
+              <div className="source-review-grid">
+                <div className="source-candidate-table">
+                  <div className="source-candidate-head">
+                    <span>状态</span><span>车型</span><span>数量</span><span>价格</span><span>问题</span>
+                  </div>
+                  {filteredCandidates.map((candidate) => (
+                    <button
+                      className={selectedCandidateId === candidate.id ? 'active' : ''}
+                      key={candidate.id}
+                      onClick={() => setSelectedCandidateId(candidate.id)}
+                      type="button"
+                    >
+                      <span><Badge label={candidate.reviewStatus} /><small>{statusLabel(candidate.changeStatus)}</small></span>
+                      <span><strong>{candidate.modelName || '未识别车型'}</strong><small>{candidate.year} {candidate.trimName}</small></span>
+                      <strong>{candidate.stockQuantity}</strong>
+                      <strong>{candidate.supplierPrice > 0 ? `${candidate.currency || 'USD'} ${candidate.supplierPrice}` : '待确认'}</strong>
+                      <span className="candidate-issues">{candidate.issueTags.slice(0, 2).map(issueLabel).join('、') || '无'}</span>
+                    </button>
+                  ))}
+                </div>
+                <CandidateEditor
+                  candidate={selectedCandidate}
+                  key={selectedCandidate?.id ?? 'empty'}
+                  onSaved={async () => {
+                    if (selectedBatchId) await loadBatch(selectedBatchId)
+                    await loadList()
+                  }}
+                  profiles={profiles}
+                />
+              </div>
+              <div className="source-lower-grid">
+                <section className="duplicate-panel">
+                  <header>
+                    <strong><Link2 size={16} /> 同源重复建议</strong>
+                    <span>{detail.duplicates.length} 条</span>
+                  </header>
+                  {detail.duplicates.length === 0 ? (
+                    <p>本批次暂无明显跨供应商同源风险。</p>
+                  ) : detail.duplicates.map((duplicate) => {
+                    const candidate = detail.candidates.find((item) => item.id === duplicate.candidateId)
+                    return (
+                      <article key={duplicate.id}>
+                        <div>
+                          <strong>{candidate?.modelName || `候选 #${duplicate.candidateId}`}</strong>
+                          <span>{duplicate.reason}</span>
+                          <small>匹配历史候选 #{duplicate.matchedCandidateId} · {statusLabel(duplicate.status)} {duplicate.resolution && `· ${duplicate.resolution}`}</small>
+                        </div>
+                        {duplicate.status !== 'resolved' && (
+                          <div>
+                            <button onClick={() => void resolveDuplicate(duplicate.id, 'same_origin')} type="button">确认同源</button>
+                            <button onClick={() => void resolveDuplicate(duplicate.id, 'not_duplicate')} type="button">不是重复</button>
+                            <button onClick={() => void resolveDuplicate(duplicate.id, 'defer')} type="button">稍后处理</button>
+                          </div>
+                        )}
+                      </article>
+                    )
+                  })}
+                </section>
+                <section className="rules-panel">
+                  <header>
+                    <strong><Database size={16} /> 已沉淀规则</strong>
+                    <span>{list?.rules.length ?? 0} 条</span>
+                  </header>
+                  {list?.rules.slice(0, 10).map((rule) => (
+                    <div key={rule.id}>
+                      <strong>{rule.sourceValue || rule.sourceKey}</strong>
+                      <span>{rule.ruleType} · {rule.scope === 'supplier' ? rule.supplierName : '全局'} → {rule.targetField}: {rule.targetValue}</span>
+                    </div>
+                  ))}
+                  {list?.rules.length === 0 && <p>人工确认和修正后，系统会在这里自动沉淀规则。</p>}
+                </section>
+              </div>
+            </>
+          ) : (
+            <EmptyState text="请先导入或选择一个供应商快照批次" />
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function SourceSupplierQuickForm({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (supplier: SourceSupplier) => Promise<void>
+}) {
+  const [supplierName, setSupplierName] = useState('')
+  const [contactName, setContactName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [wechat, setWechat] = useState('')
+  const [location, setLocation] = useState('')
+  const [channelType, setChannelType] = useState('unknown')
+  const [notes, setNotes] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function saveSupplier() {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await api<{ supplier: SourceSupplier }>('/api/source-imports/suppliers', {
+        method: 'POST',
+        body: JSON.stringify({
+          supplierName,
+          contactName,
+          phone,
+          wechat,
+          location,
+          channelType,
+          notes,
+        }),
+      })
+      await onCreated(response.supplier)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '供应商保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="supplier-quick-form">
+      <header>
+        <div>
+          <strong>新增供应商</strong>
+          <span>保存后会进入供应商下拉列表，后续导入不用重复手写。</span>
+        </div>
+        <button aria-label="关闭新增供应商" onClick={onClose} type="button"><X size={16} /></button>
+      </header>
+      <div className="supplier-quick-grid">
+        <label>供应商名称<input onChange={(event) => setSupplierName(event.target.value)} placeholder="例如：重庆盛世惠迪" value={supplierName} /></label>
+        <label>联系人<input onChange={(event) => setContactName(event.target.value)} placeholder="例如：王经理" value={contactName} /></label>
+        <label>电话<input onChange={(event) => setPhone(event.target.value)} value={phone} /></label>
+        <label>微信<input onChange={(event) => setWechat(event.target.value)} value={wechat} /></label>
+        <label>所在地<input onChange={(event) => setLocation(event.target.value)} placeholder="例如：重庆 / 南沙 / 霍尔果斯" value={location} /></label>
+        <label>渠道类型<select onChange={(event) => setChannelType(event.target.value)} value={channelType}>
+          <option value="unknown">待确认</option>
+          <option value="primary_source">源头供应商</option>
+          <option value="dealer">经销商/4S店</option>
+          <option value="trader">贸易商</option>
+          <option value="mixed_channel">混合渠道</option>
+        </select></label>
+      </div>
+      <textarea onChange={(event) => setNotes(event.target.value)} placeholder="供应商备注，例如授权情况、常报品牌、付款习惯、同源线索等" value={notes} />
+      {error && <p className="form-error">{error}</p>}
+      <div className="supplier-quick-actions">
+        <button className="secondary-button" onClick={onClose} type="button">取消</button>
+        <button disabled={busy || !supplierName.trim()} onClick={saveSupplier} type="button">
+          <Save size={15} />
+          {busy ? '保存中...' : '保存供应商'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function CandidateEditor({
+  candidate,
+  profiles,
+  onSaved,
+}: {
+  candidate: SourceImportCandidate | null
+  profiles: VehicleProfile[]
+  onSaved: () => Promise<void>
+}) {
+  const { statusLabel } = useI18n()
+  const [draft, setDraft] = useState<SourceImportCandidate | null>(candidate)
+  const [saveRuleScope, setSaveRuleScope] = useState<'none' | 'supplier' | 'global'>('supplier')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  if (!draft) {
+    return <aside className="candidate-editor empty">选择一条候选车源后进行审核。</aside>
+  }
+
+  function update<K extends keyof SourceImportCandidate>(key: K, value: SourceImportCandidate[K]) {
+    setDraft((current) => current ? { ...current, [key]: value } : current)
+  }
+
+  async function save(reviewStatus?: string) {
+    if (!draft) return
+    const payload = draft
+    setBusy(true)
+    setError('')
+    try {
+      const response = await api<{ candidate: SourceImportCandidate }>(`/api/source-imports/candidates/${payload.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          ...payload,
+          reviewStatus: reviewStatus ?? payload.reviewStatus,
+          saveRuleScope,
+        }),
+      })
+      setDraft(response.candidate)
+      await onSaved()
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <aside className="candidate-editor">
+      <header>
+        <div>
+          <strong>候选 #{draft.id}</strong>
+          <span>{draft.sourceSheet} · 第 {draft.rowIndex || '-'} 行</span>
+        </div>
+        <Badge label={draft.matchStatus} />
+      </header>
+      <div className="candidate-issue-list">
+        {draft.issueTags.length === 0 ? <span>无问题标签</span> : draft.issueTags.map((issue) => <span key={issue}>{issueLabel(issue)}</span>)}
+      </div>
+      <div className="candidate-form-grid">
+        <label>品牌<input onChange={(event) => update('brand', event.target.value)} value={draft.brand} /></label>
+        <label>车型<input onChange={(event) => update('modelName', event.target.value)} value={draft.modelName} /></label>
+        <label>年款<input onChange={(event) => update('year', event.target.value)} value={draft.year} /></label>
+        <label>配置版本<input onChange={(event) => update('trimName', event.target.value)} value={draft.trimName} /></label>
+        <label>外观色<input onChange={(event) => update('exteriorColor', event.target.value)} value={draft.exteriorColor} /></label>
+        <label>内饰色<input onChange={(event) => update('interiorColor', event.target.value)} value={draft.interiorColor} /></label>
+        <label>数量<input min="0" onChange={(event) => update('stockQuantity', Number(event.target.value))} type="number" value={draft.stockQuantity} /></label>
+        <label>价格<input min="0" onChange={(event) => update('supplierPrice', Number(event.target.value))} type="number" value={draft.supplierPrice} /></label>
+        <label>币种<select onChange={(event) => update('currency', event.target.value)} value={draft.currency}><option value="">待确认</option><option>USD</option><option>CNY</option></select></label>
+        <label>贸易条款<select onChange={(event) => update('tradeTerm', event.target.value)} value={draft.tradeTerm}><option value="">待确认</option><option>EXW</option><option>FCA</option><option>FOB</option><option>CNF</option><option>CIF</option></select></label>
+        <label>库存地<input onChange={(event) => update('location', event.target.value)} value={draft.location} /></label>
+        <label>车型库<select onChange={(event) => update('profileId', event.target.value ? Number(event.target.value) : null)} value={draft.profileId ?? ''}>
+          <option value="">暂不关联车型库</option>
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>{profile.brand} {profile.model} · {profile.year} · {profile.trim}</option>
+          ))}
+        </select></label>
+        <label>同源处理<select onChange={(event) => update('canonicalAction', event.target.value)} value={draft.canonicalAction}>
+          <option value="count_inventory">{statusLabel('count_inventory')}</option>
+          <option value="same_origin_channel">{statusLabel('same_origin_channel')}</option>
+          <option value="do_not_count">{statusLabel('do_not_count')}</option>
+        </select></label>
+        <label>审核状态<select onChange={(event) => update('reviewStatus', event.target.value)} value={draft.reviewStatus}>
+          <option value="pending_review">{statusLabel('pending_review')}</option>
+          <option value="needs_review">{statusLabel('needs_review')}</option>
+          <option value="approved">{statusLabel('approved')}</option>
+          <option value="rejected">{statusLabel('rejected')}</option>
+        </select></label>
+      </div>
+      <label className="candidate-notes">备注<textarea onChange={(event) => update('notes', event.target.value)} value={draft.notes} /></label>
+      <div className="rule-save-mode">
+        <span>本次修正如何沉淀</span>
+        <select onChange={(event) => setSaveRuleScope(event.target.value as 'none' | 'supplier' | 'global')} value={saveRuleScope}>
+          <option value="none">仅修改本次</option>
+          <option value="supplier">保存为该供应商规则</option>
+          <option value="global">保存为全局规则</option>
+        </select>
+      </div>
+      <details className="raw-fields">
+        <summary>查看原始识别内容</summary>
+        <pre>{JSON.stringify(draft.rawFields, null, 2)}</pre>
+        <p>{draft.rawText}</p>
+      </details>
+      {error && <p className="form-error">{error}</p>}
+      <div className="candidate-actions">
+        <button disabled={busy} onClick={() => void save('approved')} type="button"><Save size={15} />确认入库候选</button>
+        <button disabled={busy} onClick={() => void save('needs_review')} type="button">保存待审</button>
+        <button className="danger-outline" disabled={busy} onClick={() => void save('rejected')} type="button"><X size={15} />驳回</button>
+      </div>
+    </aside>
+  )
+}
+
 function VehicleTable({
   vehicles,
   vehicleProfiles,
@@ -1448,6 +2300,7 @@ function VehicleTable({
       variants,
       stockQuantity: variants.filter((variant) => variant.isListed).reduce((sum, variant) => sum + variant.stockQuantity, 0),
       startingPrice: Math.min(...(variants.some((variant) => variant.isListed) ? variants.filter((variant) => variant.isListed) : variants).map((variant) => variant.visiblePrice)),
+      canSeePrice: variants.some((variant) => variant.canSeePrice),
       hasCurrentPrice: variants.some((variant) => variant.isListed && variant.isPriceValid),
     }))
   }, [filteredVehicles])
@@ -1566,7 +2419,7 @@ function VehicleTable({
                 {isExpanded ? <ChevronDown size={19} /> : <ChevronRight size={19} />}
                 <div><strong>{group.modelName}</strong><span>{group.variants.length} 个配置版本</span></div>
                 <div><span>现车</span><strong>{group.stockQuantity} 台</strong></div>
-                <div><span>价格</span><strong className={group.hasCurrentPrice ? 'price-current' : 'price-expired'}>{formatUsd(group.startingPrice)} 起</strong></div>
+                <div><span>价格</span><strong className={group.hasCurrentPrice ? 'price-current' : 'price-expired'}>{group.canSeePrice ? `${formatUsd(group.startingPrice)} 起` : '询价后报价'}</strong></div>
                 <span className="expand-label">{isExpanded ? '收起版本' : '查看版本'}</span>
               </button>
               {isExpanded && (
@@ -1574,6 +2427,7 @@ function VehicleTable({
                   {group.variants.map((vehicle) => {
                     const versionExpanded = expandedVersions.includes(vehicle.id)
                     const isSelected = basket.some((item) => item.vehicle.id === vehicle.id)
+                    const needsSourceCompletion = canSeeCost && (!vehicle.supplierSources || vehicle.supplierSources.length === 0 || !vehicle.cost)
                     return (
                       <article className={`resource-variant ${vehicle.isListed ? '' : 'unlisted'}`} key={vehicle.id}>
                         <div className="variant-main-row">
@@ -1591,12 +2445,20 @@ function VehicleTable({
                             type="button"
                           >
                             {versionExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
-                            <div><strong>{vehicle.year} · {vehicle.trim}</strong><span>{vehicle.rangeKm}KM · {vehicle.batteryCapacity}</span></div>
+                            <div>
+                              <strong>{vehicle.year} · {vehicle.trim}</strong>
+                              <span>{vehicle.rangeKm}KM · {vehicle.batteryCapacity}</span>
+                              {needsSourceCompletion && <small className="source-required-label">待补录供应商车源</small>}
+                            </div>
                           </button>
                           <div><span>供应状态</span><Badge label={vehicle.isListed ? vehicle.status : 'delisted'} /></div>
                           <div><span>现车</span><strong>{vehicle.stockQuantity} 台</strong></div>
                           <div><span>预订周期</span><strong>{vehicle.preorderMinDays > 0 ? `${vehicle.preorderMinDays}-${vehicle.preorderMaxDays} 天` : '待确认'}</strong></div>
-                          <div><span>{vehicle.priceLabel}</span><strong className={vehicle.isPriceValid ? 'price-current' : 'price-expired'}>{formatUsd(vehicle.visiblePrice)}</strong><small>{vehicle.isPriceValid ? `有效至 ${formatDate(vehicle.priceValidUntil)}` : `已于 ${formatDate(vehicle.priceValidUntil)} 过期`}</small></div>
+                          <div>
+                            <span>{vehicle.priceLabel}</span>
+                            <strong className={vehicle.isPriceValid ? 'price-current' : 'price-expired'}>{vehicle.canSeePrice ? formatUsd(vehicle.visiblePrice) : '询价后报价'}</strong>
+                            {vehicle.canSeePrice && <small>{vehicle.isPriceValid ? `有效至 ${formatDate(vehicle.priceValidUntil)}` : `已于 ${formatDate(vehicle.priceValidUntil)} 过期`}</small>}
+                          </div>
                         </div>
                         {versionExpanded && (
                           <VehicleResourceDetails
@@ -1759,17 +2621,28 @@ function VehicleResourceDetails({
   onEditSource: (source: SupplierSource) => void
   onRemoveSource: (source: SupplierSource) => Promise<void>
 }) {
+  const needsSourceCompletion = canSeeCost && (!vehicle.supplierSources || vehicle.supplierSources.length === 0 || !vehicle.cost)
+
   return (
     <div className="vehicle-resource-details">
       {canSeeCost && (
         <div className="vehicle-management-actions">
           <button onClick={onEditVehicle} type="button"><Pencil size={15} />编辑车型资料</button>
           <button disabled={!vehicle.profile} onClick={onViewProfile} type="button"><FileText size={15} />查看参数</button>
-          <button onClick={onUpdatePrice} type="button"><CreditCard size={15} />更新合作价</button>
+          <button onClick={onUpdatePrice} type="button"><CreditCard size={15} />手动调整合作价</button>
           <button className={vehicle.isListed ? 'danger-outline' : ''} onClick={onListingChanged} type="button">
             {vehicle.isListed ? <EyeOff size={15} /> : <Eye size={15} />}
             {vehicle.isListed ? '下架配置' : '恢复上架'}
           </button>
+        </div>
+      )}
+      {needsSourceCompletion && (
+        <div className="source-required-alert">
+          <div>
+            <strong>需要补录供应商车源</strong>
+            <span>这条旧库存缺少供应商报价明细，系统暂时无法按“供应商报价 + 100 USD”自动重算合作价。</span>
+          </div>
+          <button onClick={onAddSource} type="button"><Plus size={15} />补录供应商车源</button>
         </div>
       )}
       {!canSeeCost && vehicle.profile && (
@@ -1804,17 +2677,17 @@ function VehicleResourceDetails({
       {canSeeCost && (
         <div className="supplier-source-section">
           <div className="supplier-source-title">
-            <div><strong>供应商车源明细</strong><span>内部信息，仅管理员可见</span></div>
+            <div><strong>供应商车源明细</strong><span>内部车源录入人员可见，合作价按供应商报价自动生成</span></div>
             <button onClick={onAddSource} type="button"><Plus size={15} />添加供应商车源</button>
           </div>
           {vehicle.supplierSources && vehicle.supplierSources.length > 0 ? (
             <div className="supplier-source-table">
-              <div className="supplier-source-head"><span>供应商</span><span>现车</span><span>现车批次</span><span>预订周期</span><span>供应商价格</span><span>更新时间</span><span>操作</span></div>
+              <div className="supplier-source-head"><span>供应商</span><span>现车</span><span>颜色数量</span><span>预订周期</span><span>供应商价格</span><span>更新时间</span><span>操作</span></div>
               {vehicle.supplierSources.map((source) => (
                 <div className="supplier-source-row" key={source.id}>
                   <div><strong>{source.supplierName}</strong><small>{source.notes}</small></div>
                   <span>{source.stockQuantity} 台</span>
-                  <span>{source.stockColors.map((entry) => `${entry.color} ${entry.quantity} 台（${formatProductionMonth(entry.productionMonth)}）`).join('；') || '无'}</span>
+                  <span>{source.stockColors.map((entry) => `${entry.color} ${entry.quantity} 台`).join('；') || '无'}</span>
                   <span>{source.canPreorder ? `${source.preorderMinDays}-${source.preorderMaxDays} 天` : '不可预订'}</span>
                   <strong className="sensitive">{formatUsd(source.supplierPrice)}</strong>
                   <span>{formatDate(source.updatedAt)}<small>录入：{source.createdBy}<br />更新：{source.updatedBy}</small></span>
@@ -1826,7 +2699,9 @@ function VehicleResourceDetails({
               ))}
             </div>
           ) : (
-            <div className="supplier-source-empty">尚未录入供应商车源，当前对外状态为暂时缺货。</div>
+            <div className="supplier-source-empty">
+              尚未录入供应商车源。请补录供应商名称、供应商报价、颜色数量和预订周期；保存后系统会自动生成合作价。
+            </div>
           )}
         </div>
       )}
@@ -1862,6 +2737,8 @@ function VehicleForm({
   const { language } = useI18n()
   const initialProfileId = vehicle?.profileId ? String(vehicle.profileId) : profiles[0] ? String(profiles[0].id) : ''
   const initialProfile = profiles.find((profile) => String(profile.id) === initialProfileId)
+  const [profileSearch, setProfileSearch] = useState('')
+  const [availabilityMode, setAvailabilityMode] = useState('in_stock')
   const [form, setForm] = useState({
     profileId: initialProfileId,
     model: vehicle?.model ?? (initialProfile ? `${initialProfile.brand} ${initialProfile.model}` : ''),
@@ -1872,12 +2749,30 @@ function VehicleForm({
     batteryCapacity: vehicle?.batteryCapacity ?? initialProfile?.batteryCapacity ?? '',
     drivetrain: vehicle?.drivetrain ?? initialProfile?.drivetrain ?? '前驱',
     availableColors: vehicle?.availableColors.join('、') ?? '',
-    partnerPrice: vehicle ? String(vehicle.visiblePrice) : '',
     imageUrl: vehicle?.imageUrl ?? '',
     publicNotes: vehicle?.publicNotes ?? '',
   })
+  const [supplierName, setSupplierName] = useState('')
+  const [supplierPrice, setSupplierPrice] = useState('')
+  const [preorderMinDays, setPreorderMinDays] = useState('7')
+  const [preorderMaxDays, setPreorderMaxDays] = useState('14')
+  const [stockColors, setStockColors] = useState([{ color: '', quantity: 0 }])
+  const [sourceNotes, setSourceNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const selectedProfile = profiles.find((profile) => String(profile.id) === form.profileId)
+  const filteredProfiles = useMemo(() => {
+    const keyword = profileSearch.trim().toLocaleLowerCase()
+    if (!keyword) return profiles.slice(0, 80)
+    return profiles.filter((profile) => [
+      profile.brand,
+      profile.model,
+      profile.year,
+      profile.trim,
+      profile.energyType,
+      profile.drivetrain,
+    ].join(' ').toLocaleLowerCase().includes(keyword)).slice(0, 80)
+  }, [profileSearch, profiles])
 
   function update(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }))
@@ -1887,6 +2782,11 @@ function VehicleForm({
     event.preventDefault()
     setBusy(true)
     setError('')
+    const hasStock = availabilityMode === 'in_stock' || availabilityMode === 'stock_and_preorder'
+    const acceptsPreorder = availabilityMode === 'preorder' || availabilityMode === 'stock_and_preorder'
+    const normalizedStockColors = hasStock
+      ? stockColors.filter((entry) => entry.color.trim() && entry.quantity > 0)
+      : []
     try {
       await api(vehicle ? `/api/vehicles/${vehicle.id}` : '/api/vehicles', {
         method: vehicle ? 'PATCH' : 'POST',
@@ -1894,8 +2794,18 @@ function VehicleForm({
           ...form,
           profileId: Number(form.profileId),
           rangeKm: Number(form.rangeKm),
-          partnerPrice: Number(form.partnerPrice),
-          availableColors: form.availableColors.split(/[,，、]/).map((color) => color.trim()).filter(Boolean),
+          availableColors: vehicle
+            ? form.availableColors.split(/[,，、]/).map((color) => color.trim()).filter(Boolean)
+            : normalizedStockColors.map((entry) => entry.color),
+          initialSource: vehicle ? undefined : {
+            supplierName,
+            supplierPrice: Number(supplierPrice),
+            canPreorder: acceptsPreorder,
+            preorderMinDays: acceptsPreorder ? Number(preorderMinDays) : 0,
+            preorderMaxDays: acceptsPreorder ? Number(preorderMaxDays) : 0,
+            stockColors: normalizedStockColors,
+            notes: sourceNotes,
+          },
         }),
       })
       await onCreated()
@@ -1910,13 +2820,20 @@ function VehicleForm({
     <div className="modal-backdrop">
       <form className="quote-form vehicle-entry-form" onSubmit={submit}>
         <div className="modal-title">
-          <div><p className="eyebrow">车源资料管理</p><h2>{vehicle ? '编辑车源配置' : '新增车源配置'}</h2><span>新增车源前需要先在车型库建立车辆参数资料</span></div>
+          <div><p className="eyebrow">车源资料管理</p><h2>{vehicle ? '编辑车源配置' : '新增车源'}</h2><span>{vehicle ? '只维护展示资料，供应商明细请在车源详情中编辑' : '从车型库选择车型，然后录入供应商可供货信息'}</span></div>
           <button aria-label="关闭" onClick={onClose} type="button">×</button>
         </div>
-        <div className="form-section-label">基本信息</div>
-        <div className="form-grid">
-          {!vehicle && (
-            <label>选择车型库
+        {!vehicle ? (
+          <>
+            <div className="form-section-label">选择车型</div>
+            <label className="form-grid-full">搜索车型库
+              <input
+                onChange={(event) => setProfileSearch(event.target.value)}
+                placeholder="输入品牌、车型、年款或版本，例如 比亚迪、零跑、C11"
+                value={profileSearch}
+              />
+            </label>
+            <label className="form-grid-full">选择车型库
               <select onChange={(event) => {
                 const profile = profiles.find((item) => String(item.id) === event.target.value)
                 setForm((current) => ({
@@ -1932,28 +2849,91 @@ function VehicleForm({
                 }))
               }} required value={form.profileId}>
                 <option value="">请选择车型库资料</option>
-                {profiles.map((profile) => (
+                {filteredProfiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>{displayModelName(profile, language)} · {profile.year} · {displayTrimName(profile.trim, language)}</option>
                 ))}
               </select>
+              <small>{profileSearch ? `匹配 ${filteredProfiles.length} 条车型资料` : `显示前 ${filteredProfiles.length} 条，可输入关键词缩小范围`}</small>
             </label>
-          )}
-          <label>{vehicle ? '完整车型名称' : '车型'}<input disabled={!vehicle} onChange={(event) => update('model', event.target.value)} placeholder="从车型库自动带出" required value={form.model} /></label>
-          <label>配置版本<input disabled={!vehicle} onChange={(event) => update('trim', event.target.value)} placeholder="例如 旗舰型 605KM" required value={form.trim} /></label>
-          <label>年款<input disabled={!vehicle} onChange={(event) => update('year', event.target.value)} required value={form.year} /></label>
-          <label>能源类型<select disabled={!vehicle} onChange={(event) => update('energyType', event.target.value)} value={form.energyType}><option>纯电</option><option>插电混动</option><option>增程</option></select></label>
-          <label>驱动方式<select disabled={!vehicle} onChange={(event) => update('drivetrain', event.target.value)} value={form.drivetrain}><option>前驱</option><option>后驱</option><option>四驱</option></select></label>
-          <label>续航里程（KM）<input disabled={!vehicle} min="0" onChange={(event) => update('rangeKm', event.target.value)} type="number" value={form.rangeKm} /></label>
-          <label>电池容量<input disabled={!vehicle} onChange={(event) => update('batteryCapacity', event.target.value)} placeholder="例如 87 kWh" value={form.batteryCapacity} /></label>
-        </div>
-        <label>可选颜色<input onChange={(event) => update('availableColors', event.target.value)} placeholder="冰川蓝、雪域白、曜石黑" value={form.availableColors} /></label>
-        <div className="form-section-label">{vehicle ? '展示资料' : '价格与展示'}</div>
-        <div className="form-grid">
-          {!vehicle && <label>基础合作价（USD）<input min="1" onChange={(event) => update('partnerPrice', event.target.value)} required type="number" value={form.partnerPrice} /></label>}
-          <label>车辆图片地址<input onChange={(event) => update('imageUrl', event.target.value)} placeholder="可选，https://..." type="url" value={form.imageUrl} /></label>
-        </div>
-        <label>公开备注<textarea onChange={(event) => update('publicNotes', event.target.value)} placeholder="例如支持批量预订、可提供随车充电设备" value={form.publicNotes} /></label>
-        <div className="entry-form-note">{vehicle ? '修改车型资料不会覆盖历史询价和报价中的快照。合作价请使用单独的“更新合作价”操作。' : '价格更新时间自动记录，有效期默认 14 天。新增后因尚无供应商车源，状态为“暂时缺货”。'}</div>
+            {selectedProfile && (
+              <div className="selected-profile-summary">
+                <strong>{displayModelName(selectedProfile, language)}</strong>
+                <span>{selectedProfile.year} · {displayTrimName(selectedProfile.trim, language)}</span>
+              </div>
+            )}
+            <div className="form-section-label">供应商车源</div>
+            <div className="form-grid">
+              <label>供应商名称<input onChange={(event) => setSupplierName(event.target.value)} placeholder="例如 A供应商 / XX车行" required value={supplierName} /></label>
+              <label>供应商报价（USD）<input min="1" onChange={(event) => setSupplierPrice(event.target.value)} placeholder="内部采购/供应价" required type="number" value={supplierPrice} /></label>
+              <div className="calculated-price-preview">
+                <span>自动合作价</span>
+                <strong>{supplierPrice ? formatUsd(Number(supplierPrice) + 100) : '录入后自动生成'}</strong>
+              </div>
+              <label>供货类型
+                <select onChange={(event) => setAvailabilityMode(event.target.value)} value={availabilityMode}>
+                  <option value="in_stock">现车</option>
+                  <option value="preorder">可预订</option>
+                  <option value="stock_and_preorder">现车 + 可预订</option>
+                  <option value="unavailable">暂时缺货</option>
+                </select>
+              </label>
+            </div>
+            {(availabilityMode === 'in_stock' || availabilityMode === 'stock_and_preorder') && (
+              <div className="source-stock-section">
+                <div className="form-section-label subtle-label">现车颜色与数量</div>
+                {stockColors.map((entry, index) => (
+                  <div className="stock-color-entry" key={index}>
+                    <input
+                      aria-label={`现车颜色 ${index + 1}`}
+                      onChange={(event) => setStockColors((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, color: event.target.value } : item))}
+                      placeholder="颜色"
+                      value={entry.color}
+                    />
+                    <input
+                      aria-label={`现车数量 ${index + 1}`}
+                      min="0"
+                      onChange={(event) => setStockColors((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, quantity: Number(event.target.value) } : item))}
+                      type="number"
+                      value={entry.quantity}
+                    />
+                    <button
+                      aria-label={`删除现车颜色 ${index + 1}`}
+                      disabled={stockColors.length === 1}
+                      onClick={() => setStockColors((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                      type="button"
+                    >×</button>
+                  </div>
+                ))}
+                <button className="add-stock-color" onClick={() => setStockColors((current) => [...current, { color: '', quantity: 0 }])} type="button"><Plus size={15} />增加颜色</button>
+              </div>
+            )}
+            {(availabilityMode === 'preorder' || availabilityMode === 'stock_and_preorder') && (
+              <div className="form-grid">
+                <label>最快预订周期（天）<input min="1" onChange={(event) => setPreorderMinDays(event.target.value)} required type="number" value={preorderMinDays} /></label>
+                <label>最长预订周期（天）<input min={preorderMinDays || '1'} onChange={(event) => setPreorderMaxDays(event.target.value)} required type="number" value={preorderMaxDays} /></label>
+              </div>
+            )}
+            <label>内部车源备注<textarea onChange={(event) => setSourceNotes(event.target.value)} placeholder="例如价格已确认、可锁车、需二次确认颜色" value={sourceNotes} /></label>
+            <div className="entry-form-note">这里只录入供应商供货信息；续航、电池、尺寸、配置等车型参数统一在车型库维护。</div>
+          </>
+        ) : (
+          <>
+            <div className="form-section-label">展示资料</div>
+            <div className="form-grid">
+              <label>完整车型名称<input onChange={(event) => update('model', event.target.value)} required value={form.model} /></label>
+              <label>配置版本<input onChange={(event) => update('trim', event.target.value)} required value={form.trim} /></label>
+              <label>年款<input onChange={(event) => update('year', event.target.value)} required value={form.year} /></label>
+              <label>能源类型<select onChange={(event) => update('energyType', event.target.value)} value={form.energyType}><option>纯电</option><option>插电混动</option><option>增程</option></select></label>
+              <label>驱动方式<select onChange={(event) => update('drivetrain', event.target.value)} value={form.drivetrain}><option>前驱</option><option>后驱</option><option>四驱</option></select></label>
+              <label>续航里程（KM）<input min="0" onChange={(event) => update('rangeKm', event.target.value)} type="number" value={form.rangeKm} /></label>
+              <label>电池容量<input onChange={(event) => update('batteryCapacity', event.target.value)} placeholder="例如 87 kWh" value={form.batteryCapacity} /></label>
+              <label>车辆图片地址<input onChange={(event) => update('imageUrl', event.target.value)} placeholder="可选，https://..." type="url" value={form.imageUrl} /></label>
+            </div>
+            <label>可选颜色<input onChange={(event) => update('availableColors', event.target.value)} placeholder="冰川蓝、雪域白、曜石黑" value={form.availableColors} /></label>
+            <label>公开备注<textarea onChange={(event) => update('publicNotes', event.target.value)} placeholder="例如支持批量预订、可提供随车充电设备" value={form.publicNotes} /></label>
+            <div className="entry-form-note">修改展示资料不会覆盖历史询价和报价中的快照。合作价请使用单独的“更新合作价”操作。</div>
+          </>
+        )}
         {error && <p className="form-error">{error}</p>}
         <div className="form-actions">
           <button className="secondary-button" onClick={onClose} type="button">取消</button>
@@ -2194,7 +3174,7 @@ function VehicleProfileLibraryPage({
               <table className="profile-comparison-table">
                 <thead>
                   <tr>
-                    <th>{language === 'zh' ? '参数分组' : 'Group'}</th>
+                    <th>{language === 'zh' ? '参数类别' : 'Category'}</th>
                     <th>{language === 'zh' ? '参数名称' : 'Specification'}</th>
                     {comparedProfiles.map((profile) => (
                       <th key={profile.id}>{profile.year}<br /><span>{displayTrimName(profile.trim, language)}</span></th>
@@ -2215,7 +3195,7 @@ function VehicleProfileLibraryPage({
               </table>
             </div>
             <div className="profile-source-list page-sources">
-              {[...new Map(comparedProfiles.flatMap((profile) => profile.specs).filter((spec) => spec.sourceName || spec.sourceUrl).map((spec) => [`${spec.sourceName}|${spec.sourceUrl}`, spec])).values()].map((source) => (
+              {[...new Map(comparedProfiles.flatMap((profile) => profile.specs).filter((spec) => !hiddenSpecGroups.has(spec.groupName) && (spec.sourceName || spec.sourceUrl)).map((spec) => [`${spec.sourceName}|${spec.sourceUrl}`, spec])).values()].map((source) => (
                 source.sourceUrl
                   ? <a className="profile-source-link" href={source.sourceUrl} key={`${source.sourceName}-${source.sourceUrl}`} rel="noreferrer" target="_blank">{source.sourceName || source.sourceUrl}</a>
                   : <span key={source.sourceName}>{source.sourceName}</span>
@@ -2249,6 +3229,7 @@ function buildProfileComparisonRows(profiles: VehicleProfile[]) {
   const rowMap = new Map<string, { groupName: string; name: string; sortOrder: number; values: Record<number, string> }>()
   for (const profile of profiles) {
     for (const spec of profile.specs) {
+      if (hiddenSpecGroups.has(spec.groupName)) continue
       const key = `${spec.groupName}|||${spec.name}`
       const row = rowMap.get(key) ?? {
         groupName: spec.groupName,
@@ -2362,13 +3343,14 @@ function VehicleProfileForm({
 function VehicleProfileDetail({ profile, onClose }: { profile: VehicleProfile; onClose: () => void }) {
   const { language, specGroupLabel, specNameLabel, specValueLabel } = useI18n()
   const groupedSpecs = profile.specs.reduce<Record<string, VehicleProfileSpec[]>>((groups, spec) => {
+    if (hiddenSpecGroups.has(spec.groupName)) return groups
     groups[spec.groupName] = [...(groups[spec.groupName] ?? []), spec]
     return groups
   }, {})
   const specSources = [
     ...new Map(
       profile.specs
-        .filter((spec) => spec.sourceName || spec.sourceUrl)
+        .filter((spec) => !hiddenSpecGroups.has(spec.groupName) && (spec.sourceName || spec.sourceUrl))
         .map((spec) => [`${spec.sourceName}|${spec.sourceUrl}`, spec]),
     ).values(),
   ]
@@ -2512,8 +3494,8 @@ function SupplierSourceForm({
   const [preorderMaxDays, setPreorderMaxDays] = useState(source ? String(source.preorderMaxDays) : '14')
   const [stockColors, setStockColors] = useState(
     source?.stockColors.length
-      ? source.stockColors.map((entry) => ({ ...entry, productionMonth: entry.productionMonth ?? '' }))
-      : [{ color: '', quantity: 1, productionMonth: '' }],
+      ? source.stockColors.map((entry) => ({ color: entry.color, quantity: entry.quantity }))
+      : [{ color: '', quantity: 1 }],
   )
   const [notes, setNotes] = useState(source?.notes ?? '')
   const [busy, setBusy] = useState(false)
@@ -2556,7 +3538,7 @@ function SupplierSourceForm({
           <label>供应商报价（USD）<input min="1" onChange={(event) => setSupplierPrice(event.target.value)} required type="number" value={supplierPrice} /></label>
         </div>
         <div className="source-stock-section">
-          <div className="form-section-label">现车生产批次</div>
+          <div className="form-section-label">现车颜色与数量</div>
           {stockColors.map((entry, index) => (
             <div className="stock-color-entry" key={index}>
               <input
@@ -2572,22 +3554,15 @@ function SupplierSourceForm({
                 type="number"
                 value={entry.quantity}
               />
-              <input
-                aria-label={`生产年月 ${index + 1}`}
-                onChange={(event) => setStockColors((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, productionMonth: event.target.value } : item))}
-                required={Boolean(entry.color.trim())}
-                type="month"
-                value={entry.productionMonth}
-              />
               <button
-                aria-label={`删除颜色 ${index + 1}`}
+                aria-label={`删除现车颜色 ${index + 1}`}
                 disabled={stockColors.length === 1}
                 onClick={() => setStockColors((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                 type="button"
               >×</button>
             </div>
           ))}
-          <button className="add-stock-color" onClick={() => setStockColors((current) => [...current, { color: '', quantity: 1, productionMonth: '' }])} type="button"><Plus size={15} />增加生产批次</button>
+          <button className="add-stock-color" onClick={() => setStockColors((current) => [...current, { color: '', quantity: 1 }])} type="button"><Plus size={15} />增加颜色</button>
         </div>
         <label className="preorder-toggle"><input checked={canPreorder} onChange={(event) => setCanPreorder(event.target.checked)} type="checkbox" /><span><strong>该供应商接受预订</strong><small>关闭后，这条车源只统计现车，不参与预订周期汇总</small></span></label>
         {canPreorder && (
@@ -2597,7 +3572,7 @@ function SupplierSourceForm({
           </div>
         )}
         <label>内部备注<textarea onChange={(event) => setNotes(event.target.value)} placeholder="例如现车信息已确认、价格需再次确认" value={notes} /></label>
-        <div className="entry-form-note">年款属于车型配置；生产年月属于现车批次。同色车辆生产月份不同，请分成多条批次录入。保存后系统会自动汇总现车数量、颜色和预订周期。</div>
+        <div className="entry-form-note">只需要录入已知的颜色和数量；保存后系统会自动汇总现车数量、颜色和预订周期。</div>
         {error && <p className="form-error">{error}</p>}
         <div className="form-actions">
           <button className="secondary-button" onClick={onClose} type="button">取消</button>
@@ -2626,7 +3601,7 @@ function QuoteItemDialog({
           <button aria-label="关闭" onClick={onCancel} type="button">×</button>
         </div>
         <div className="price-snapshot">
-          <span>基础合作价</span><strong>{formatUsd(vehicle.visiblePrice)}</strong>
+          <span>{vehicle.priceLabel}</span><strong>{vehicle.canSeePrice ? formatUsd(vehicle.visiblePrice) : '待报价'}</strong>
           <small>
             {vehicle.stockQuantity > 0
               ? `当前现车 ${vehicle.stockQuantity} 台，询价数量可超过现车数量`
@@ -2703,7 +3678,10 @@ function QuoteRequestForm({
           {items.map((item) => (
             <div className="basket-item" key={item.vehicle.id}>
               <div><strong>{item.vehicle.model}</strong><span>{item.vehicle.trim} · {item.vehicle.color}</span></div>
-              <div><span>{item.quantity} 台 × {formatUsd(item.vehicle.visiblePrice)}</span><strong>{formatUsd(item.vehicle.visiblePrice * item.quantity)}</strong></div>
+              <div>
+                <span>{item.vehicle.canSeePrice ? `${item.quantity} 台 × ${formatUsd(item.vehicle.visiblePrice)}` : `${item.quantity} 台 · 询价后报价`}</span>
+                <strong>{item.vehicle.canSeePrice ? formatUsd(item.vehicle.visiblePrice * item.quantity) : '待报价'}</strong>
+              </div>
               <button aria-label={`移除 ${item.vehicle.model}`} onClick={() => onRemove(item.vehicle.id)} type="button">×</button>
             </div>
           ))}
@@ -2714,7 +3692,7 @@ function QuoteRequestForm({
         </div>
         <label>其他要求<textarea onChange={(event) => setNotes(event.target.value)} placeholder="颜色、配置、交期或随车配件" value={notes} /></label>
         <div className="quote-preview">
-          基础合作价小计 <strong>{formatUsd(items.reduce((sum, item) => sum + item.vehicle.visiblePrice * item.quantity, 0))}</strong>
+          基础合作价小计 <strong>{items.every((item) => item.vehicle.canSeePrice) ? formatUsd(items.reduce((sum, item) => sum + item.vehicle.visiblePrice * item.quantity, 0)) : '待报价'}</strong>
           <span>最终报价由管理员设置 FOB费用、CIF费用、融资费用和利润后发布</span>
         </div>
         {error && <p className="form-error">{error}</p>}
@@ -2945,7 +3923,7 @@ function QuoteRequestCard({
               <span>{item.vehicleTrim} · {item.vehicleColor}</span>
             </div>
             <div><span>数量</span><strong>{item.quantity} 台</strong></div>
-            <div><span>基础合作价快照</span><strong>{formatUsd(item.basePriceSnapshot)}</strong></div>
+            <div><span>{role === 'customer' ? '报价状态' : '基础合作价快照'}</span><strong>{role === 'customer' ? '待报价' : formatUsd(item.basePriceSnapshot)}</strong></div>
           </div>
         ))}
       </div>

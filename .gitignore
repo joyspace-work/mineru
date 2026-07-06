@@ -13,6 +13,14 @@ dist-ssr
 *.local
 data/*.db
 data/*.db-*
+data/source-imports/
+
+# Local supplier files and generated review artifacts
+车源汇总/
+车源汇总.zip
+_doc_review/
+rendered_translation/
+autoYJ_Correction_Summary*.docx
 
 # Editor directories and files
 .vscode/*
