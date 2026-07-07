@@ -22,6 +22,28 @@ Local URLs:
 - Web app: `http://127.0.0.1:5173/`
 - API: `http://127.0.0.1:3001/`
 
+## AI-Assisted Source Import
+
+Vehicle source import works without AI by using spreadsheet and text rules. To enable image OCR and semantic field splitting, copy `.env.example` to `.env`.
+
+OpenRouter example:
+
+```bash
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_openrouter_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
+```
+
+OpenAI example:
+
+```bash
+OPENAI_API_KEY=your_api_key_here
+OPENAI_SOURCE_IMPORT_MODEL=gpt-4.1-mini
+```
+
+Restart `npm run dev` after changing `.env`. The source import page will show whether AI parsing is enabled.
+
 ## Important Project Rules
 
 Internationalization and workflow status rules are documented here:

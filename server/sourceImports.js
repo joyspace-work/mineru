@@ -3,6 +3,25 @@ import XLSX from 'xlsx'
 import { mkdirSync, readFileSync, renameSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 
+function loadLocalEnvFile() {
+  try {
+    const envText = readFileSync(resolve(process.cwd(), '.env'), 'utf8')
+    envText.split(/\r?\n/).forEach((line) => {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#')) return
+      const separatorIndex = trimmed.indexOf('=')
+      if (separatorIndex <= 0) return
+      const key = trimmed.slice(0, separatorIndex).trim()
+      const value = trimmed.slice(separatorIndex + 1).trim().replace(/^['"]|['"]$/g, '')
+      if (!process.env[key]) process.env[key] = value
+    })
+  } catch {
+    // Local .env is optional.
+  }
+}
+
+loadLocalEnvFile()
+
 const SOURCE_IMPORT_STATUSES = {
   imported: 'imported',
   parsing: 'parsing',
@@ -114,6 +133,63 @@ const LOCATION_ALIASES = [
   ['山东', ['山东', 'Shandong']],
   ['重庆', ['重庆', 'Chongqing']],
 ]
+
+function getAiProviderConfig() {
+  try {
+    if (typeof process.loadEnvFile === 'function') {
+      process.loadEnvFile()
+    }
+  } catch (e) {}
+
+  const provider = (
+    process.env.AI_PROVIDER ||
+    (process.env.GEMINI_API_KEY
+      ? 'gemini'
+      : process.env.OPENROUTER_API_KEY
+      ? 'openrouter'
+      : 'openai')
+  ).toLowerCase()
+
+  if (provider === 'gemini') {
+    return {
+      provider,
+      enabled: Boolean(process.env.GEMINI_API_KEY),
+      apiKey: process.env.GEMINI_API_KEY || '',
+      model: process.env.GEMINI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gemini-2.5-flash',
+      baseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/$/, ''),
+    }
+  }
+  if (provider === 'openrouter') {
+    return {
+      provider,
+      enabled: Boolean(process.env.OPENROUTER_API_KEY),
+      apiKey: process.env.OPENROUTER_API_KEY || '',
+      model: process.env.OPENROUTER_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'openrouter/free',
+      baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
+    }
+  }
+  return {
+    provider: 'openai',
+    enabled: Boolean(process.env.OPENAI_API_KEY),
+    apiKey: process.env.OPENAI_API_KEY || '',
+    model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gpt-4.1-mini',
+    baseUrl: 'https://api.openai.com/v1',
+  }
+}
+
+const AI_SUPPORTED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+
+function getAiImportStatus() {
+  const config = getAiProviderConfig()
+  return {
+    enabled: config.enabled,
+    provider: config.provider,
+    model: config.model,
+    supportsImages: true,
+    supportsText: true,
+    supportedFileTypes: ['xlsx', 'xls', 'txt', 'png', 'jpg', 'jpeg', 'webp'],
+  }
+}
 
 function initSourceImportTables(db) {
   db.exec(`
@@ -458,6 +534,367 @@ function normalizeCandidate(rawInput, context) {
   return normalized
 }
 
+function extractResponseText(responseBody) {
+  if (typeof responseBody?.output_text === 'string') return responseBody.output_text
+  const chunks = []
+  for (const output of responseBody?.output ?? []) {
+    for (const content of output.content ?? []) {
+      if (typeof content.text === 'string') chunks.push(content.text)
+    }
+  }
+  return chunks.join('\n')
+}
+
+function normalizeAiContentText(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === 'string') return part
+      if (typeof part?.text === 'string') return part.text
+      if (typeof part?.content === 'string') return part.content
+      return ''
+    }).filter(Boolean).join('\n')
+  }
+  if (typeof content?.text === 'string') return content.text
+  return String(content ?? '')
+}
+
+function extractJsonObject(text) {
+  if (text && typeof text === 'object') return text
+  const value = String(text ?? '').trim()
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    if (fenced) return extractJsonObject(fenced[1])
+    const start = value.indexOf('{')
+    const end = value.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(value.slice(start, end + 1))
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
+function normalizeAiParseEnvelope(json) {
+  if (!json) return null
+  if (Array.isArray(json)) return { rawText: '', parserNotes: '', candidates: json }
+  if (Array.isArray(json.candidates)) return json
+  const candidateKeys = ['vehicles', 'items', 'rows', 'records', 'data', 'vehicleSources', 'sourceCandidates']
+  for (const key of candidateKeys) {
+    if (Array.isArray(json[key])) {
+      return {
+        rawText: json.rawText || json.originalText || '',
+        parserNotes: json.parserNotes || `AI返回字段 ${key}，已自动转换为 candidates。`,
+        candidates: json[key],
+      }
+    }
+  }
+  if (json.modelName || json.trimName || json.supplierPrice || json.stockQuantity || json.rawText) {
+    return {
+      rawText: json.rawText || '',
+      parserNotes: 'AI返回单条车源对象，已自动转换为 candidates。',
+      candidates: [json],
+    }
+  }
+  return null
+}
+
+function sanitizeAiCandidate(candidate, index, context) {
+  const rawFields = candidate.rawFields && typeof candidate.rawFields === 'object' ? candidate.rawFields : {}
+  const rawText = compactText(candidate.rawText || Object.entries(rawFields).map(([key, value]) => `${key}:${value}`).join(' | '))
+  const normalized = normalizeCandidate(
+    {
+      rawFields,
+      rawText,
+      supplierName: context.supplierName,
+      rules: context.rules,
+    },
+    { rules: context.rules },
+  )
+  const confidence = Math.max(0, Math.min(100, Number(candidate.confidence) || 0))
+  const notes = compactText([
+    candidate.notes,
+    confidence ? `AI置信度 ${confidence}` : 'AI置信度待确认',
+    Array.isArray(candidate.uncertainFields) && candidate.uncertainFields.length > 0
+      ? `待确认字段：${candidate.uncertainFields.join('、')}`
+      : '',
+  ].filter(Boolean).join('；'))
+  return {
+    ...normalized,
+    brand: compactText(candidate.brand) || normalized.brand,
+    modelName: compactText(candidate.modelName) || normalized.modelName,
+    year: compactText(candidate.year) || normalized.year,
+    trimName: compactText(candidate.trimName) || normalized.trimName,
+    exteriorColor: compactText(candidate.exteriorColor) || normalized.exteriorColor,
+    interiorColor: compactText(candidate.interiorColor) || normalized.interiorColor,
+    stockQuantity: Math.max(0, Math.floor(Number(candidate.stockQuantity) || Number(normalized.stockQuantity) || 0)),
+    supplierPrice: Number(candidate.supplierPrice) || Number(normalized.supplierPrice) || 0,
+    currency: compactText(candidate.currency) || normalized.currency,
+    tradeTerm: compactText(candidate.tradeTerm).toUpperCase() || normalized.tradeTerm,
+    location: compactText(candidate.location) || normalized.location,
+    preorderMinDays: Math.max(0, Math.floor(Number(candidate.preorderMinDays) || Number(normalized.preorderMinDays) || 0)),
+    preorderMaxDays: Math.max(0, Math.floor(Number(candidate.preorderMaxDays) || Number(normalized.preorderMaxDays) || 0)),
+    canPreorder: Boolean(candidate.canPreorder ?? normalized.canPreorder),
+    notes,
+    rawFields: { ...rawFields, _parser: 'ai' },
+    rawText,
+    rowIndex: Number(candidate.rowIndex) || index + 1,
+    sourceSheet: compactText(candidate.sourceSheet) || 'AI解析',
+    issueTags: [
+      'ai_parsed',
+      ...(confidence && confidence < 75 ? ['ai_low_confidence'] : []),
+      ...(Array.isArray(candidate.uncertainFields) && candidate.uncertainFields.length > 0 ? ['ai_uncertain_fields'] : []),
+    ],
+  }
+}
+
+function sourceImportJsonSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      rawText: { type: 'string' },
+      parserNotes: { type: 'string' },
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            brand: { type: 'string' },
+            modelName: { type: 'string' },
+            year: { type: 'string' },
+            trimName: { type: 'string' },
+            exteriorColor: { type: 'string' },
+            interiorColor: { type: 'string' },
+            stockQuantity: { type: 'number' },
+            supplierPrice: { type: 'number' },
+            currency: { type: 'string' },
+            tradeTerm: { type: 'string' },
+            location: { type: 'string' },
+            preorderMinDays: { type: 'number' },
+            preorderMaxDays: { type: 'number' },
+            canPreorder: { type: 'boolean' },
+            notes: { type: 'string' },
+            rawText: { type: 'string' },
+            rawFields: { type: 'object', additionalProperties: { type: 'string' } },
+            rowIndex: { type: 'number' },
+            sourceSheet: { type: 'string' },
+            confidence: { type: 'number' },
+            uncertainFields: { type: 'array', items: { type: 'string' } },
+          },
+          required: [
+            'brand', 'modelName', 'year', 'trimName', 'exteriorColor', 'interiorColor',
+            'stockQuantity', 'supplierPrice', 'currency', 'tradeTerm', 'location',
+            'preorderMinDays', 'preorderMaxDays', 'canPreorder', 'notes', 'rawText',
+            'rawFields', 'rowIndex', 'sourceSheet', 'confidence', 'uncertainFields',
+          ],
+        },
+      },
+    },
+    required: ['rawText', 'parserNotes', 'candidates'],
+  }
+}
+
+function sourceImportPrompt({ text, context, mode }) {
+  return [
+    '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
+    '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
+    '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
+    '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, supplierPrice, currency, tradeTerm, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
+    '如果供应商把多个信息写在同一格或同一句话里，请按业务含义拆字段。',
+    '如果价格口径不确定、车型库可能不匹配、颜色缩写不确定，请保留原文并把字段名写入 uncertainFields。',
+    '不要编造看不到的信息；库存数量不明确时填 0；价格不明确时填 0。',
+    `供应商：${context.supplierName}`,
+    `解析模式：${mode}`,
+    text ? `原始文本：\n${text.slice(0, 18000)}` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildImageDataUrl(filePath, file, extension) {
+  const mimeType = file.mimetype || (extension === '.png' ? 'image/png' : 'image/jpeg')
+  const base64 = readFileSync(filePath).toString('base64')
+  return `data:${mimeType};base64,${base64}`
+}
+
+async function callOpenRouterSourceImportAi({ filePath, file, text, context, mode, config }) {
+  const extension = extname(file.originalname).toLowerCase()
+  const content = [{ type: 'text', text: sourceImportPrompt({ text, context, mode }) }]
+  if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
+    content.push({
+      type: 'image_url',
+      image_url: { url: buildImageDataUrl(filePath, file, extension) },
+    })
+  }
+  const requestBody = {
+    model: config.model,
+    messages: [{ role: 'user', content }],
+    max_tokens: 5000,
+  }
+  if (!config.model.startsWith('nvidia/nemotron-')) {
+    requestBody.response_format = { type: 'json_object' }
+  }
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 180000)
+  let response
+  try {
+    response = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'http://127.0.0.1:5173',
+      'X-Title': 'EV Export Management Source Import',
+    },
+    body: JSON.stringify(requestBody),
+    signal: controller.signal,
+    })
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('OpenRouter AI 解析超时，请稍后重试或更换更稳定的视觉模型')
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `OpenRouter 解析失败：HTTP ${response.status}`)
+  }
+  const responseText = normalizeAiContentText(body?.choices?.[0]?.message?.content)
+  return extractJsonObject(responseText) ?? {
+    rawText: responseText,
+    parserNotes: 'AI返回了非JSON文本，系统已按OCR文本继续拆字段。',
+    candidates: parseTextContent(responseText, { ...context, sourceSheet: 'AI OCR文本' }).candidates,
+  }
+}
+
+async function callOpenAiSourceImportAi({ filePath, file, text, context, mode, config }) {
+  const extension = extname(file.originalname).toLowerCase()
+  const content = [{
+    type: 'input_text',
+    text: sourceImportPrompt({ text, context, mode }),
+  }]
+  if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
+    content.push({
+      type: 'input_image',
+      image_url: buildImageDataUrl(filePath, file, extension),
+    })
+  }
+  const response = await fetch(`${config.baseUrl}/responses`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.model,
+      input: [{
+        role: 'user',
+        content,
+      }],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'vehicle_source_parse',
+          schema: sourceImportJsonSchema(),
+        },
+      },
+    }),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `AI 解析失败：HTTP ${response.status}`)
+  }
+  return extractJsonObject(extractResponseText(body))
+}
+
+async function callGeminiSourceImportAi({ filePath, file, text, context, mode, config }) {
+  const extension = extname(file.originalname).toLowerCase()
+  const parts = [{ text: sourceImportPrompt({ text, context, mode }) }]
+  
+  if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
+    const base64Data = readFileSync(filePath).toString('base64')
+    const mimeType = file.mimetype || (extension === '.png' ? 'image/png' : 'image/jpeg')
+    parts.push({
+      inlineData: {
+        mimeType: mimeType,
+        data: base64Data,
+      },
+    })
+  }
+  
+  const requestBody = {
+    contents: [{ parts }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+    },
+  }
+  
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 180000)
+  let response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Gemini AI 解析超时，请稍后重试')
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `Gemini 解析失败：HTTP ${response.status}`)
+  }
+  const responseText = body.candidates?.[0]?.content?.parts?.[0]?.text
+  if (!responseText) {
+    throw new Error('Gemini API 未能返回文本解析内容')
+  }
+  return extractJsonObject(responseText) ?? {
+    rawText: responseText,
+    parserNotes: 'AI返回了非JSON文本，系统已按OCR文本继续拆字段。',
+    candidates: parseTextContent(responseText, { ...context, sourceSheet: 'AI OCR文本' }).candidates,
+  }
+}
+
+async function callSourceImportAi({ filePath, file, text, context, mode }) {
+  const config = getAiProviderConfig()
+  if (!config.enabled) throw new Error(`未配置 ${config.provider} API Key，无法启用 AI 解析`)
+  
+  let rawJson
+  if (config.provider === 'gemini') {
+    rawJson = await callGeminiSourceImportAi({ filePath, file, text, context, mode, config })
+  } else if (config.provider === 'openrouter') {
+    rawJson = await callOpenRouterSourceImportAi({ filePath, file, text, context, mode, config })
+  } else {
+    rawJson = await callOpenAiSourceImportAi({ filePath, file, text, context, mode, config })
+  }
+  
+  const json = normalizeAiParseEnvelope(rawJson)
+  if (!json || !Array.isArray(json.candidates)) {
+    throw new Error('AI 返回格式无效，未得到候选车源数组')
+  }
+  return {
+    rawText: compactText(json.rawText || text || ''),
+    parserNotes: compactText(json.parserNotes || ''),
+    candidates: json.candidates
+      .map((candidate, index) => sanitizeAiCandidate(candidate, index, context))
+      .filter(candidateHasBusinessSignal),
+  }
+}
+
 function candidateHasBusinessSignal(candidate) {
   return Boolean(
     candidate.modelName ||
@@ -791,7 +1228,57 @@ function buildSnapshotName({ supplierName, snapshotTime, sequence, files, candid
 
 function parseTxtFile(filePath, context) {
   const raw = readFileSync(filePath, 'utf8')
+  return parseTextContent(raw, { ...context, sourceSheet: 'TXT' })
+}
+
+function parseTextContent(raw, context) {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const markdownRows = lines
+    .filter((line) => line.includes('|'))
+    .map((line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => compactText(cell)))
+    .filter((row) => row.length >= 3 && !row.every((cell) => /^-+$/.test(cell.replace(/\s/g, ''))))
+
+  if (markdownRows.length >= 2) {
+    const bestHeader = findBestHeaderRow(markdownRows, context.rules)
+    if (bestHeader.index !== -1) {
+      const headerLabels = markdownRows[bestHeader.index].map((header, index) =>
+        compactText(header) || `Column ${index + 1}`,
+      )
+      const headerTargets = new Map()
+      bestHeader.headerMap.forEach(({ field, header }) => headerTargets.set(header, field))
+      const carry = {}
+      const candidates = []
+      markdownRows.slice(bestHeader.index + 1).forEach((row, offset) => {
+        const rawFields = {}
+        row.forEach((cell, index) => {
+          const value = compactText(cell)
+          if (!value) return
+          rawFields[headerLabels[index]] = value
+        })
+        const rawText = buildRawText(rawFields, row.join(' '))
+        if (!rawText) return
+        const normalized = normalizeCandidate(
+          { rawFields, rawText, supplierName: context.supplierName, rules: context.rules, carry },
+          { rules: context.rules, headerTargets },
+        )
+        if (!normalized.modelName && carry.modelName) normalized.modelName = carry.modelName
+        if (!normalized.trimName && carry.trimName) normalized.trimName = carry.trimName
+        if (!candidateHasBusinessSignal(normalized)) return
+        if (normalized.modelName) carry.modelName = normalized.modelName
+        if (normalized.trimName) carry.trimName = normalized.trimName
+        candidates.push({
+          ...normalized,
+          rawFields: { ...rawFields, _parser: 'ai_text_fallback' },
+          rawText,
+          rowIndex: offset + 1,
+          sourceSheet: context.sourceSheet || 'AI OCR文本',
+          issueTags: ['ai_parsed', 'ai_text_fallback'],
+        })
+      })
+      if (candidates.length > 0) return { rawText: raw, candidates }
+    }
+  }
+
   return {
     rawText: raw,
     candidates: lines.map((line, index) => {
@@ -804,7 +1291,8 @@ function parseTxtFile(filePath, context) {
         rawFields: {},
         rawText: line,
         rowIndex: index + 1,
-        sourceSheet: 'TXT',
+        sourceSheet: context.sourceSheet || 'TXT',
+        issueTags: context.sourceSheet === 'AI OCR文本' ? ['ai_parsed', 'ai_text_fallback'] : [],
       }
     }).filter(candidateHasBusinessSignal),
   }
@@ -900,6 +1388,45 @@ function parseGenericAttachment(file) {
   }
 }
 
+async function parseFileWithOptionalAi({ file, storedPath, extension, context, aiMode }) {
+  const traditional = ['.xlsx', '.xls'].includes(extension)
+    ? parseXlsxFile(storedPath, context)
+    : extension === '.txt'
+      ? parseTxtFile(storedPath, context)
+      : parseGenericAttachment(file)
+
+  const shouldUseAi = aiMode === 'ai_assist' && getAiProviderConfig().enabled
+  const canUseAiForFile = ['.xlsx', '.xls', '.txt'].includes(extension) || AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)
+  if (!shouldUseAi || !canUseAiForFile) return { ...traditional, parserNotes: '' }
+
+  try {
+    const aiText = traditional.rawText || traditional.candidates.map((candidate) => candidate.rawText).filter(Boolean).join('\n')
+    const aiParsed = await callSourceImportAi({
+      filePath: storedPath,
+      file,
+      text: aiText,
+      context,
+      mode: ['.xlsx', '.xls', '.txt'].includes(extension) ? 'text_or_table_semantic_parse' : 'image_ocr_and_semantic_parse',
+    })
+    if (aiParsed.candidates.length > 0) {
+      return {
+        rawText: aiParsed.rawText || traditional.rawText,
+        candidates: aiParsed.candidates,
+        parserNotes: `AI 结构化识别 ${aiParsed.candidates.length} 条；传统规则识别 ${traditional.candidates.length} 条。${aiParsed.parserNotes}`,
+      }
+    }
+    return {
+      ...traditional,
+      parserNotes: `AI 未识别到有效车源，已使用传统规则结果 ${traditional.candidates.length} 条。`,
+    }
+  } catch (error) {
+    return {
+      ...traditional,
+      parserNotes: `AI 解析未完成，已使用传统规则结果 ${traditional.candidates.length} 条。原因：${error.message}`,
+    }
+  }
+}
+
 function insertCandidate(db, candidate, context) {
   if (candidateLooksLikeHeader(candidate)) return null
   const now = new Date().toISOString()
@@ -908,7 +1435,7 @@ function insertCandidate(db, candidate, context) {
     : findProfileMatch(db, candidate, context.rules, context.supplierName)
   const issueTags = candidate.attachmentOnly
     ? ['attachment_pending_parser']
-    : issueTagsFor(candidate, match)
+    : [...new Set([...(candidate.issueTags ?? []), ...issueTagsFor(candidate, match)])]
   const reviewStatus = issueTags.length > 0 ? REVIEW_STATUS.needsReview : REVIEW_STATUS.pending
   const fingerprint = candidateFingerprint(candidate)
   const result = db.prepare(`
@@ -1422,12 +1949,17 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       batches,
       suppliers,
       rules,
+      aiStatus: getAiImportStatus(),
       metrics: {
         totalCandidates: Number(metrics.total ?? 0),
         needsReview: Number(metrics.needs_review ?? 0),
         duplicateRisk: Number(metrics.duplicate_risk ?? 0),
       },
     })
+  })
+
+  app.get('/api/source-imports/ai/status', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    res.json(getAiImportStatus())
   })
 
   app.get('/api/source-imports/batches/:batchId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -1454,12 +1986,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     res.json({ batch: serializeBatch(batch, db), files, candidates, duplicates, snapshots })
   })
 
-  app.post('/api/source-imports/batches', requireAuth, requireRole('admin', 'sales'), upload.array('files'), (req, res) => {
+  app.post('/api/source-imports/batches', requireAuth, requireRole('admin', 'sales'), upload.array('files'), async (req, res) => {
     const supplierName = compactText(req.body?.supplierName)
     const importedBy = compactText(req.body?.importedBy) || req.user.displayName || req.user.username
     const snapshotTime = compactText(req.body?.snapshotTime) || new Date().toISOString().slice(0, 10)
     const snapshotName = compactText(req.body?.snapshotName)
     const notes = compactText(req.body?.notes)
+    const aiMode = compactText(req.body?.aiMode) === 'ai_assist' ? 'ai_assist' : 'rules_only'
     if (!supplierName) return res.status(400).json({ error: '请填写供应商名称' })
     if (!req.files || req.files.length === 0) return res.status(400).json({ error: '请上传至少一个供应商文件' })
     ensureSupplier(db, supplierName, req.user.username)
@@ -1522,11 +2055,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       const fileId = Number(fileResult.lastInsertRowid)
       try {
         const parserContext = { supplierName, rules }
-        const parsed = ['.xlsx', '.xls'].includes(extension)
-          ? parseXlsxFile(storedPath, parserContext)
-          : extension === '.txt'
-            ? parseTxtFile(storedPath, parserContext)
-            : parseGenericAttachment(file)
+        const parsed = await parseFileWithOptionalAi({
+          file,
+          storedPath,
+          extension,
+          context: parserContext,
+          aiMode,
+        })
         parsedCandidatesForName.push(...parsed.candidates)
         const insertContext = { batchId, snapshotId, fileId, supplierName, rules }
         for (const candidate of parsed.candidates) insertCandidate(db, candidate, insertContext)
@@ -1534,7 +2069,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
           UPDATE vehicle_source_import_files
           SET parse_status = 'parsed', parser_notes = ?, raw_text = ?
           WHERE id = ?
-        `).run(`识别 ${parsed.candidates.length} 条候选记录`, parsed.rawText.slice(0, 20000), fileId)
+        `).run(parsed.parserNotes || `识别 ${parsed.candidates.length} 条候选记录`, parsed.rawText.slice(0, 20000), fileId)
       } catch (error) {
         db.prepare(`
           UPDATE vehicle_source_import_files

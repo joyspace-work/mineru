@@ -26,10 +26,13 @@ import {
   Send,
   ShieldCheck,
   Ship,
+  Sparkles,
   Trash2,
   Upload,
   Users,
   X,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react'
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -466,6 +469,15 @@ type SourceImportRule = {
   updatedAt: string
 }
 
+type SourceImportAiStatus = {
+  enabled: boolean
+  provider: string
+  model: string
+  supportsImages: boolean
+  supportsText: boolean
+  supportedFileTypes: string[]
+}
+
 type SourceSupplier = {
   id: number
   supplierName: string
@@ -501,6 +513,7 @@ type SourceImportListResponse = {
   batches: SourceImportBatch[]
   suppliers: SourceSupplier[]
   rules: SourceImportRule[]
+  aiStatus: SourceImportAiStatus
   metrics: {
     totalCandidates: number
     needsReview: number
@@ -535,6 +548,17 @@ const navItems: NavItem[] = [
   { key: 'staff', icon: ShieldCheck, roles: ['admin'] },
   { key: 'files', icon: Boxes, roles: ['admin', 'sales', 'partner', 'customer'] },
 ]
+
+const ACTIVE_NAV_STORAGE_KEY = 'ev-active-nav'
+
+function isNavKey(value: string | null): value is NavKey {
+  return Boolean(value && navItems.some((item) => item.key === value))
+}
+
+function readStoredNavKey() {
+  const stored = window.localStorage.getItem(ACTIVE_NAV_STORAGE_KEY)
+  return isNavKey(stored) ? stored : 'dashboard'
+}
 
 const translations: Record<Language, Record<string, string>> = {
   zh: {
@@ -1077,9 +1101,16 @@ function App() {
   })
   const [data, setData] = useState<AppData | null>(null)
   const [checkingSession, setCheckingSession] = useState(true)
-  const [active, setActive] = useState<NavKey>('dashboard')
+  const [active, setActive] = useState<NavKey>(readStoredNavKey)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(() => {
+    return window.localStorage.getItem('ev-app-sidebar-collapsed') === 'true'
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem('ev-app-sidebar-collapsed', String(appSidebarCollapsed))
+  }, [appSidebarCollapsed])
 
   async function loadData() {
     const appData = await api<AppData>('/api/bootstrap')
@@ -1096,6 +1127,20 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem('ev-language', language)
   }, [language])
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTIVE_NAV_STORAGE_KEY, active)
+  }, [active])
+
+  useEffect(() => {
+    if (!data) return
+    const canAccessActiveNav = navItems.some((item) => item.key === active && item.roles.includes(data.user.role))
+    if (!canAccessActiveNav) {
+      Promise.resolve().then(() => {
+        setActive('dashboard')
+      })
+    }
+  }, [active, data])
 
   const i18n = useMemo<I18nContextValue>(() => ({
     language,
@@ -1136,14 +1181,39 @@ function App() {
 
   return (
     <I18nContext.Provider value={i18n}>
-    <div className="app-shell">
-      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''}`}>
+    <div className={`app-shell ${appSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''} ${appSidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="brand">
-          <div className="brand-mark">EV</div>
-          <div>
-            <strong>{i18n.t('appName')}</strong>
-            <span>China / Ethiopia</span>
+          <div className="brand-logo-name" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div className="brand-mark">EV</div>
+            {!appSidebarCollapsed && (
+              <div>
+                <strong>{i18n.t('appName')}</strong>
+                <span>China / Ethiopia</span>
+              </div>
+            )}
           </div>
+          <button
+            className="app-sidebar-toggle"
+            onClick={() => setAppSidebarCollapsed(!appSidebarCollapsed)}
+            title={appSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+            type="button"
+            style={{
+              background: 'transparent',
+              border: 0,
+              padding: '4px',
+              color: '#9fb0c6',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginLeft: appSidebarCollapsed ? '0' : 'auto',
+              width: 'auto',
+              minHeight: 'auto',
+            }}
+          >
+            {appSidebarCollapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+          </button>
         </div>
         <nav>
           {visibleNav.map((item) => {
@@ -1156,22 +1226,31 @@ function App() {
                   setActive(item.key)
                   setMobileNavOpen(false)
                 }}
+                title={appSidebarCollapsed ? i18n.t(`nav_${item.key}`) : undefined}
                 type="button"
               >
                 <Icon size={18} />
-                {i18n.t(`nav_${item.key}`)}
+                {!appSidebarCollapsed && i18n.t(`nav_${item.key}`)}
               </button>
             )
           })}
         </nav>
         <div className="sidebar-user">
-          <div>
-            <strong>{data.user.displayName}</strong>
-            <span>{i18n.roleLabel(data.user.role)}</span>
-          </div>
-          <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button">
-            <LogOut size={17} />
-          </button>
+          {!appSidebarCollapsed ? (
+            <>
+              <div>
+                <strong>{data.user.displayName}</strong>
+                <span>{i18n.roleLabel(data.user.role)}</span>
+              </div>
+              <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button">
+                <LogOut size={17} />
+              </button>
+            </>
+          ) : (
+            <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button" style={{ margin: '0 auto' }}>
+              <LogOut size={17} />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -1687,6 +1766,10 @@ function issueLabel(issue: string) {
     duplicate_risk: '疑似同源重复',
     missing_from_latest_snapshot: '本次未出现',
     attachment_pending_parser: '附件待解析',
+    ai_parsed: 'AI解析',
+    ai_low_confidence: 'AI低置信',
+    ai_uncertain_fields: 'AI待确认',
+    ai_text_fallback: 'AI文本兜底',
   }
   return labels[issue] ?? issue
 }
@@ -1708,10 +1791,12 @@ function SourceImportWorkbench({
   const [importedBy, setImportedBy] = useState(currentUser.displayName)
   const [notes, setNotes] = useState('')
   const [files, setFiles] = useState<File[]>([])
+  const [aiMode, setAiMode] = useState<'rules_only' | 'ai_assist'>('ai_assist')
   const [showSupplierForm, setShowSupplierForm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [candidateFilter, setCandidateFilter] = useState('all')
+  const [collapseSidebar, setCollapseSidebar] = useState(false)
 
   async function loadList() {
     const response = await api<SourceImportListResponse>('/api/source-imports')
@@ -1719,13 +1804,36 @@ function SourceImportWorkbench({
     if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
   }
 
-  async function loadBatch(batchId: number) {
+  function nextCandidateIdAfter(candidates: SourceImportCandidate[], currentId: number) {
+    const activeCandidates = candidates.filter((candidate) => candidate.reviewStatus !== 'rejected')
+    if (activeCandidates.length === 0) return null
+    const currentIndex = activeCandidates.findIndex((candidate) => candidate.id === currentId)
+    if (currentIndex >= 0 && activeCandidates[currentIndex + 1]) return activeCandidates[currentIndex + 1].id
+    const originalIndex = candidates.findIndex((candidate) => candidate.id === currentId)
+    const nextAfterOriginal = candidates.slice(originalIndex + 1).find((candidate) => candidate.reviewStatus !== 'rejected')
+    return nextAfterOriginal?.id ?? activeCandidates[0].id
+  }
+
+  async function loadBatch(batchId: number, preferredCandidateId?: number | null) {
     const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${batchId}`)
     setDetail(response)
     setSelectedCandidateId((current) => {
+      if (preferredCandidateId !== undefined) return preferredCandidateId
       if (current && response.candidates.some((candidate) => candidate.id === current)) return current
       return response.candidates[0]?.id ?? null
     })
+  }
+
+  async function handleCandidateSaved(savedCandidate: SourceImportCandidate) {
+    if (!selectedBatchId) return
+    const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${selectedBatchId}`)
+    setDetail(response)
+    setSelectedCandidateId((current) => {
+      if (savedCandidate.reviewStatus === 'rejected') return nextCandidateIdAfter(response.candidates, savedCandidate.id)
+      if (current && response.candidates.some((candidate) => candidate.id === current)) return current
+      return response.candidates[0]?.id ?? null
+    })
+    await loadList()
   }
 
   useEffect(() => {
@@ -1768,6 +1876,7 @@ function SourceImportWorkbench({
       form.append('snapshotTime', snapshotTime)
       form.append('importedBy', importedBy)
       form.append('notes', notes)
+      form.append('aiMode', effectiveAiMode)
       files.forEach((file) => form.append('files', file))
       const response = await api<{ batch: SourceImportBatch }>('/api/source-imports/batches', {
         method: 'POST',
@@ -1824,6 +1933,8 @@ function SourceImportWorkbench({
   }, [detail, candidateFilter])
 
   const selectedCandidate = detail?.candidates.find((candidate) => candidate.id === selectedCandidateId) ?? null
+  const aiStatus = list?.aiStatus
+  const effectiveAiMode = aiStatus?.enabled ? aiMode : 'rules_only'
 
   return (
     <div className="source-import-workbench">
@@ -1854,6 +1965,28 @@ function SourceImportWorkbench({
             <input onChange={(event) => setImportedBy(event.target.value)} value={importedBy} />
           </label>
         </div>
+        <section className="ai-parser-box">
+          <div>
+            <Sparkles size={17} />
+            <strong>AI 解析层</strong>
+            <span>
+              {aiStatus?.enabled
+                ? `已启用 ${aiStatus.provider} / ${aiStatus.model}，可辅助识别图片、合并字段和供应商口语表达。`
+                : '未配置 AI API Key，当前只使用传统规则解析；配置 OpenRouter 或 OpenAI 后可启用图片 OCR 和语义拆字段。'}
+            </span>
+          </div>
+          <label>
+            解析方式
+            <select
+              disabled={!aiStatus?.enabled}
+              onChange={(event) => setAiMode(event.target.value as 'rules_only' | 'ai_assist')}
+              value={effectiveAiMode}
+            >
+              <option value="rules_only">规则解析</option>
+              <option value="ai_assist">AI辅助解析</option>
+            </select>
+          </label>
+        </section>
         <label className="source-file-picker">
           <Upload size={18} />
           <span>{files.length > 0 ? `${files.length} 个文件已选择` : '选择 Excel、TXT、图片、PDF、PPT 等供应商文件'}</span>
@@ -1886,7 +2019,7 @@ function SourceImportWorkbench({
         {error && <p className="form-error">{error}</p>}
       </form>
 
-      <div className="source-import-layout">
+      <div className={`source-import-layout ${collapseSidebar ? 'collapsed-sidebar' : ''}`}>
         <aside className="source-batch-list">
           <header>
             <strong>导入批次</strong>
@@ -1920,9 +2053,19 @@ function SourceImportWorkbench({
                 <Metric label="快照变化" value={`${detail.snapshots[0]?.changedCount ?? 0}`} note={`${detail.snapshots[0]?.missingCount ?? 0} 条本次未出现`} />
               </div>
               <div className="source-batch-toolbar">
-                <div>
-                  <strong>{detail.batch.supplierName}</strong>
-                  <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <button
+                    className="sidebar-toggle-button"
+                    onClick={() => setCollapseSidebar((v) => !v)}
+                    title={collapseSidebar ? '展开批次列表' : '收起批次列表'}
+                    type="button"
+                  >
+                    {collapseSidebar ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+                  </button>
+                  <div>
+                    <strong>{detail.batch.supplierName}</strong>
+                    <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
+                  </div>
                 </div>
                 <button onClick={() => void downloadExport(detail.batch.id)} type="button">
                   <Download size={16} />
@@ -1950,35 +2093,65 @@ function SourceImportWorkbench({
                 </select>
                 <span>{filteredCandidates.length} 条</span>
               </div>
-              <div className="source-review-grid">
+              <div className={`source-review-grid ${!selectedCandidate ? 'no-editor' : ''}`}>
                 <div className="source-candidate-table">
                   <div className="source-candidate-head">
-                    <span>状态</span><span>车型</span><span>数量</span><span>价格</span><span>问题</span>
+                    <span>状态</span>
+                    <span>品牌</span>
+                    <span>车型</span>
+                    <span>年款</span>
+                    <span>配置版本</span>
+                    <span>外观色</span>
+                    <span>内饰色</span>
+                    <span>数量</span>
+                    <span>价格</span>
+                    <span>币种</span>
+                    <span>贸易条款</span>
+                    <span>库存地</span>
+                    <span>车型库匹配</span>
+                    <span>问题标签</span>
                   </div>
                   {filteredCandidates.map((candidate) => (
                     <button
-                      className={selectedCandidateId === candidate.id ? 'active' : ''}
+                      className={[
+                        selectedCandidateId === candidate.id ? 'active' : '',
+                        candidate.reviewStatus === 'rejected' ? 'rejected' : '',
+                      ].filter(Boolean).join(' ')}
                       key={candidate.id}
                       onClick={() => setSelectedCandidateId(candidate.id)}
                       type="button"
                     >
                       <span><Badge label={candidate.reviewStatus} /><small>{statusLabel(candidate.changeStatus)}</small></span>
-                      <span><strong>{candidate.modelName || '未识别车型'}</strong><small>{candidate.year} {candidate.trimName}</small></span>
+                      <span>{candidate.brand || '-'}</span>
+                      <span><strong>{candidate.modelName || '未识别车型'}</strong></span>
+                      <span>{candidate.year || '-'}</span>
+                      <span>{candidate.trimName || '-'}</span>
+                      <span>{candidate.exteriorColor || '-'}</span>
+                      <span>{candidate.interiorColor || '-'}</span>
                       <strong>{candidate.stockQuantity}</strong>
-                      <strong>{candidate.supplierPrice > 0 ? `${candidate.currency || 'USD'} ${candidate.supplierPrice}` : '待确认'}</strong>
+                      <strong>{candidate.supplierPrice > 0 ? candidate.supplierPrice : '待确认'}</strong>
+                      <span>{candidate.currency || '-'}</span>
+                      <span>{candidate.tradeTerm || '-'}</span>
+                      <span>{candidate.location || '-'}</span>
+                      <span style={{ fontSize: '12px', color: '#475569' }}>
+                        {(() => {
+                          const p = profiles.find((item) => item.id === candidate.profileId)
+                          return p ? `${p.brand} ${p.model}` : '-'
+                        })()}
+                      </span>
                       <span className="candidate-issues">{candidate.issueTags.slice(0, 2).map(issueLabel).join('、') || '无'}</span>
                     </button>
                   ))}
                 </div>
-                <CandidateEditor
-                  candidate={selectedCandidate}
-                  key={selectedCandidate?.id ?? 'empty'}
-                  onSaved={async () => {
-                    if (selectedBatchId) await loadBatch(selectedBatchId)
-                    await loadList()
-                  }}
-                  profiles={profiles}
-                />
+                {selectedCandidate && (
+                  <CandidateEditor
+                    candidate={selectedCandidate}
+                    key={selectedCandidate?.id ?? 'empty'}
+                    onSaved={handleCandidateSaved}
+                    onClose={() => setSelectedCandidateId(null)}
+                    profiles={profiles}
+                  />
+                )}
               </div>
               <div className="source-lower-grid">
                 <section className="duplicate-panel">
@@ -2113,10 +2286,12 @@ function CandidateEditor({
   candidate,
   profiles,
   onSaved,
+  onClose,
 }: {
   candidate: SourceImportCandidate | null
   profiles: VehicleProfile[]
-  onSaved: () => Promise<void>
+  onSaved: (candidate: SourceImportCandidate) => Promise<void>
+  onClose?: () => void
 }) {
   const { statusLabel } = useI18n()
   const [draft, setDraft] = useState<SourceImportCandidate | null>(candidate)
@@ -2147,7 +2322,7 @@ function CandidateEditor({
         }),
       })
       setDraft(response.candidate)
-      await onSaved()
+      await onSaved(response.candidate)
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : '保存失败')
     } finally {
@@ -2162,7 +2337,19 @@ function CandidateEditor({
           <strong>候选 #{draft.id}</strong>
           <span>{draft.sourceSheet} · 第 {draft.rowIndex || '-'} 行</span>
         </div>
-        <Badge label={draft.matchStatus} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Badge label={draft.matchStatus} />
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="关闭编辑"
+              type="button"
+              style={{ background: 'transparent', border: 0, padding: '4px', cursor: 'pointer', color: '#64748b', display: 'inline-flex', alignItems: 'center' }}
+            >
+              <X size={18} />
+            </button>
+          )}
+        </div>
       </header>
       <div className="candidate-issue-list">
         {draft.issueTags.length === 0 ? <span>无问题标签</span> : draft.issueTags.map((issue) => <span key={issue}>{issueLabel(issue)}</span>)}
@@ -2197,25 +2384,31 @@ function CandidateEditor({
           <option value="rejected">{statusLabel('rejected')}</option>
         </select></label>
       </div>
-      <label className="candidate-notes">备注<textarea onChange={(event) => update('notes', event.target.value)} value={draft.notes} /></label>
-      <div className="rule-save-mode">
-        <span>本次修正如何沉淀</span>
-        <select onChange={(event) => setSaveRuleScope(event.target.value as 'none' | 'supplier' | 'global')} value={saveRuleScope}>
-          <option value="none">仅修改本次</option>
-          <option value="supplier">保存为该供应商规则</option>
-          <option value="global">保存为全局规则</option>
-        </select>
-      </div>
-      <details className="raw-fields">
-        <summary>查看原始识别内容</summary>
-        <pre>{JSON.stringify(draft.rawFields, null, 2)}</pre>
-        <p>{draft.rawText}</p>
-      </details>
-      {error && <p className="form-error">{error}</p>}
-      <div className="candidate-actions">
-        <button disabled={busy} onClick={() => void save('approved')} type="button"><Save size={15} />确认入库候选</button>
-        <button disabled={busy} onClick={() => void save('needs_review')} type="button">保存待审</button>
-        <button className="danger-outline" disabled={busy} onClick={() => void save('rejected')} type="button"><X size={15} />驳回</button>
+      <div className="candidate-editor-footer">
+        <div className="footer-left">
+          <label className="candidate-notes">备注<textarea onChange={(event) => update('notes', event.target.value)} value={draft.notes} /></label>
+          <div className="rule-save-mode">
+            <span>本次修正如何沉淀</span>
+            <select onChange={(event) => setSaveRuleScope(event.target.value as 'none' | 'supplier' | 'global')} value={saveRuleScope}>
+              <option value="none">仅修改本次</option>
+              <option value="supplier">保存为该供应商规则</option>
+              <option value="global">保存为全局规则</option>
+            </select>
+          </div>
+        </div>
+        <div className="footer-right">
+          <details className="raw-fields">
+            <summary>查看原始识别内容</summary>
+            <pre>{JSON.stringify(draft.rawFields, null, 2)}</pre>
+            <p>{draft.rawText}</p>
+          </details>
+          {error && <p className="form-error">{error}</p>}
+          <div className="candidate-actions">
+            <button disabled={busy} onClick={() => void save('approved')} type="button"><Save size={15} />确认入库候选</button>
+            <button disabled={busy} onClick={() => void save('needs_review')} type="button">保存待审</button>
+            <button className="danger-outline" disabled={busy} onClick={() => void save('rejected')} type="button"><X size={15} />驳回</button>
+          </div>
+        </div>
       </div>
     </aside>
   )

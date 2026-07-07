@@ -49,6 +49,7 @@
 }
 
 .source-upload-grid label,
+.ai-parser-box label,
 .supplier-quick-grid label,
 .candidate-form-grid label,
 .candidate-notes {
@@ -60,6 +61,7 @@
 
 .source-upload-grid input,
 .source-upload-grid select,
+.ai-parser-box select,
 .source-import-upload textarea,
 .supplier-quick-grid input,
 .supplier-quick-grid select,
@@ -99,6 +101,39 @@
 .supplier-add-button {
   min-height: 40px;
   white-space: nowrap;
+}
+
+.ai-parser-box {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  padding: 12px;
+}
+
+.ai-parser-box > div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-parser-box svg {
+  color: #0f766e;
+  flex: 0 0 auto;
+}
+
+.ai-parser-box strong {
+  white-space: nowrap;
+}
+
+.ai-parser-box span {
+  flex-basis: 100%;
+  line-height: 1.5;
 }
 
 .source-file-picker {
@@ -318,26 +353,80 @@
   justify-content: flex-start;
 }
 
+.source-import-layout.collapsed-sidebar {
+  grid-template-columns: 1fr;
+}
+
+.source-import-layout.collapsed-sidebar .source-batch-list {
+  display: none;
+}
+
+.sidebar-toggle-button {
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #64748b;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  transition: all 0.2s;
+}
+
+.sidebar-toggle-button:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
 .source-review-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .source-candidate-table {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  max-height: 680px;
+  max-height: 380px;
   overflow: auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  transition: max-height 0.25s ease-in-out;
+}
+
+.source-review-grid.no-editor .source-candidate-table {
+  max-height: 680px;
 }
 
 .source-candidate-head,
 .source-candidate-table button {
-  align-items: center;
+  align-items: stretch;
   display: grid;
-  gap: 10px;
-  grid-template-columns: 118px minmax(220px, 1fr) 58px 112px minmax(120px, 0.8fr);
-  min-width: 740px;
+  gap: 0;
+  grid-template-columns: 
+    110px /* 状态 */
+    90px  /* 品牌 */
+    160px /* 车型 */
+    70px  /* 年款 */
+    180px /* 配置版本 */
+    90px  /* 外观色 */
+    90px  /* 内饰色 */
+    60px  /* 数量 */
+    90px  /* 价格 */
+    70px  /* 币种 */
+    90px  /* 贸易条款 */
+    110px /* 库存地 */
+    160px /* 车型库匹配 */
+    minmax(120px, 1.2fr); /* 问题标签 */
+  min-width: 1490px;
+  width: 100%;
 }
 
 .source-candidate-head {
@@ -345,10 +434,11 @@
   color: #475569;
   font-size: 12px;
   font-weight: 800;
-  padding: 10px 12px;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 5;
+  padding: 0;
+  margin: 0;
 }
 
 .source-candidate-table button {
@@ -356,13 +446,109 @@
   border: 0;
   border-top: 1px solid #e2e8f0;
   cursor: pointer;
-  padding: 11px 12px;
   text-align: left;
   width: 100%;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.source-candidate-head > *,
+.source-candidate-table button > * {
+  display: flex;
+  align-items: center;
+  padding: 11px 10px;
+  box-sizing: border-box;
+  min-height: 44px;
+}
+
+.source-candidate-head > * {
+  padding: 10px 10px;
+  font-weight: 800;
+}
+
+.source-candidate-head > *:first-child,
+.source-candidate-table button > *:first-child {
+  padding-left: 12px;
+}
+
+.source-candidate-head > *:last-child,
+.source-candidate-table button > *:last-child {
+  padding-right: 12px;
+}
+
+.source-candidate-head span:nth-child(1) {
+  position: sticky;
+  left: 0;
+  top: 0;
+  background: #f1f5f9;
+  z-index: 6;
+}
+
+.source-candidate-table button > span:nth-child(1) {
+  position: sticky;
+  left: 0;
+  background: white;
+  z-index: 2;
+}
+
+.source-candidate-head span:nth-child(2) {
+  position: sticky;
+  left: 110px;
+  top: 0;
+  background: #f1f5f9;
+  z-index: 6;
+  border-right: 1px solid #cbd5e1;
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.04);
+}
+
+.source-candidate-table button > span:nth-child(2) {
+  position: sticky;
+  left: 110px;
+  background: white;
+  z-index: 2;
+  border-right: 1px solid #cbd5e1;
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.04);
+}
+
+.source-candidate-table button:hover > span:nth-child(1),
+.source-candidate-table button:hover > span:nth-child(2) {
+  background: #f8fafc;
+}
+
+.source-candidate-table button.active > span:nth-child(1),
+.source-candidate-table button.active > span:nth-child(2) {
+  background: #eff6ff;
+}
+
+.source-candidate-table button.rejected > span:nth-child(1),
+.source-candidate-table button.rejected > span:nth-child(2) {
+  background: #f8fafc;
+}
+
+.source-candidate-table button.rejected.active > span:nth-child(1),
+.source-candidate-table button.rejected.active > span:nth-child(2) {
+  background: #f1f5f9;
 }
 
 .source-candidate-table button.active {
   background: #eff6ff;
+}
+
+.source-candidate-table button.rejected {
+  background: #f8fafc;
+  opacity: 0.58;
+}
+
+.source-candidate-table button.rejected strong,
+.source-candidate-table button.rejected span,
+.source-candidate-table button.rejected small {
+  text-decoration: line-through;
+}
+
+.source-candidate-table button.rejected.active {
+  background: #f1f5f9;
+  opacity: 0.8;
 }
 
 .source-candidate-table button > span,
@@ -378,10 +564,9 @@
 }
 
 .candidate-editor {
-  align-self: start;
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 14px;
+  padding: 16px;
 }
 
 .candidate-editor.empty {
@@ -403,13 +588,57 @@
 
 .candidate-form-grid {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.candidate-notes,
-.raw-fields {
-  grid-column: 1 / -1;
+@media (max-width: 1400px) {
+  .candidate-form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .candidate-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .candidate-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.candidate-editor-footer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+  align-items: start;
+}
+
+.candidate-editor-footer .footer-left,
+.candidate-editor-footer .footer-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.candidate-editor-footer .candidate-notes {
+  width: 100%;
+}
+
+.candidate-editor-footer .candidate-notes textarea {
+  width: 100%;
+  min-height: 80px;
+  box-sizing: border-box;
+}
+
+@media (max-width: 1024px) {
+  .candidate-editor-footer {
+    grid-template-columns: 1fr;
+  }
 }
 
 .rule-save-mode {
@@ -448,14 +677,40 @@
 
 .candidate-actions {
   display: grid;
-  gap: 8px;
-  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  grid-template-columns: 1.2fr 1fr 0.8fr;
+  margin-top: 4px;
+}
+
+.candidate-actions button {
+  padding: 12px 16px;
+  font-size: 14px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.candidate-actions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(18, 59, 99, 0.2), 0 2px 4px -1px rgba(18, 59, 99, 0.1);
+  background: #194f82;
+}
+
+.candidate-actions button:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .candidate-actions .danger-outline {
   background: #fff1f2;
   border: 1px solid #fecdd3;
   color: #be123c;
+}
+
+.candidate-actions .danger-outline:hover:not(:disabled) {
+  background: #ffe4e6 !important;
+  border-color: #fda4af;
+  color: #9f1239;
+  box-shadow: 0 4px 6px -1px rgba(225, 29, 72, 0.15), 0 2px 4px -1px rgba(225, 29, 72, 0.05) !important;
+  transform: translateY(-1px);
 }
 
 .source-lower-grid {
@@ -525,6 +780,7 @@
 
 @media (max-width: 760px) {
   .source-upload-grid,
+  .ai-parser-box,
   .supplier-quick-grid,
   .source-import-summary,
   .source-file-list,
@@ -651,6 +907,44 @@
 .sidebar button.active {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.1);
+}
+
+/* Collapsed Sidebar Styles */
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.sidebar.collapsed {
+  padding: 22px 8px;
+}
+
+.sidebar.collapsed .brand {
+  padding: 4px 0 22px;
+  justify-content: center;
+  gap: 0;
+}
+
+.sidebar.collapsed .brand-logo-name {
+  display: flex;
+  justify-content: center;
+}
+
+.sidebar.collapsed nav button {
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.sidebar.collapsed nav button svg {
+  margin: 0;
+}
+
+.sidebar.collapsed .sidebar-user {
+  left: 8px;
+  right: 8px;
+  padding: 10px 0;
+  justify-content: center;
+  border: none;
+  background: transparent;
 }
 
 .workspace {
