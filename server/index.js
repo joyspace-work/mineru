@@ -289,7 +289,66 @@ db.exec(`
     notes TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
   );
+
+  CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `)
+
+// Seed exchange rate if not exists
+db.prepare("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('exchange_rate', '7.2')").run()
+
+// Database schema migrations for vehicles and supplier_sources
+const addVehicleColumns = [
+  "ALTER TABLE vehicles ADD COLUMN cost_exw REAL",
+  "ALTER TABLE vehicles ADD COLUMN cost_exw_currency TEXT DEFAULT 'USD'",
+  "ALTER TABLE vehicles ADD COLUMN cost_fob REAL",
+  "ALTER TABLE vehicles ADD COLUMN cost_fob_currency TEXT DEFAULT 'USD'",
+  "ALTER TABLE vehicles ADD COLUMN partner_price_exw REAL",
+  "ALTER TABLE vehicles ADD COLUMN partner_price_fob REAL",
+  "ALTER TABLE vehicles ADD COLUMN customer_price_exw REAL",
+  "ALTER TABLE vehicles ADD COLUMN customer_price_fob REAL"
+];
+for (const sql of addVehicleColumns) {
+  try {
+    db.exec(sql);
+  } catch (e) {
+    // Ignore
+  }
+}
+
+const addSourceColumns = [
+  "ALTER TABLE supplier_sources ADD COLUMN price_exw REAL",
+  "ALTER TABLE supplier_sources ADD COLUMN price_exw_currency TEXT DEFAULT 'USD'",
+  "ALTER TABLE supplier_sources ADD COLUMN price_fob REAL",
+  "ALTER TABLE supplier_sources ADD COLUMN price_fob_currency TEXT DEFAULT 'USD'"
+];
+for (const sql of addSourceColumns) {
+  try {
+    db.exec(sql);
+  } catch (e) {
+    // Ignore
+  }
+}
+
+// Data migration for supplier_sources and vehicles
+try {
+  db.prepare(`
+    UPDATE supplier_sources 
+    SET price_exw = supplier_price, price_exw_currency = 'USD' 
+    WHERE price_exw IS NULL AND price_fob IS NULL AND supplier_price > 0
+  `).run();
+  
+  db.prepare(`
+    UPDATE vehicles 
+    SET cost_exw = cost, cost_exw_currency = 'USD', 
+        partner_price_exw = partner_price, customer_price_exw = customer_price 
+    WHERE cost_exw IS NULL AND cost_fob IS NULL AND cost > 0
+  `).run();
+} catch (e) {
+  console.error('Data migration error in index.js:', e);
+}
 
 const usersTableSql = String(
   db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql ?? '',
@@ -1483,6 +1542,10 @@ function serializeVehicle(row, role) {
         preorderMaxDays: Number(source.preorder_max_days),
         canPreorder: Boolean(source.can_preorder),
         supplierPrice: Number(source.supplier_price),
+        priceExw: source.price_exw ? Number(source.price_exw) : null,
+        priceExwCurrency: source.price_exw_currency,
+        priceFob: source.price_fob ? Number(source.price_fob) : null,
+        priceFobCurrency: source.price_fob_currency,
         createdBy: source.created_by,
         updatedBy: source.updated_by,
         updatedAt: source.updated_at,
@@ -1502,16 +1565,36 @@ function serializeVehicle(row, role) {
     return {
       ...base,
       cost: row.cost,
+      costExw: row.cost_exw ? Number(row.cost_exw) : null,
+      costExwCurrency: row.cost_exw_currency,
+      costFob: row.cost_fob ? Number(row.cost_fob) : null,
+      costFobCurrency: row.cost_fob_currency,
       visiblePrice: row.partner_price,
+      partnerPriceExw: row.partner_price_exw ? Number(row.partner_price_exw) : null,
+      partnerPriceFob: row.partner_price_fob ? Number(row.partner_price_fob) : null,
+      customerPriceExw: row.customer_price_exw ? Number(row.customer_price_exw) : null,
+      customerPriceFob: row.customer_price_fob ? Number(row.customer_price_fob) : null,
       priceLabel: '合作报价',
       supplierSources,
       priceHistory,
     }
   }
   if (role === 'partner') {
-    return { ...base, visiblePrice: row.partner_price, priceLabel: '合作报价' }
+    return {
+      ...base,
+      visiblePrice: row.partner_price,
+      partnerPriceExw: row.partner_price_exw ? Number(row.partner_price_exw) : null,
+      partnerPriceFob: row.partner_price_fob ? Number(row.partner_price_fob) : null,
+      priceLabel: '合作报价'
+    }
   }
-  return { ...base, visiblePrice: 0, priceLabel: '询价后报价' }
+  return {
+    ...base,
+    visiblePrice: 0,
+    customerPriceExw: row.customer_price_exw ? Number(row.customer_price_exw) : null,
+    customerPriceFob: row.customer_price_fob ? Number(row.customer_price_fob) : null,
+    priceLabel: '指导价'
+  }
 }
 
 function nextVehicleId() {
@@ -1530,8 +1613,16 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
   const stockQuantity = sources.reduce((sum, source) => sum + Number(source.stock_quantity), 0)
   const colorTotals = new Map()
   for (const source of sources) {
-    for (const entry of JSON.parse(source.stock_colors || '[]')) {
-      colorTotals.set(entry.color, (colorTotals.get(entry.color) ?? 0) + Number(entry.quantity))
+    let parsedColors = []
+    try {
+      parsedColors = JSON.parse(source.stock_colors || '[]')
+    } catch (e) {
+      parsedColors = []
+    }
+    for (const entry of parsedColors) {
+      if (entry && entry.color) {
+        colorTotals.set(entry.color, (colorTotals.get(entry.color) ?? 0) + Number(entry.quantity || 0))
+      }
     }
   }
   const preorderSources = sources.filter((source) => Boolean(source.can_preorder))
@@ -1541,22 +1632,77 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
       ? VEHICLE_STATUS.preorder
       : VEHICLE_STATUS.unavailable
   const preorderMinDays = preorderSources.length > 0
-    ? Math.min(...preorderSources.map((source) => Number(source.preorder_min_days)))
+    ? Math.min(...preorderSources.map((source) => Number(source.preorder_min_days || 0)))
     : 0
   const preorderMaxDays = preorderSources.length > 0
-    ? Math.max(...preorderSources.map((source) => Number(source.preorder_max_days)))
+    ? Math.max(...preorderSources.map((source) => Number(source.preorder_max_days || 0)))
     : 0
-  const supplierPrices = sources.map((source) => Number(source.supplier_price)).filter((price) => price > 0)
-  const cost = supplierPrices.length > 0 ? Math.min(...supplierPrices) : 0
-  const cooperationPrice = calculateCooperationPrice(cost)
+
+  const exwSources = sources.map((s) => ({ price: Number(s.price_exw), currency: s.price_exw_currency || 'USD' })).filter((s) => s.price > 0)
+  const fobSources = sources.map((s) => ({ price: Number(s.price_fob), currency: s.price_fob_currency || 'USD' })).filter((s) => s.price > 0)
+
+  const rateRow = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
+  const exchangeRate = Number(rateRow?.value ?? 7.2)
+
+  function toUsd(price, currency) {
+    if (currency === 'CNY') return price / exchangeRate
+    return price
+  }
+
+  let lowestExwCost = 0
+  let lowestExwCurrency = 'USD'
+  if (exwSources.length > 0) {
+    const lowest = exwSources.reduce((min, s) => {
+      return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
+    }, exwSources[0])
+    lowestExwCost = lowest.price
+    lowestExwCurrency = lowest.currency
+  }
+
+  let lowestFobCost = 0
+  let lowestFobCurrency = 'USD'
+  if (fobSources.length > 0) {
+    const lowest = fobSources.reduce((min, s) => {
+      return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
+    }, fobSources[0])
+    lowestFobCost = lowest.price
+    lowestFobCurrency = lowest.currency
+  }
+
+  let partnerPriceExw = 0
+  if (lowestExwCost > 0) {
+    if (lowestExwCurrency === 'CNY') {
+      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
+    } else {
+      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD
+    }
+  }
+
+  let partnerPriceFob = 0
+  if (lowestFobCost > 0) {
+    if (lowestFobCurrency === 'CNY') {
+      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
+    } else {
+      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD
+    }
+  }
+
+  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFobCost > 0 ? lowestFobCost : 0)
+  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFob > 0 ? partnerPriceFob : 0)
   const now = new Date()
   const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+
+  // Update vehicle
   db.prepare(`
     UPDATE vehicles
     SET status = ?, stock_quantity = ?, stock_colors = ?,
         preorder_min_days = ?, preorder_max_days = ?, cost = ?,
         partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
         customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
+        cost_exw = ?, cost_exw_currency = ?,
+        cost_fob = ?, cost_fob_currency = ?,
+        partner_price_exw = ?, partner_price_fob = ?,
+        customer_price_exw = ?, customer_price_fob = ?,
         price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
         price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
     WHERE id = ?
@@ -1571,12 +1717,21 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
     cooperationPrice,
     cooperationPrice,
     cooperationPrice,
+    lowestExwCost > 0 ? lowestExwCost : null,
+    lowestExwCost > 0 ? lowestExwCurrency : null,
+    lowestFobCost > 0 ? lowestFobCost : null,
+    lowestFobCost > 0 ? lowestFobCurrency : null,
+    partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFob > 0 ? partnerPriceFob : null,
+    partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFob > 0 ? partnerPriceFob : null,
     cooperationPrice,
     now.toISOString(),
     cooperationPrice,
     validUntil.toISOString(),
-    vehicleId,
+    vehicleId
   )
+
   if (cooperationPrice > 0 && Number(vehicle.partner_price) !== cooperationPrice) {
     db.prepare(`
       INSERT INTO vehicle_price_history (
@@ -1588,7 +1743,7 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
       now.toISOString(),
       validUntil.toISOString(),
       changedBy,
-      priceNote || `按最低供应商报价自动生成：${cost} + ${COOPERATION_PRICE_MARKUP_USD}`,
+      priceNote || `按最低供应商报价自动生成 EXW/FOB 合作价`,
     )
   }
 }
@@ -1840,6 +1995,20 @@ app.post('/api/auth/logout', (_req, res) => {
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) })
+})
+
+app.get('/api/settings/exchange-rate', requireAuth, (req, res) => {
+  const row = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
+  res.json({ exchangeRate: Number(row?.value ?? 7.2) })
+})
+
+app.post('/api/settings/exchange-rate', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+  const rate = Number(req.body?.exchangeRate)
+  if (!rate || isNaN(rate) || rate <= 0) {
+    return res.status(400).json({ error: '请输入有效的正数汇率' })
+  }
+  db.prepare("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('exchange_rate', ?)").run(String(rate))
+  res.json({ exchangeRate: rate })
 })
 
 app.post(
@@ -2982,8 +3151,12 @@ app.get('/api/bootstrap', requireAuth, (req, res) => {
     return visibleOrder
   })
 
+  const rateRow = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
+  const exchangeRate = Number(rateRow?.value ?? 7.2)
+
   res.json({
     user: publicUser(user),
+    exchangeRate,
     permissions: {
       canSeeCost: isInternal,
       canSeeAllCustomers: user.role === 'admin',
