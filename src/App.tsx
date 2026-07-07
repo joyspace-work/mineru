@@ -16,6 +16,7 @@ import {
   Link2,
   LayoutDashboard,
   LogOut,
+  Loader2,
   Menu,
   PackageCheck,
   Pencil,
@@ -1094,6 +1095,12 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? (undefined as T) : response.json()
 }
 
+interface ToastMessage {
+  id: number
+  text: string
+  type: 'success' | 'info' | 'error' | 'warning'
+}
+
 function App() {
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem('ev-language')
@@ -1107,6 +1114,15 @@ function App() {
   const [appSidebarCollapsed, setAppSidebarCollapsed] = useState(() => {
     return window.localStorage.getItem('ev-app-sidebar-collapsed') === 'true'
   })
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
+
+  const showToast = (text: string, type: 'success' | 'info' | 'error' | 'warning' = 'success') => {
+    const id = Date.now()
+    setToasts((current) => [...current, { id, text, type }])
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id))
+    }, 3000)
+  }
 
   useEffect(() => {
     window.localStorage.setItem('ev-app-sidebar-collapsed', String(appSidebarCollapsed))
@@ -1338,6 +1354,7 @@ function App() {
             <SourceImportWorkbench
               currentUser={data.user}
               profiles={data.vehicleProfiles}
+              showToast={showToast}
             />
           </DataPanel>
         )}
@@ -1391,6 +1408,16 @@ function App() {
           </DataPanel>
         )}
       </main>
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast-item ${toast.type}`}>
+            {toast.type === 'success' && <CheckCircle2 size={16} />}
+            {toast.type === 'error' && <X size={16} />}
+            {toast.type === 'info' && <Sparkles size={16} />}
+            <span>{toast.text}</span>
+          </div>
+        ))}
+      </div>
     </div>
     </I18nContext.Provider>
   )
@@ -1777,9 +1804,11 @@ function issueLabel(issue: string) {
 function SourceImportWorkbench({
   currentUser,
   profiles,
+  showToast,
 }: {
   currentUser: User
   profiles: VehicleProfile[]
+  showToast: (text: string, type?: 'success' | 'info' | 'error' | 'warning') => void
 }) {
   const { statusLabel } = useI18n()
   const [list, setList] = useState<SourceImportListResponse | null>(null)
@@ -1804,15 +1833,7 @@ function SourceImportWorkbench({
     if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
   }
 
-  function nextCandidateIdAfter(candidates: SourceImportCandidate[], currentId: number) {
-    const activeCandidates = candidates.filter((candidate) => candidate.reviewStatus !== 'rejected')
-    if (activeCandidates.length === 0) return null
-    const currentIndex = activeCandidates.findIndex((candidate) => candidate.id === currentId)
-    if (currentIndex >= 0 && activeCandidates[currentIndex + 1]) return activeCandidates[currentIndex + 1].id
-    const originalIndex = candidates.findIndex((candidate) => candidate.id === currentId)
-    const nextAfterOriginal = candidates.slice(originalIndex + 1).find((candidate) => candidate.reviewStatus !== 'rejected')
-    return nextAfterOriginal?.id ?? activeCandidates[0].id
-  }
+
 
   async function loadBatch(batchId: number, preferredCandidateId?: number | null) {
     const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${batchId}`)
@@ -1824,16 +1845,48 @@ function SourceImportWorkbench({
     })
   }
 
+  function findNextFilteredCandidateId(currentId: number): number | null {
+    if (filteredCandidates.length <= 1) return null
+    const index = filteredCandidates.findIndex((c) => c.id === currentId)
+    if (index >= 0) {
+      if (index + 1 < filteredCandidates.length) {
+        return filteredCandidates[index + 1].id
+      } else {
+        return filteredCandidates[0].id
+      }
+    }
+    return null
+  }
+
   async function handleCandidateSaved(savedCandidate: SourceImportCandidate) {
     if (!selectedBatchId) return
+    const nextId = findNextFilteredCandidateId(savedCandidate.id)
     const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${selectedBatchId}`)
     setDetail(response)
-    setSelectedCandidateId((current) => {
-      if (savedCandidate.reviewStatus === 'rejected') return nextCandidateIdAfter(response.candidates, savedCandidate.id)
-      if (current && response.candidates.some((candidate) => candidate.id === current)) return current
-      return response.candidates[0]?.id ?? null
+    setSelectedCandidateId(() => {
+      if (nextId && response.candidates.some((candidate) => candidate.id === nextId)) {
+        return nextId
+      }
+      return null
     })
     await loadList()
+
+    let toastType: 'success' | 'error' | 'info' = 'success'
+    let actionWord = '已确认入库'
+    if (savedCandidate.reviewStatus === 'rejected') {
+      toastType = 'error'
+      actionWord = '已驳回'
+    } else if (savedCandidate.reviewStatus === 'needs_review') {
+      toastType = 'info'
+      actionWord = '已保存待审'
+    }
+
+    const nextCandidate = nextId ? response.candidates.find((c) => c.id === nextId) : null
+    const nextMsg = nextCandidate
+      ? `，已自动切换至下一条：#${nextId} [${nextCandidate.modelName || '未识别车型'}]`
+      : '，本批次所有候选车源已处理完毕！'
+
+    showToast(`候选 #${savedCandidate.id} [${savedCandidate.modelName || '未命名'}] ${actionWord}${nextMsg}`, toastType)
   }
 
   useEffect(() => {
@@ -2297,6 +2350,7 @@ function CandidateEditor({
   const [draft, setDraft] = useState<SourceImportCandidate | null>(candidate)
   const [saveRuleScope, setSaveRuleScope] = useState<'none' | 'supplier' | 'global'>('supplier')
   const [busy, setBusy] = useState(false)
+  const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   if (!draft) {
@@ -2310,6 +2364,8 @@ function CandidateEditor({
   async function save(reviewStatus?: string) {
     if (!draft) return
     const payload = draft
+    const targetStatus = reviewStatus ?? payload.reviewStatus
+    setPendingAction(targetStatus)
     setBusy(true)
     setError('')
     try {
@@ -2317,7 +2373,7 @@ function CandidateEditor({
         method: 'PATCH',
         body: JSON.stringify({
           ...payload,
-          reviewStatus: reviewStatus ?? payload.reviewStatus,
+          reviewStatus: targetStatus,
           saveRuleScope,
         }),
       })
@@ -2327,6 +2383,7 @@ function CandidateEditor({
       setError(saveError instanceof Error ? saveError.message : '保存失败')
     } finally {
       setBusy(false)
+      setPendingAction(null)
     }
   }
 
@@ -2404,9 +2461,26 @@ function CandidateEditor({
           </details>
           {error && <p className="form-error">{error}</p>}
           <div className="candidate-actions">
-            <button disabled={busy} onClick={() => void save('approved')} type="button"><Save size={15} />确认入库候选</button>
-            <button disabled={busy} onClick={() => void save('needs_review')} type="button">保存待审</button>
-            <button className="danger-outline" disabled={busy} onClick={() => void save('rejected')} type="button"><X size={15} />驳回</button>
+            <button disabled={busy} onClick={() => void save('approved')} type="button">
+              {pendingAction === 'approved' ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Save size={15} />
+              )}
+              {pendingAction === 'approved' ? '确认中...' : '确认入库候选'}
+            </button>
+            <button disabled={busy} onClick={() => void save('needs_review')} type="button">
+              {pendingAction === 'needs_review' && <Loader2 size={15} className="animate-spin" />}
+              {pendingAction === 'needs_review' ? '保存中...' : '保存待审'}
+            </button>
+            <button className="danger-outline" disabled={busy} onClick={() => void save('rejected')} type="button">
+              {pendingAction === 'rejected' ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <X size={15} />
+              )}
+              {pendingAction === 'rejected' ? '驳回中...' : '驳回'}
+            </button>
           </div>
         </div>
       </div>
