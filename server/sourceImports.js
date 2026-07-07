@@ -2188,6 +2188,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       if (input.saveRuleScope && input.saveRuleScope !== 'none') {
         saveCorrectionRules(db, existing, updated, input.saveRuleScope, req.user.username)
       }
+      syncCandidateToVehicleInventory(db, existing.id, req.user.username)
       audit(db, 'candidate', existing.id, 'update_candidate', req.user.username, serializeCandidate(existing), updated)
       db.exec('COMMIT')
     } catch (error) {
@@ -2256,4 +2257,222 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(workbook.filename)}`)
     res.send(workbook.buffer)
   })
+}
+
+function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
+  const VEHICLE_STATUS = {
+    inStock: 'in_stock',
+    preorder: 'preorder',
+    unavailable: 'temporarily_unavailable',
+  }
+  const COOPERATION_PRICE_MARKUP_USD = 100
+
+  const sources = db.prepare('SELECT * FROM supplier_sources WHERE vehicle_id = ?').all(vehicleId)
+  const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(vehicleId)
+  if (!vehicle) return
+  const stockQuantity = sources.reduce((sum, source) => sum + Number(source.stock_quantity), 0)
+  const colorTotals = new Map()
+  for (const source of sources) {
+    let parsedColors = []
+    try {
+      parsedColors = JSON.parse(source.stock_colors || '[]')
+    } catch (e) {
+      parsedColors = []
+    }
+    for (const entry of parsedColors) {
+      if (entry && entry.color) {
+        colorTotals.set(entry.color, (colorTotals.get(entry.color) ?? 0) + Number(entry.quantity || 0))
+      }
+    }
+  }
+  const preorderSources = sources.filter((source) => Boolean(source.can_preorder))
+  const status = stockQuantity > 0
+    ? VEHICLE_STATUS.inStock
+    : preorderSources.length > 0
+      ? VEHICLE_STATUS.preorder
+      : VEHICLE_STATUS.unavailable
+  const preorderMinDays = preorderSources.length > 0
+    ? Math.min(...preorderSources.map((source) => Number(source.preorder_min_days || 0)))
+    : 0
+  const preorderMaxDays = preorderSources.length > 0
+    ? Math.max(...preorderSources.map((source) => Number(source.preorder_max_days || 0)))
+    : 0
+  const supplierPrices = sources.map((source) => Number(source.supplier_price)).filter((price) => price > 0)
+  const cost = supplierPrices.length > 0 ? Math.min(...supplierPrices) : 0
+  const cooperationPrice = cost > 0 ? cost + COOPERATION_PRICE_MARKUP_USD : 0
+  const now = new Date()
+  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+
+  // Update vehicle
+  db.prepare(`
+    UPDATE vehicles
+    SET status = ?, stock_quantity = ?, stock_colors = ?,
+        preorder_min_days = ?, preorder_max_days = ?, cost = ?,
+        partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
+        customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
+        price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
+        price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END,
+        updated_at = ?
+    WHERE id = ?
+  `).run(
+    status,
+    stockQuantity,
+    JSON.stringify([...colorTotals.entries()].map(([color, quantity]) => ({ color, quantity }))),
+    preorderMinDays,
+    preorderMaxDays,
+    cost,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    cooperationPrice,
+    now.toISOString(),
+    cooperationPrice,
+    validUntil.toISOString(),
+    now.toISOString(),
+    vehicleId
+  )
+
+  // Insert price history if price changed
+  if (cooperationPrice > 0 && Number(vehicle.partner_price) !== cooperationPrice) {
+    db.prepare(`
+      INSERT INTO vehicle_price_history (
+        vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      vehicleId,
+      cooperationPrice,
+      now.toISOString(),
+      validUntil.toISOString(),
+      changedBy,
+      `按最低供应商报价自动生成：${cost} + ${COOPERATION_PRICE_MARKUP_USD}`
+    )
+  }
+}
+
+function syncCandidateToVehicleInventory(db, candidateId, username) {
+  const candidate = db.prepare('SELECT * FROM vehicle_source_candidates WHERE id = ?').get(candidateId)
+  if (!candidate) return
+
+  // Get supplier name from batch
+  const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(candidate.batch_id)
+  const supplierName = batch ? batch.supplier_name : '未知供应商'
+
+  // If candidate is NOT approved:
+  if (candidate.review_status !== 'approved') {
+    if (!candidate.profile_id) return
+    const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
+    for (const v of vehiclesMatching) {
+      db.prepare(`
+        DELETE FROM supplier_sources 
+        WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
+      `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
+      syncLocalVehicleAvailability(db, v.id, username)
+    }
+    return
+  }
+
+  // If candidate is approved:
+  if (!candidate.profile_id) return // Must be matched to a profile
+  const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(candidate.profile_id)
+  if (!profile) return
+
+  // 1. Find or create the vehicle in `vehicles` table
+  let vehicle = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').get(candidate.profile_id)
+  let vehicleId
+  const now = new Date()
+  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+
+  if (!vehicle) {
+    const rows = db.prepare('SELECT id FROM vehicles').all()
+    const maxId = rows.reduce((max, row) => {
+      const number = Number(String(row.id).replace('EV-', ''))
+      return Number.isFinite(number) ? Math.max(max, number) : max
+    }, 0)
+    vehicleId = `EV-${String(maxId + 1).padStart(3, '0')}`
+
+    db.prepare(`
+      INSERT INTO vehicles (
+        id, profile_id, model, trim, year, color, location, status, stock_quantity,
+        preorder_min_days, preorder_max_days, available_colors, stock_colors,
+        battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
+        price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, '', '', ?, ?, 1, '', 0, 0, 0, ?, ?)
+    `).run(
+      vehicleId,
+      profile.id,
+      `${profile.brand} ${profile.model}`,
+      profile.trim,
+      profile.year,
+      candidate.exterior_color ? '颜色可选' : '待确认',
+      candidate.location || '',
+      'temporarily_unavailable',
+      JSON.stringify(candidate.exterior_color ? [candidate.exterior_color] : []),
+      profile.battery_capacity || '',
+      Number(profile.range_km) || 0,
+      profile.drivetrain || '',
+      profile.energy_type || '',
+      now.toISOString(),
+      validUntil.toISOString(),
+      now.toISOString(),
+      now.toISOString()
+    )
+  } else {
+    vehicleId = vehicle.id
+  }
+
+  // 2. Find or create the supplier source in `supplier_sources`
+  const sourceNotes = `${candidate.notes || ''} [Source Candidate ID: ${candidate.id}]`.trim()
+  const existingSource = db.prepare(`
+    SELECT * FROM supplier_sources 
+    WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
+  `).get(vehicleId, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
+
+  const colorsJson = JSON.stringify(candidate.exterior_color ? [{ color: candidate.exterior_color, quantity: candidate.stock_quantity }] : [])
+
+  if (existingSource) {
+    db.prepare(`
+      UPDATE supplier_sources
+      SET stock_quantity = ?, stock_colors = ?, preorder_min_days = ?, preorder_max_days = ?,
+          can_preorder = ?, supplier_price = ?, updated_by = ?, updated_at = ?, notes = ?
+      WHERE id = ?
+    `).run(
+      candidate.stock_quantity,
+      colorsJson,
+      candidate.preorder_min_days,
+      candidate.preorder_max_days,
+      candidate.can_preorder ? 1 : 0,
+      candidate.supplier_price,
+      username,
+      now.toISOString(),
+      sourceNotes,
+      existingSource.id
+    )
+  } else {
+    db.prepare(`
+      INSERT INTO supplier_sources (
+        vehicle_id, supplier_name, stock_quantity, stock_colors,
+        preorder_min_days, preorder_max_days, can_preorder,
+        supplier_price, created_by, updated_by, created_at, updated_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      vehicleId,
+      supplierName,
+      candidate.stock_quantity,
+      colorsJson,
+      candidate.preorder_min_days,
+      candidate.preorder_max_days,
+      candidate.can_preorder ? 1 : 0,
+      candidate.supplier_price,
+      username,
+      username,
+      now.toISOString(),
+      now.toISOString(),
+      sourceNotes
+    )
+  }
+
+  // 3. Sync vehicle availability and prices
+  syncLocalVehicleAvailability(db, vehicleId, username)
 }

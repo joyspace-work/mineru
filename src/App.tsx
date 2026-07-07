@@ -1355,6 +1355,7 @@ function App() {
               currentUser={data.user}
               profiles={data.vehicleProfiles}
               showToast={showToast}
+              onChanged={loadData}
             />
           </DataPanel>
         )}
@@ -1805,10 +1806,12 @@ function SourceImportWorkbench({
   currentUser,
   profiles,
   showToast,
+  onChanged,
 }: {
   currentUser: User
   profiles: VehicleProfile[]
   showToast: (text: string, type?: 'success' | 'info' | 'error' | 'warning') => void
+  onChanged: () => Promise<void>
 }) {
   const { statusLabel } = useI18n()
   const [list, setList] = useState<SourceImportListResponse | null>(null)
@@ -1870,6 +1873,7 @@ function SourceImportWorkbench({
       return null
     })
     await loadList()
+    await onChanged()
 
     let toastType: 'success' | 'error' | 'info' = 'success'
     let actionWord = '已确认入库'
