@@ -2132,9 +2132,20 @@ function SourceImportWorkbench({
 
       <div className={`source-import-layout ${collapseSidebar ? 'collapsed-sidebar' : ''}`}>
         <aside className="source-batch-list">
-          <header>
-            <strong>导入批次</strong>
-            <span>{list?.batches.length ?? 0} 批</span>
+          <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <strong>导入批次</strong>
+              <span>{list?.batches.length ?? 0} 批</span>
+            </div>
+            <button
+              className="sidebar-toggle-button"
+              onClick={() => setCollapseSidebar(true)}
+              title="收起批次列表"
+              type="button"
+              style={{ padding: '4px', display: 'flex', alignItems: 'center' }}
+            >
+              <ChevronsLeft size={16} />
+            </button>
           </header>
           {list?.batches.map((batch) => (
             <div
@@ -2197,14 +2208,17 @@ function SourceImportWorkbench({
               </div>
               <div className="source-batch-toolbar">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <button
-                    className="sidebar-toggle-button"
-                    onClick={() => setCollapseSidebar((v) => !v)}
-                    title={collapseSidebar ? '展开批次列表' : '收起批次列表'}
-                    type="button"
-                  >
-                    {collapseSidebar ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-                  </button>
+                  {collapseSidebar && (
+                    <button
+                      className="sidebar-toggle-button"
+                      onClick={() => setCollapseSidebar(false)}
+                      title="展开批次列表"
+                      type="button"
+                      style={{ padding: '4px', display: 'flex', alignItems: 'center', marginRight: '8px' }}
+                    >
+                      <ChevronsRight size={16} />
+                    </button>
+                  )}
                   <div>
                     <strong>{detail.batch.supplierName}</strong>
                     <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
