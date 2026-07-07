@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setupSourceImportWorkbench } from './sourceImports.js'
+import { runMigrations } from './migrations.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const dataDir = resolve(__dirname, '../data')
@@ -296,133 +297,11 @@ db.exec(`
   );
 `)
 
-// Seed exchange rate if not exists
-db.prepare("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('exchange_rate', '7.2')").run()
+// Run all pending schema migrations (idempotent, records applied migrations in schema_versions)
+runMigrations(db)
 
-// Database schema migrations for vehicles and supplier_sources
-const addVehicleColumns = [
-  "ALTER TABLE vehicles ADD COLUMN cost_exw REAL",
-  "ALTER TABLE vehicles ADD COLUMN cost_exw_currency TEXT DEFAULT 'USD'",
-  "ALTER TABLE vehicles ADD COLUMN cost_fob REAL",
-  "ALTER TABLE vehicles ADD COLUMN cost_fob_currency TEXT DEFAULT 'USD'",
-  "ALTER TABLE vehicles ADD COLUMN partner_price_exw REAL",
-  "ALTER TABLE vehicles ADD COLUMN partner_price_fob REAL",
-  "ALTER TABLE vehicles ADD COLUMN customer_price_exw REAL",
-  "ALTER TABLE vehicles ADD COLUMN customer_price_fob REAL"
-];
-for (const sql of addVehicleColumns) {
-  try {
-    db.exec(sql);
-  } catch (e) {
-    // Ignore
-  }
-}
-
-const addSourceColumns = [
-  "ALTER TABLE supplier_sources ADD COLUMN price_exw REAL",
-  "ALTER TABLE supplier_sources ADD COLUMN price_exw_currency TEXT DEFAULT 'USD'",
-  "ALTER TABLE supplier_sources ADD COLUMN price_fob REAL",
-  "ALTER TABLE supplier_sources ADD COLUMN price_fob_currency TEXT DEFAULT 'USD'"
-];
-for (const sql of addSourceColumns) {
-  try {
-    db.exec(sql);
-  } catch (e) {
-    // Ignore
-  }
-}
-
-// Data migration for supplier_sources and vehicles
-try {
-  db.prepare(`
-    UPDATE supplier_sources 
-    SET price_exw = supplier_price, price_exw_currency = 'USD' 
-    WHERE price_exw IS NULL AND price_fob IS NULL AND supplier_price > 0
-  `).run();
-  
-  db.prepare(`
-    UPDATE vehicles 
-    SET cost_exw = cost, cost_exw_currency = 'USD', 
-        partner_price_exw = partner_price, customer_price_exw = customer_price 
-    WHERE cost_exw IS NULL AND cost_fob IS NULL AND cost > 0
-  `).run();
-} catch (e) {
-  console.error('Data migration error in index.js:', e);
-}
-
-const usersTableSql = String(
-  db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get()?.sql ?? '',
-)
-const userColumns = db.prepare('PRAGMA table_info(users)').all()
-if (
-  !usersTableSql.includes("'sales'") ||
-  !userColumns.some((column) => column.name === 'is_active') ||
-  !userColumns.some((column) => column.name === 'created_at')
-) {
-  db.exec('BEGIN')
-  try {
-    db.exec(`
-      ALTER TABLE users RENAME TO users_legacy;
-      CREATE TABLE users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('admin', 'sales', 'partner', 'customer')),
-        customer_id TEXT,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-      INSERT INTO users (
-        id, username, password_hash, display_name, role, customer_id, is_active, created_at
-      )
-      SELECT id, username, password_hash, display_name, role, customer_id, 1, CURRENT_TIMESTAMP
-      FROM users_legacy;
-      DROP TABLE users_legacy;
-    `)
-    db.exec('COMMIT')
-  } catch (error) {
-    db.exec('ROLLBACK')
-    throw error
-  }
-}
-
-const quoteRequestColumns = db.prepare('PRAGMA table_info(quote_requests)').all()
-if (!quoteRequestColumns.some((column) => column.name === 'assigned_to')) {
-  db.exec('ALTER TABLE quote_requests ADD COLUMN assigned_to TEXT')
-}
-
-const notificationColumns = db.prepare('PRAGMA table_info(notifications)').all()
-if (!notificationColumns.some((column) => column.name === 'recipient_username')) {
-  db.exec('ALTER TABLE notifications ADD COLUMN recipient_username TEXT')
-}
-
-const vehicleColumns = db.prepare('PRAGMA table_info(vehicles)').all()
-if (!vehicleColumns.some((column) => column.name === 'stock_quantity')) {
-  db.exec('ALTER TABLE vehicles ADD COLUMN stock_quantity INTEGER NOT NULL DEFAULT 1')
-}
-const vehicleColumnMigrations = [
-  ['profile_id', 'INTEGER'],
-  ['preorder_min_days', 'INTEGER NOT NULL DEFAULT 7'],
-  ['preorder_max_days', 'INTEGER NOT NULL DEFAULT 14'],
-  ['available_colors', "TEXT NOT NULL DEFAULT '[]'"],
-  ['stock_colors', "TEXT NOT NULL DEFAULT '[]'"],
-  ['battery_capacity', "TEXT NOT NULL DEFAULT ''"],
-  ['range_km', 'INTEGER NOT NULL DEFAULT 0'],
-  ['drivetrain', "TEXT NOT NULL DEFAULT ''"],
-  ['energy_type', "TEXT NOT NULL DEFAULT '纯电'"],
-  ['image_url', "TEXT NOT NULL DEFAULT ''"],
-  ['public_notes', "TEXT NOT NULL DEFAULT ''"],
-  ['price_updated_at', 'TEXT'],
-  ['price_valid_until', 'TEXT'],
-  ['is_listed', 'INTEGER NOT NULL DEFAULT 1'],
-]
-for (const [name, definition] of vehicleColumnMigrations) {
-  if (!vehicleColumns.some((column) => column.name === name)) {
-    db.exec(`ALTER TABLE vehicles ADD COLUMN ${name} ${definition}`)
-  }
-}
-
+// Backfill profile_id for any vehicles that were added before the profile system existed.
+// This is data-backfill logic (not schema migration) so it runs on every startup but is O(0) once done.
 const vehiclesMissingProfiles = db.prepare('SELECT * FROM vehicles WHERE profile_id IS NULL').all()
 if (vehiclesMissingProfiles.length > 0) {
   const now = new Date().toISOString()
@@ -468,6 +347,8 @@ if (vehiclesMissingProfiles.length > 0) {
     throw error
   }
 }
+
+
 
 function commonEvSuvSpecs({
   brand,

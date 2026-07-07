@@ -295,41 +295,7 @@ function initSourceImportTables(db) {
       FOREIGN KEY (file_id) REFERENCES vehicle_source_import_files(id),
       FOREIGN KEY (profile_id) REFERENCES vehicle_profiles(id)
     );
-  `)
 
-  // Migrate vehicle_source_candidates schema to add EXW/FOB price columns
-  const addCandidateColumns = [
-    'ALTER TABLE vehicle_source_candidates ADD COLUMN price_exw REAL',
-    'ALTER TABLE vehicle_source_candidates ADD COLUMN price_exw_currency TEXT',
-    'ALTER TABLE vehicle_source_candidates ADD COLUMN price_fob REAL',
-    'ALTER TABLE vehicle_source_candidates ADD COLUMN price_fob_currency TEXT',
-  ]
-  for (const sql of addCandidateColumns) {
-    try {
-      db.exec(sql)
-    } catch (e) {
-      // Column likely already exists — ignore
-    }
-  }
-
-  // Data migration: copy legacy supplier_price into the appropriate EXW/FOB column
-  try {
-    db.prepare(`
-      UPDATE vehicle_source_candidates
-      SET price_exw = supplier_price, price_exw_currency = COALESCE(NULLIF(currency, ''), 'USD')
-      WHERE price_exw IS NULL AND price_fob IS NULL AND supplier_price > 0 AND (trade_term = 'EXW' OR trade_term = '' OR trade_term IS NULL)
-    `).run()
-
-    db.prepare(`
-      UPDATE vehicle_source_candidates
-      SET price_fob = supplier_price, price_fob_currency = COALESCE(NULLIF(currency, ''), 'USD')
-      WHERE price_exw IS NULL AND price_fob IS NULL AND supplier_price > 0 AND trade_term = 'FOB'
-    `).run()
-  } catch (e) {
-    console.error('Data migration error in vehicle_source_candidates:', e)
-  }
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS vehicle_source_duplicate_links (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       batch_id INTEGER NOT NULL,
