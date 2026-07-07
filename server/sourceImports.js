@@ -1822,6 +1822,18 @@ function exportBatchWorkbook(db, batchId) {
 export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, dataDir }) {
   initSourceImportTables(db)
 
+  // One-time startup synchronization for existing approved candidates
+  try {
+    const approvedCandidates = db.prepare("SELECT id FROM vehicle_source_candidates WHERE review_status = 'approved'").all()
+    console.log(`[Startup Sync] Found ${approvedCandidates.length} approved candidates to sync...`)
+    for (const candidate of approvedCandidates) {
+      syncCandidateToVehicleInventory(db, candidate.id, 'system')
+    }
+    console.log('[Startup Sync] Successfully synced all approved candidates to vehicle inventory.')
+  } catch (e) {
+    console.error('[Startup Sync] Error during approved candidates sync:', e)
+  }
+
   const sourceImportDir = resolve(dataDir, 'source-imports')
   const tempDir = resolve(sourceImportDir, '_tmp')
   mkdirSync(tempDir, { recursive: true })
@@ -2311,8 +2323,7 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
         partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
         customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
         price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
-        price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END,
-        updated_at = ?
+        price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
     WHERE id = ?
   `).run(
     status,
@@ -2329,7 +2340,6 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
     now.toISOString(),
     cooperationPrice,
     validUntil.toISOString(),
-    now.toISOString(),
     vehicleId
   )
 
@@ -2360,28 +2370,74 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
 
   // If candidate is NOT approved:
   if (candidate.review_status !== 'approved') {
-    if (!candidate.profile_id) return
-    const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
-    for (const v of vehiclesMatching) {
-      db.prepare(`
-        DELETE FROM supplier_sources 
-        WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
-      `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
-      syncLocalVehicleAvailability(db, v.id, username)
+    if (candidate.profile_id) {
+      const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
+      for (const v of vehiclesMatching) {
+        db.prepare(`
+          DELETE FROM supplier_sources 
+          WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
+        `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
+        syncLocalVehicleAvailability(db, v.id, username)
+      }
     }
     return
   }
 
   // If candidate is approved:
-  if (!candidate.profile_id) return // Must be matched to a profile
-  const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(candidate.profile_id)
+  let profileId = candidate.profile_id
+  const now = new Date()
+  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
+
+  if (!profileId) {
+    // Try to find an existing profile matching the brand, model, year, trim
+    const brand = candidate.brand.trim()
+    const model = candidate.model_name.trim()
+    const year = candidate.year.trim()
+    const trim = candidate.trim_name.trim()
+
+    // If they are all empty, we can't create a profile!
+    if (!brand || !model) return 
+
+    let existingProfile = db.prepare(`
+      SELECT id FROM vehicle_profiles 
+      WHERE brand = ? AND model = ? AND year = ? AND trim = ?
+    `).get(brand, model, year, trim)
+
+    if (existingProfile) {
+      profileId = existingProfile.id
+    } else {
+      // Guess energy type
+      let energyType = '纯电'
+      const textToTest = (model + ' ' + trim).toLowerCase()
+      if (textToTest.includes('dm-i') || textToTest.includes('dmi') || textToTest.includes('dm-p') || textToTest.includes('混动') || textToTest.includes('phev') || textToTest.includes('hybrid')) {
+        energyType = '插电混动'
+      } else if (textToTest.includes('增程') || textToTest.includes('erev')) {
+        energyType = '增程式'
+      }
+
+      // Create new profile
+      const result = db.prepare(`
+        INSERT INTO vehicle_profiles (
+          brand, model, year, trim, energy_type, battery_capacity, range_km,
+          drivetrain, body_type, dimensions, wheelbase, motor_power, seats,
+          fast_charge_time, slow_charge_time, official_price, features,
+          source_url, notes, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, '', 0, '', '', '', '', '', 5, '', '', 0, '[]', '', '自动生成', ?, ?)
+      `).run(brand, model, year, trim, energyType, now.toISOString(), now.toISOString())
+      
+      profileId = Number(result.lastInsertRowid)
+    }
+
+    // Update candidate with the matched/created profile_id
+    db.prepare('UPDATE vehicle_source_candidates SET profile_id = ? WHERE id = ?').run(profileId, candidate.id)
+  }
+
+  const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(profileId)
   if (!profile) return
 
   // 1. Find or create the vehicle in `vehicles` table
-  let vehicle = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').get(candidate.profile_id)
+  let vehicle = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').get(profileId)
   let vehicleId
-  const now = new Date()
-  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
 
   if (!vehicle) {
     const rows = db.prepare('SELECT id FROM vehicles').all()
@@ -2396,9 +2452,8 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
         id, profile_id, model, trim, year, color, location, status, stock_quantity,
         preorder_min_days, preorder_max_days, available_colors, stock_colors,
         battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
-        price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, '', '', ?, ?, 1, '', 0, 0, 0, ?, ?)
+        price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, '', '', ?, ?, 1, '', 0, 0, 0)
     `).run(
       vehicleId,
       profile.id,
@@ -2414,9 +2469,7 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       profile.drivetrain || '',
       profile.energy_type || '',
       now.toISOString(),
-      validUntil.toISOString(),
-      now.toISOString(),
-      now.toISOString()
+      validUntil.toISOString()
     )
   } else {
     vehicleId = vehicle.id
@@ -2454,8 +2507,8 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       INSERT INTO supplier_sources (
         vehicle_id, supplier_name, stock_quantity, stock_colors,
         preorder_min_days, preorder_max_days, can_preorder,
-        supplier_price, created_by, updated_by, created_at, updated_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        supplier_price, created_by, updated_by, updated_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       vehicleId,
       supplierName,
@@ -2467,7 +2520,6 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       candidate.supplier_price,
       username,
       username,
-      now.toISOString(),
       now.toISOString(),
       sourceNotes
     )
