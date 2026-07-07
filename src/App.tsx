@@ -2137,19 +2137,51 @@ function SourceImportWorkbench({
             <span>{list?.batches.length ?? 0} 批</span>
           </header>
           {list?.batches.map((batch) => (
-            <button
-              className={selectedBatchId === batch.id ? 'active' : ''}
+            <div
+              className={`source-batch-item ${selectedBatchId === batch.id ? 'active' : ''}`}
               key={batch.id}
-              onClick={() => setSelectedBatchId(batch.id)}
-              type="button"
             >
-              <div>
-                <strong>{batch.supplierName}</strong>
-                <span>{batch.snapshotName || `快照 V${batch.id}`} · {batch.snapshotTime}</span>
+              <div
+                className="batch-item-content"
+                onClick={() => setSelectedBatchId(batch.id)}
+              >
+                <div>
+                  <strong>{batch.supplierName}</strong>
+                  <span>{batch.snapshotName || `快照 V${batch.id}`} · {batch.snapshotTime}</span>
+                </div>
+                <Badge label={batch.status} />
+                <small>{batch.summary.total} 条 · {batch.summary.needsReview} 待审 · {batch.summary.withIssues} 有问题</small>
               </div>
-              <Badge label={batch.status} />
-              <small>{batch.summary.total} 条 · {batch.summary.needsReview} 待审 · {batch.summary.withIssues} 有问题</small>
-            </button>
+
+              <div className="batch-item-actions">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setEditingBatch(batch)
+                    setEditSnapshotName(batch.snapshotName || '')
+                    setEditSnapshotTime(batch.snapshotTime)
+                    setEditNotes(batch.notes || '')
+                  }}
+                  title="编辑批次"
+                  type="button"
+                >
+                  <Pencil size={13} />
+                </button>
+                {currentUser.role === 'admin' && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleDeleteBatch(batch.id)
+                    }}
+                    title="删除批次"
+                    type="button"
+                    className="delete-btn"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
           ))}
           {list?.batches.length === 0 && <p>暂无导入批次</p>}
         </aside>
@@ -2178,37 +2210,10 @@ function SourceImportWorkbench({
                     <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    onClick={() => {
-                      if (detail) {
-                        setEditingBatch(detail.batch)
-                        setEditSnapshotName(detail.batch.snapshotName || '')
-                        setEditSnapshotTime(detail.batch.snapshotTime)
-                        setEditNotes(detail.batch.notes || '')
-                      }
-                    }}
-                    type="button"
-                    style={{ background: 'none', border: '1px solid #cbd5e1', color: '#64748b' }}
-                  >
-                    <Pencil size={15} />
-                    编辑批次
-                  </button>
-                  {currentUser.role === 'admin' && (
-                    <button
-                      onClick={() => void handleDeleteBatch(detail.batch.id)}
-                      type="button"
-                      style={{ background: '#fef2f2', border: '1px solid #fee2e2', color: '#ef4444' }}
-                    >
-                      <Trash2 size={15} />
-                      删除批次
-                    </button>
-                  )}
-                  <button onClick={() => void downloadExport(detail.batch.id)} type="button">
-                    <Download size={16} />
-                    导出飞书 Excel
-                  </button>
-                </div>
+                <button onClick={() => void downloadExport(detail.batch.id)} type="button">
+                  <Download size={16} />
+                  导出飞书 Excel
+                </button>
               </div>
               <div className="source-file-list">
                 {detail.files.map((file) => (
