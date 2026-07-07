@@ -2409,25 +2409,27 @@ app.post(
   (req, res) => {
     const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(req.params.vehicleId)
     if (!vehicle) return res.status(404).json({ error: '车辆配置不存在' })
-    const price = Number(req.body?.partnerPrice)
+    const partnerPriceExw = req.body?.partnerPriceExw !== undefined && req.body?.partnerPriceExw !== null && req.body?.partnerPriceExw !== '' ? Number(req.body.partnerPriceExw) : null
+    const partnerPriceFob = req.body?.partnerPriceFob !== undefined && req.body?.partnerPriceFob !== null && req.body?.partnerPriceFob !== '' ? Number(req.body.partnerPriceFob) : null
     const notes = String(req.body?.notes ?? '').trim()
-    if (!Number.isFinite(price) || price <= 0) {
-      return res.status(400).json({ error: '基础合作价必须大于 0' })
+    if (!partnerPriceExw && !partnerPriceFob) {
+      return res.status(400).json({ error: '请至少填写一个 EXW 报价或 FOB 报价' })
     }
+    const legacyPrice = partnerPriceExw || partnerPriceFob || 0
     const now = new Date()
     const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     db.exec('BEGIN')
     try {
       db.prepare(`
         UPDATE vehicles
-        SET partner_price = ?, price_updated_at = ?, price_valid_until = ?
+        SET partner_price = ?, partner_price_exw = ?, partner_price_fob = ?, price_updated_at = ?, price_valid_until = ?
         WHERE id = ?
-      `).run(price, now.toISOString(), validUntil.toISOString(), vehicle.id)
+      `).run(legacyPrice, partnerPriceExw, partnerPriceFob, now.toISOString(), validUntil.toISOString(), vehicle.id)
       db.prepare(`
         INSERT INTO vehicle_price_history (
           vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run(vehicle.id, price, now.toISOString(), validUntil.toISOString(), req.user.username, notes)
+      `).run(vehicle.id, legacyPrice, now.toISOString(), validUntil.toISOString(), req.user.username, notes)
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')

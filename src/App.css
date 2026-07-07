@@ -478,9 +478,8 @@
     90px  /* 外观色 */
     90px  /* 内饰色 */
     60px  /* 数量 */
-    90px  /* 价格 */
-    70px  /* 币种 */
-    90px  /* 贸易条款 */
+    120px /* EXW价格 */
+    120px /* FOB价格 */
     110px /* 库存地 */
     160px /* 车型库匹配 */
     minmax(120px, 1.2fr); /* 问题标签 */
@@ -1827,7 +1826,7 @@ h2 {
 .supplier-source-row {
   min-width: 1040px;
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) 70px minmax(260px, 1.5fr) 100px 120px 110px 76px;
+  grid-template-columns: minmax(180px, 1.1fr) 70px minmax(260px, 1.5fr) 100px 110px 110px 110px 76px;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;
