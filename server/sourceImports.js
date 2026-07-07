@@ -1,6 +1,6 @@
 import multer from 'multer'
 import XLSX from 'xlsx'
-import { mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 
 function loadLocalEnvFile() {
@@ -1996,6 +1996,91 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       createdAt: snapshot.created_at,
     }))
     res.json({ batch: serializeBatch(batch, db), files, candidates, duplicates, snapshots })
+  })
+
+  app.patch('/api/source-imports/batches/:batchId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const batchId = req.params.batchId
+    const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
+    if (!batch) return res.status(404).json({ error: '导入批次不存在' })
+
+    const snapshotName = compactText(req.body?.snapshotName) ?? batch.snapshot_name
+    const snapshotTime = compactText(req.body?.snapshotTime) ?? batch.snapshot_time
+    const notes = compactText(req.body?.notes) ?? batch.notes
+
+    const now = new Date().toISOString()
+    db.prepare(`
+      UPDATE vehicle_source_import_batches
+      SET snapshot_name = ?, snapshot_time = ?, notes = ?, updated_at = ?
+      WHERE id = ?
+    `).run(snapshotName, snapshotTime, notes, now, batchId)
+
+    db.prepare(`
+      UPDATE vehicle_source_snapshots
+      SET snapshot_time = ?
+      WHERE batch_id = ?
+    `).run(snapshotTime, batchId)
+
+    const updated = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
+    audit(db, 'batch', batchId, 'update_batch', req.user.username, serializeBatch(batch, db), serializeBatch(updated, db))
+    res.json({ batch: serializeBatch(updated, db) })
+  })
+
+  app.delete('/api/source-imports/batches/:batchId', requireAuth, requireRole('admin'), (req, res) => {
+    const batchId = req.params.batchId
+    const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
+    if (!batch) return res.status(404).json({ error: '导入批次不存在' })
+
+    const supplierName = batch.supplier_name
+    db.exec('BEGIN')
+    try {
+      // 1. Find all candidates from this batch
+      const candidates = db.prepare('SELECT id, profile_id FROM vehicle_source_candidates WHERE batch_id = ?').all(batchId)
+      
+      // 2. For each candidate, clean up supplier sources if they were approved
+      for (const candidate of candidates) {
+        if (candidate.profile_id) {
+          const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
+          for (const v of vehiclesMatching) {
+            db.prepare(`
+              DELETE FROM supplier_sources 
+              WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
+            `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
+            syncLocalVehicleAvailability(db, v.id, req.user.username)
+          }
+        }
+      }
+
+      // 3. Delete duplicates
+      db.prepare('DELETE FROM vehicle_source_duplicates WHERE candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
+      db.prepare('DELETE FROM vehicle_source_duplicates WHERE duplicate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
+      
+      // 4. Delete candidates
+      db.prepare('DELETE FROM vehicle_source_candidates WHERE batch_id = ?').run(batchId)
+      
+      // 5. Delete files
+      db.prepare('DELETE FROM vehicle_source_import_files WHERE batch_id = ?').run(batchId)
+      
+      // 6. Delete snapshots
+      db.prepare('DELETE FROM vehicle_source_snapshots WHERE batch_id = ?').run(batchId)
+      
+      // 7. Delete batch
+      db.prepare('DELETE FROM vehicle_source_import_batches WHERE id = ?').run(batchId)
+
+      // 8. Delete physical files from disk
+      const batchDir = resolve(sourceImportDir, String(batchId))
+      try {
+        rmSync(batchDir, { recursive: true, force: true })
+      } catch (e) {
+        console.error(`Failed to delete batch directory ${batchDir}:`, e)
+      }
+
+      audit(db, 'batch', batchId, 'delete_batch', req.user.username, serializeBatch(batch, db), null)
+      db.exec('COMMIT')
+      res.json({ success: true })
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   })
 
   app.post('/api/source-imports/batches', requireAuth, requireRole('admin', 'sales'), upload.array('files'), async (req, res) => {

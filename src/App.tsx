@@ -1829,6 +1829,60 @@ function SourceImportWorkbench({
   const [error, setError] = useState('')
   const [candidateFilter, setCandidateFilter] = useState('all')
   const [collapseSidebar, setCollapseSidebar] = useState(false)
+  const [editingBatch, setEditingBatch] = useState<SourceImportBatch | null>(null)
+  const [editSnapshotName, setEditSnapshotName] = useState('')
+  const [editSnapshotTime, setEditSnapshotTime] = useState('')
+  const [editNotes, setEditNotes] = useState('')
+
+  async function handleEditBatch(event: FormEvent) {
+    event.preventDefault()
+    if (!editingBatch) return
+    try {
+      setBusy(true)
+      await api<{ batch: SourceImportBatch }>(`/api/source-imports/batches/${editingBatch.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          snapshotName: editSnapshotName,
+          snapshotTime: editSnapshotTime,
+          notes: editNotes,
+        }),
+      })
+      showToast('批次编辑成功', 'success')
+      setEditingBatch(null)
+      await loadList()
+      await loadBatch(editingBatch.id)
+    } catch (e: any) {
+      showToast(e.message || '编辑失败', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDeleteBatch(batchId: number) {
+    if (!confirm('确定要删除该导入批次及该批次下的所有候选车源数据吗？\n如果该批次已有确认入库的车源，删除批次将自动撤销该供应商的对应报价和库存同步。此操作不可逆！')) {
+      return
+    }
+    try {
+      setBusy(true)
+      await api(`/api/source-imports/batches/${batchId}`, {
+        method: 'DELETE',
+      })
+      showToast('批次删除成功', 'success')
+      setSelectedBatchId((current) => {
+        if (current === batchId) {
+          return null
+        }
+        return current
+      })
+      setDetail(null)
+      await loadList()
+      await onChanged()
+    } catch (e: any) {
+      showToast(e.message || '删除失败', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function loadList() {
     const response = await api<SourceImportListResponse>('/api/source-imports')
@@ -2124,10 +2178,37 @@ function SourceImportWorkbench({
                     <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
                   </div>
                 </div>
-                <button onClick={() => void downloadExport(detail.batch.id)} type="button">
-                  <Download size={16} />
-                  导出飞书 Excel
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => {
+                      if (detail) {
+                        setEditingBatch(detail.batch)
+                        setEditSnapshotName(detail.batch.snapshotName || '')
+                        setEditSnapshotTime(detail.batch.snapshotTime)
+                        setEditNotes(detail.batch.notes || '')
+                      }
+                    }}
+                    type="button"
+                    style={{ background: 'none', border: '1px solid #cbd5e1', color: '#64748b' }}
+                  >
+                    <Pencil size={15} />
+                    编辑批次
+                  </button>
+                  {currentUser.role === 'admin' && (
+                    <button
+                      onClick={() => void handleDeleteBatch(detail.batch.id)}
+                      type="button"
+                      style={{ background: '#fef2f2', border: '1px solid #fee2e2', color: '#ef4444' }}
+                    >
+                      <Trash2 size={15} />
+                      删除批次
+                    </button>
+                  )}
+                  <button onClick={() => void downloadExport(detail.batch.id)} type="button">
+                    <Download size={16} />
+                    导出飞书 Excel
+                  </button>
+                </div>
               </div>
               <div className="source-file-list">
                 {detail.files.map((file) => (
@@ -2258,6 +2339,56 @@ function SourceImportWorkbench({
           )}
         </section>
       </div>
+      {editingBatch && (
+        <div className="modal-backdrop">
+          <form className="quote-form staff-form" onSubmit={handleEditBatch}>
+            <div className="modal-title">
+              <div>
+                <strong>编辑导入批次资料</strong>
+                <span>修改此批次的快照名称、快照日期及备注信息。</span>
+              </div>
+              <button onClick={() => setEditingBatch(null)} type="button">×</button>
+            </div>
+            <div className="form-grid">
+              <label>
+                快照名称
+                <input
+                  onChange={(event) => setEditSnapshotName(event.target.value)}
+                  value={editSnapshotName}
+                  placeholder="例如: 2026年6月第一批次"
+                  required
+                />
+              </label>
+              <label>
+                快照时间
+                <input
+                  type="date"
+                  onChange={(event) => setEditSnapshotTime(event.target.value)}
+                  value={editSnapshotTime}
+                  required
+                />
+              </label>
+            </div>
+            <label>
+              批次备注
+              <textarea
+                onChange={(event) => setEditNotes(event.target.value)}
+                value={editNotes}
+                rows={3}
+                placeholder="填写关于此批次的补充备注信息..."
+                style={{ width: '100%', boxSizing: 'border-box', marginTop: '4px' }}
+              />
+            </label>
+            <div className="supplier-quick-actions" style={{ marginTop: '20px' }}>
+              <button className="secondary-button" onClick={() => setEditingBatch(null)} type="button">取消</button>
+              <button type="submit" disabled={busy}>
+                <Save size={15} />
+                {busy ? '保存中...' : '保存修改'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
