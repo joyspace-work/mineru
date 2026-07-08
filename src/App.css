@@ -384,6 +384,40 @@
   gap: 4px;
 }
 
+.source-toolbar-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.exchange-rate-inline {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  display: inline-flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 6px 10px;
+}
+
+.exchange-rate-inline span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.exchange-rate-inline input {
+  background: transparent;
+  border: 0;
+  color: #102033;
+  font-weight: 800;
+  outline: 0;
+  text-align: center;
+  width: 76px;
+}
+
 .source-file-list {
   display: grid;
   gap: 8px;
@@ -479,11 +513,13 @@
     90px  /* 内饰色 */
     60px  /* 数量 */
     120px /* EXW价格 */
+    120px /* FCA价格 */
     120px /* FOB价格 */
+    120px /* 指导价 */
     110px /* 库存地 */
     160px /* 车型库匹配 */
     minmax(120px, 1.2fr); /* 问题标签 */
-  min-width: 1490px;
+  min-width: 1730px;
   width: 100%;
 }
 
@@ -1836,9 +1872,9 @@ h2 {
 
 .supplier-source-head,
 .supplier-source-row {
-  min-width: 1040px;
+  min-width: 1160px;
   display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) 70px minmax(260px, 1.5fr) 100px 110px 110px 110px 76px;
+  grid-template-columns: minmax(180px, 1.1fr) 70px minmax(240px, 1.4fr) 100px 100px 100px 100px 110px 76px;
   gap: 10px;
   align-items: center;
   padding: 10px 12px;

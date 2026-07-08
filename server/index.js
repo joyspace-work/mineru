@@ -1425,6 +1425,8 @@ function serializeVehicle(row, role) {
         supplierPrice: Number(source.supplier_price),
         priceExw: source.price_exw ? Number(source.price_exw) : null,
         priceExwCurrency: source.price_exw_currency,
+        priceFca: source.price_fca ? Number(source.price_fca) : null,
+        priceFcaCurrency: source.price_fca_currency,
         priceFob: source.price_fob ? Number(source.price_fob) : null,
         priceFobCurrency: source.price_fob_currency,
         createdBy: source.created_by,
@@ -1448,12 +1450,16 @@ function serializeVehicle(row, role) {
       cost: row.cost,
       costExw: row.cost_exw ? Number(row.cost_exw) : null,
       costExwCurrency: row.cost_exw_currency,
+      costFca: row.cost_fca ? Number(row.cost_fca) : null,
+      costFcaCurrency: row.cost_fca_currency,
       costFob: row.cost_fob ? Number(row.cost_fob) : null,
       costFobCurrency: row.cost_fob_currency,
       visiblePrice: row.partner_price,
       partnerPriceExw: row.partner_price_exw ? Number(row.partner_price_exw) : null,
+      partnerPriceFca: row.partner_price_fca ? Number(row.partner_price_fca) : null,
       partnerPriceFob: row.partner_price_fob ? Number(row.partner_price_fob) : null,
       customerPriceExw: row.customer_price_exw ? Number(row.customer_price_exw) : null,
+      customerPriceFca: row.customer_price_fca ? Number(row.customer_price_fca) : null,
       customerPriceFob: row.customer_price_fob ? Number(row.customer_price_fob) : null,
       priceLabel: '合作报价',
       supplierSources,
@@ -1465,6 +1471,7 @@ function serializeVehicle(row, role) {
       ...base,
       visiblePrice: row.partner_price,
       partnerPriceExw: row.partner_price_exw ? Number(row.partner_price_exw) : null,
+      partnerPriceFca: row.partner_price_fca ? Number(row.partner_price_fca) : null,
       partnerPriceFob: row.partner_price_fob ? Number(row.partner_price_fob) : null,
       priceLabel: '合作报价'
     }
@@ -1473,6 +1480,7 @@ function serializeVehicle(row, role) {
     ...base,
     visiblePrice: 0,
     customerPriceExw: row.customer_price_exw ? Number(row.customer_price_exw) : null,
+    customerPriceFca: row.customer_price_fca ? Number(row.customer_price_fca) : null,
     customerPriceFob: row.customer_price_fob ? Number(row.customer_price_fob) : null,
     priceLabel: '指导价'
   }
@@ -1520,6 +1528,7 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
     : 0
 
   const exwSources = sources.map((s) => ({ price: Number(s.price_exw), currency: s.price_exw_currency || 'USD' })).filter((s) => s.price > 0)
+  const fcaSources = sources.map((s) => ({ price: Number(s.price_fca), currency: s.price_fca_currency || 'USD' })).filter((s) => s.price > 0)
   const fobSources = sources.map((s) => ({ price: Number(s.price_fob), currency: s.price_fob_currency || 'USD' })).filter((s) => s.price > 0)
 
   const rateRow = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
@@ -1530,46 +1539,35 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
     return price
   }
 
-  let lowestExwCost = 0
-  let lowestExwCurrency = 'USD'
-  if (exwSources.length > 0) {
-    const lowest = exwSources.reduce((min, s) => {
+  function lowestSource(sourceRows) {
+    if (sourceRows.length === 0) return { price: 0, currency: 'USD' }
+    return sourceRows.reduce((min, s) => {
       return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
-    }, exwSources[0])
-    lowestExwCost = lowest.price
-    lowestExwCurrency = lowest.currency
+    }, sourceRows[0])
   }
 
-  let lowestFobCost = 0
-  let lowestFobCurrency = 'USD'
-  if (fobSources.length > 0) {
-    const lowest = fobSources.reduce((min, s) => {
-      return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
-    }, fobSources[0])
-    lowestFobCost = lowest.price
-    lowestFobCurrency = lowest.currency
+  function cooperationPriceFor(price, currency) {
+    if (price <= 0) return 0
+    return currency === 'CNY'
+      ? price + COOPERATION_PRICE_MARKUP_USD * exchangeRate
+      : price + COOPERATION_PRICE_MARKUP_USD
   }
 
-  let partnerPriceExw = 0
-  if (lowestExwCost > 0) {
-    if (lowestExwCurrency === 'CNY') {
-      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
-    } else {
-      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD
-    }
-  }
+  const lowestExw = lowestSource(exwSources)
+  const lowestFca = lowestSource(fcaSources)
+  const lowestFob = lowestSource(fobSources)
+  const lowestExwCost = lowestExw.price
+  const lowestExwCurrency = lowestExw.currency
+  const lowestFcaCost = lowestFca.price
+  const lowestFcaCurrency = lowestFca.currency
+  const lowestFobCost = lowestFob.price
+  const lowestFobCurrency = lowestFob.currency
+  const partnerPriceExw = cooperationPriceFor(lowestExwCost, lowestExwCurrency)
+  const partnerPriceFca = cooperationPriceFor(lowestFcaCost, lowestFcaCurrency)
+  const partnerPriceFob = cooperationPriceFor(lowestFobCost, lowestFobCurrency)
 
-  let partnerPriceFob = 0
-  if (lowestFobCost > 0) {
-    if (lowestFobCurrency === 'CNY') {
-      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
-    } else {
-      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD
-    }
-  }
-
-  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFobCost > 0 ? lowestFobCost : 0)
-  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFob > 0 ? partnerPriceFob : 0)
+  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFcaCost > 0 ? lowestFcaCost : (lowestFobCost > 0 ? lowestFobCost : 0))
+  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFca > 0 ? partnerPriceFca : (partnerPriceFob > 0 ? partnerPriceFob : 0))
   const now = new Date()
   const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
 
@@ -1581,9 +1579,10 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
         partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
         customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
         cost_exw = ?, cost_exw_currency = ?,
+        cost_fca = ?, cost_fca_currency = ?,
         cost_fob = ?, cost_fob_currency = ?,
-        partner_price_exw = ?, partner_price_fob = ?,
-        customer_price_exw = ?, customer_price_fob = ?,
+        partner_price_exw = ?, partner_price_fca = ?, partner_price_fob = ?,
+        customer_price_exw = ?, customer_price_fca = ?, customer_price_fob = ?,
         price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
         price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
     WHERE id = ?
@@ -1600,11 +1599,15 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
     cooperationPrice,
     lowestExwCost > 0 ? lowestExwCost : null,
     lowestExwCost > 0 ? lowestExwCurrency : null,
+    lowestFcaCost > 0 ? lowestFcaCost : null,
+    lowestFcaCost > 0 ? lowestFcaCurrency : null,
     lowestFobCost > 0 ? lowestFobCost : null,
     lowestFobCost > 0 ? lowestFobCurrency : null,
     partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFca > 0 ? partnerPriceFca : null,
     partnerPriceFob > 0 ? partnerPriceFob : null,
     partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFca > 0 ? partnerPriceFca : null,
     partnerPriceFob > 0 ? partnerPriceFob : null,
     cooperationPrice,
     now.toISOString(),
@@ -1624,7 +1627,7 @@ function syncVehicleAvailability(vehicleId, changedBy = 'system', priceNote = ''
       now.toISOString(),
       validUntil.toISOString(),
       changedBy,
-      priceNote || `按最低供应商报价自动生成 EXW/FOB 合作价`,
+      priceNote || `按最低供应商报价自动生成 EXW/FCA/FOB 合作价`,
     )
   }
 }
@@ -1637,10 +1640,19 @@ function normalizeSourceInput(body) {
     preorderMinDays = 0,
     preorderMaxDays = 0,
     supplierPrice,
+    priceExw,
+    priceExwCurrency = 'USD',
+    priceFca,
+    priceFcaCurrency = 'USD',
+    priceFob,
+    priceFobCurrency = 'USD',
     notes = '',
   } = body ?? {}
   const normalizedSupplierName = String(supplierName ?? '').trim()
-  const price = Number(supplierPrice)
+  const exwPrice = priceExw === null || priceExw === '' || priceExw === undefined ? null : Number(priceExw)
+  const fcaPrice = priceFca === null || priceFca === '' || priceFca === undefined ? null : Number(priceFca)
+  const fobPrice = priceFob === null || priceFob === '' || priceFob === undefined ? null : Number(priceFob)
+  const legacyPrice = Number(supplierPrice) || exwPrice || fcaPrice || fobPrice || 0
   const colors = Array.isArray(stockColors)
     ? stockColors
       .map((entry) => ({
@@ -1653,13 +1665,21 @@ function normalizeSourceInput(body) {
   const minDays = Math.max(0, Math.floor(Number(preorderMinDays) || 0))
   const maxDays = Math.max(0, Math.floor(Number(preorderMaxDays) || 0))
   if (!normalizedSupplierName) throw new Error('请填写供应商名称')
-  if (!Number.isFinite(price) || price <= 0) throw new Error('供应商价格必须大于 0')
+  if (![exwPrice, fcaPrice, fobPrice, legacyPrice].some((price) => Number.isFinite(price) && Number(price) > 0)) {
+    throw new Error('请至少填写一个 EXW、FCA 或 FOB 报价')
+  }
   if (canPreorder && (minDays < 1 || maxDays < minDays)) {
     throw new Error('请填写正确的预订周期')
   }
   return {
     supplierName: normalizedSupplierName,
-    supplierPrice: price,
+    supplierPrice: legacyPrice,
+    priceExw: Number.isFinite(exwPrice) && exwPrice > 0 ? exwPrice : null,
+    priceExwCurrency: String(priceExwCurrency || 'USD').trim(),
+    priceFca: Number.isFinite(fcaPrice) && fcaPrice > 0 ? fcaPrice : null,
+    priceFcaCurrency: String(priceFcaCurrency || 'USD').trim(),
+    priceFob: Number.isFinite(fobPrice) && fobPrice > 0 ? fobPrice : null,
+    priceFobCurrency: String(priceFobCurrency || 'USD').trim(),
     canPreorder: Boolean(canPreorder),
     preorderMinDays: canPreorder ? minDays : 0,
     preorderMaxDays: canPreorder ? maxDays : 0,
@@ -2291,21 +2311,22 @@ app.post(
     const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(req.params.vehicleId)
     if (!vehicle) return res.status(404).json({ error: '车辆配置不存在' })
     const partnerPriceExw = req.body?.partnerPriceExw !== undefined && req.body?.partnerPriceExw !== null && req.body?.partnerPriceExw !== '' ? Number(req.body.partnerPriceExw) : null
+    const partnerPriceFca = req.body?.partnerPriceFca !== undefined && req.body?.partnerPriceFca !== null && req.body?.partnerPriceFca !== '' ? Number(req.body.partnerPriceFca) : null
     const partnerPriceFob = req.body?.partnerPriceFob !== undefined && req.body?.partnerPriceFob !== null && req.body?.partnerPriceFob !== '' ? Number(req.body.partnerPriceFob) : null
     const notes = String(req.body?.notes ?? '').trim()
-    if (!partnerPriceExw && !partnerPriceFob) {
-      return res.status(400).json({ error: '请至少填写一个 EXW 报价或 FOB 报价' })
+    if (!partnerPriceExw && !partnerPriceFca && !partnerPriceFob) {
+      return res.status(400).json({ error: '请至少填写一个 EXW、FCA 或 FOB 报价' })
     }
-    const legacyPrice = partnerPriceExw || partnerPriceFob || 0
+    const legacyPrice = partnerPriceExw || partnerPriceFca || partnerPriceFob || 0
     const now = new Date()
     const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
     db.exec('BEGIN')
     try {
       db.prepare(`
         UPDATE vehicles
-        SET partner_price = ?, partner_price_exw = ?, partner_price_fob = ?, price_updated_at = ?, price_valid_until = ?
+        SET partner_price = ?, partner_price_exw = ?, partner_price_fca = ?, partner_price_fob = ?, price_updated_at = ?, price_valid_until = ?
         WHERE id = ?
-      `).run(legacyPrice, partnerPriceExw, partnerPriceFob, now.toISOString(), validUntil.toISOString(), vehicle.id)
+      `).run(legacyPrice, partnerPriceExw, partnerPriceFca, partnerPriceFob, now.toISOString(), validUntil.toISOString(), vehicle.id)
       db.prepare(`
         INSERT INTO vehicle_price_history (
           vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
@@ -2352,8 +2373,9 @@ app.post(
       INSERT INTO supplier_sources (
         vehicle_id, supplier_name, stock_quantity, stock_colors,
         preorder_min_days, preorder_max_days, can_preorder,
-        supplier_price, created_by, updated_by, updated_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        supplier_price, price_exw, price_exw_currency, price_fca, price_fca_currency,
+        price_fob, price_fob_currency, created_by, updated_by, updated_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       vehicle.id,
       source.supplierName,
@@ -2363,6 +2385,12 @@ app.post(
       source.preorderMaxDays,
       source.canPreorder ? 1 : 0,
       source.supplierPrice,
+      source.priceExw,
+      source.priceExwCurrency,
+      source.priceFca,
+      source.priceFcaCurrency,
+      source.priceFob,
+      source.priceFobCurrency,
       req.user.username,
       req.user.username,
       new Date().toISOString(),
@@ -2393,7 +2421,9 @@ app.patch(
       UPDATE supplier_sources
       SET supplier_name = ?, stock_quantity = ?, stock_colors = ?,
           preorder_min_days = ?, preorder_max_days = ?, can_preorder = ?,
-          supplier_price = ?, updated_by = ?, updated_at = ?, notes = ?
+          supplier_price = ?, price_exw = ?, price_exw_currency = ?,
+          price_fca = ?, price_fca_currency = ?, price_fob = ?, price_fob_currency = ?,
+          updated_by = ?, updated_at = ?, notes = ?
       WHERE id = ? AND vehicle_id = ?
     `).run(
       source.supplierName,
@@ -2403,6 +2433,12 @@ app.patch(
       source.preorderMaxDays,
       source.canPreorder ? 1 : 0,
       source.supplierPrice,
+      source.priceExw,
+      source.priceExwCurrency,
+      source.priceFca,
+      source.priceFcaCurrency,
+      source.priceFob,
+      source.priceFobCurrency,
       req.user.username,
       new Date().toISOString(),
       source.notes,

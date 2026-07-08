@@ -10,9 +10,9 @@
  * Completed migrations are recorded in the `schema_versions` table.
  *
  * NAMING CONVENTIONS (for new developers):
- *   - vehicles table  : uses `cost_exw` / `cost_fob` — these are supplier acquisition costs
- *   - supplier_sources: uses `price_exw` / `price_fob` — these are raw supplier quoted prices
- *   - candidates table: uses `price_exw` / `price_fob` — parsed from import files, pre-approval
+ *   - vehicles table  : uses `cost_exw` / `cost_fca` / `cost_fob` — these are supplier acquisition costs
+ *   - supplier_sources: uses `price_exw` / `price_fca` / `price_fob` — these are raw supplier quoted prices
+ *   - candidates table: uses `price_exw` / `price_fca` / `price_fob` — parsed from import files, pre-approval
  *
  *   The difference between `cost_*` and `price_*` is intentional:
  *     cost_*  = the price we actually pay (used in margin calculations)
@@ -209,6 +209,69 @@ const MIGRATIONS = [
       db.prepare(
         "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('exchange_rate', '7.2')",
       ).run()
+    },
+  },
+  {
+    id: 12,
+    name: 'add FCA price columns and candidate official price reference',
+    up(db) {
+      const vehicleCols = [
+        ['cost_fca', 'REAL'],
+        ['cost_fca_currency', "TEXT DEFAULT 'USD'"],
+        ['partner_price_fca', 'REAL'],
+        ['customer_price_fca', 'REAL'],
+      ]
+      const vehicleExisting = db.prepare('PRAGMA table_info(vehicles)').all().map((c) => c.name)
+      for (const [name, def] of vehicleCols) {
+        if (!vehicleExisting.includes(name)) {
+          db.exec(`ALTER TABLE vehicles ADD COLUMN ${name} ${def}`)
+        }
+      }
+
+      const sourceCols = [
+        ['price_fca', 'REAL'],
+        ['price_fca_currency', "TEXT DEFAULT 'USD'"],
+      ]
+      const sourceExisting = db.prepare('PRAGMA table_info(supplier_sources)').all().map((c) => c.name)
+      for (const [name, def] of sourceCols) {
+        if (!sourceExisting.includes(name)) {
+          db.exec(`ALTER TABLE supplier_sources ADD COLUMN ${name} ${def}`)
+        }
+      }
+
+      const candidateCols = [
+        ['price_fca', 'REAL'],
+        ['price_fca_currency', 'TEXT'],
+        ['official_price', 'TEXT'],
+      ]
+      const candidateExisting = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+      for (const [name, def] of candidateCols) {
+        if (!candidateExisting.includes(name)) {
+          db.exec(`ALTER TABLE vehicle_source_candidates ADD COLUMN ${name} ${def}`)
+        }
+      }
+
+      db.prepare(`
+        UPDATE vehicle_source_candidates
+        SET price_fca = price_exw,
+            price_fca_currency = price_exw_currency,
+            price_exw = NULL,
+            price_exw_currency = NULL
+        WHERE trade_term = 'FCA'
+          AND price_fca IS NULL
+          AND price_exw IS NOT NULL
+      `).run()
+
+      db.prepare(`
+        UPDATE supplier_sources
+        SET price_fca = price_exw,
+            price_fca_currency = price_exw_currency,
+            price_exw = NULL,
+            price_exw_currency = NULL
+        WHERE UPPER(COALESCE(notes, '')) LIKE '%FCA%'
+          AND price_fca IS NULL
+          AND price_exw IS NOT NULL
+      `).run()
     },
   },
 ]

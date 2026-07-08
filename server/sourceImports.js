@@ -55,6 +55,10 @@ const STANDARD_FIELDS = [
   'supplierPrice',
   'currency',
   'tradeTerm',
+  'priceExw',
+  'priceFca',
+  'priceFob',
+  'officialPrice',
   'location',
   'preorderMinDays',
   'preorderMaxDays',
@@ -98,10 +102,26 @@ const DEFAULT_HEADER_ALIASES = [
   ['exw-usd', 'supplierPrice'],
   ['exw usd', 'supplierPrice'],
   ['fca', 'supplierPrice'],
+  ['fca价格', 'priceFca'],
+  ['fca价', 'priceFca'],
+  ['fca报价', 'priceFca'],
+  ['fca usd', 'priceFca'],
+  ['fca-usd', 'priceFca'],
   ['fob', 'supplierPrice'],
+  ['fob价格', 'priceFob'],
+  ['fob价', 'priceFob'],
+  ['fob报价', 'priceFob'],
   ['不含税fob', 'supplierPrice'],
   ['不含税fobrmb', 'supplierPrice'],
+  ['exw价格', 'priceExw'],
+  ['exw价', 'priceExw'],
+  ['出厂价', 'priceExw'],
+  ['厂家价', 'priceExw'],
   ['销售价', 'supplierPrice'],
+  ['指导价', 'officialPrice'],
+  ['官方指导价', 'officialPrice'],
+  ['国内指导价', 'officialPrice'],
+  ['msrp', 'officialPrice'],
   ['币种', 'currency'],
   ['currency', 'currency'],
   ['贸易条款', 'tradeTerm'],
@@ -273,6 +293,13 @@ function initSourceImportTables(db) {
       supplier_price REAL NOT NULL DEFAULT 0,
       currency TEXT NOT NULL DEFAULT '',
       trade_term TEXT NOT NULL DEFAULT '',
+      price_exw REAL,
+      price_exw_currency TEXT,
+      price_fca REAL,
+      price_fca_currency TEXT,
+      price_fob REAL,
+      price_fob_currency TEXT,
+      official_price TEXT NOT NULL DEFAULT '',
       location TEXT NOT NULL DEFAULT '',
       preorder_min_days INTEGER NOT NULL DEFAULT 0,
       preorder_max_days INTEGER NOT NULL DEFAULT 0,
@@ -591,6 +618,13 @@ function normalizeCandidate(rawInput, context) {
   const supplierPrice = asNumber(normalized.supplierPrice) || asNumber(textPrice?.[0] ?? '')
   normalized.supplierPrice = supplierPrice
   normalized.currency = normalizeCurrency(normalized.currency || supplierPrice, `${fullText} ${normalized.supplierPrice}`)
+  normalized.priceExw = asNumber(normalized.priceExw)
+  normalized.priceFca = asNumber(normalized.priceFca)
+  normalized.priceFob = asNumber(normalized.priceFob)
+  normalized.priceExwCurrency = normalizeCurrency(normalized.priceExwCurrency || normalized.currency, `${fullText} ${normalized.priceExw}`)
+  normalized.priceFcaCurrency = normalizeCurrency(normalized.priceFcaCurrency || normalized.currency, `${fullText} ${normalized.priceFca}`)
+  normalized.priceFobCurrency = normalizeCurrency(normalized.priceFobCurrency || normalized.currency, `${fullText} ${normalized.priceFob}`)
+  normalized.officialPrice = compactText(normalized.officialPrice)
   normalized.stockQuantity = Math.max(0, Math.floor(asNumber(normalized.stockQuantity)))
   normalized.preorderMinDays = Math.max(0, Math.floor(asNumber(normalized.preorderMinDays)))
   normalized.preorderMaxDays = Math.max(0, Math.floor(asNumber(normalized.preorderMaxDays)))
@@ -710,6 +744,13 @@ function sanitizeAiCandidate(candidate, index, context) {
     supplierPrice: Number(candidate.supplierPrice) || Number(normalized.supplierPrice) || 0,
     currency: compactText(candidate.currency) || normalized.currency,
     tradeTerm: compactText(candidate.tradeTerm).toUpperCase() || normalized.tradeTerm,
+    priceExw: Number(candidate.priceExw) || Number(normalized.priceExw) || null,
+    priceExwCurrency: compactText(candidate.priceExwCurrency) || normalized.priceExwCurrency || normalized.currency || 'USD',
+    priceFca: Number(candidate.priceFca) || Number(normalized.priceFca) || null,
+    priceFcaCurrency: compactText(candidate.priceFcaCurrency) || normalized.priceFcaCurrency || normalized.currency || 'USD',
+    priceFob: Number(candidate.priceFob) || Number(normalized.priceFob) || null,
+    priceFobCurrency: compactText(candidate.priceFobCurrency) || normalized.priceFobCurrency || normalized.currency || 'USD',
+    officialPrice: compactText(candidate.officialPrice) || normalized.officialPrice,
     location: compactText(candidate.location) || normalized.location,
     preorderMinDays: Math.max(0, Math.floor(Number(candidate.preorderMinDays) || Number(normalized.preorderMinDays) || 0)),
     preorderMaxDays: Math.max(0, Math.floor(Number(candidate.preorderMaxDays) || Number(normalized.preorderMaxDays) || 0)),
@@ -750,6 +791,13 @@ function sourceImportJsonSchema() {
             supplierPrice: { type: 'number' },
             currency: { type: 'string' },
             tradeTerm: { type: 'string' },
+            priceExw: { type: 'number' },
+            priceExwCurrency: { type: 'string' },
+            priceFca: { type: 'number' },
+            priceFcaCurrency: { type: 'string' },
+            priceFob: { type: 'number' },
+            priceFobCurrency: { type: 'string' },
+            officialPrice: { type: 'string' },
             location: { type: 'string' },
             preorderMinDays: { type: 'number' },
             preorderMaxDays: { type: 'number' },
@@ -764,7 +812,9 @@ function sourceImportJsonSchema() {
           },
           required: [
             'brand', 'modelName', 'year', 'trimName', 'exteriorColor', 'interiorColor',
-            'stockQuantity', 'supplierPrice', 'currency', 'tradeTerm', 'location',
+            'stockQuantity', 'supplierPrice', 'currency', 'tradeTerm',
+            'priceExw', 'priceExwCurrency', 'priceFca', 'priceFcaCurrency',
+            'priceFob', 'priceFobCurrency', 'officialPrice', 'location',
             'preorderMinDays', 'preorderMaxDays', 'canPreorder', 'notes', 'rawText',
             'rawFields', 'rowIndex', 'sourceSheet', 'confidence', 'uncertainFields',
           ],
@@ -780,8 +830,8 @@ function sourceImportPrompt({ text, context, mode }) {
     '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
     '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
     '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
-    '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFob, priceFobCurrency, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
-    '注意价格提取：priceExw 表示出厂价/EXW价格，priceFob 表示港口价/FOB价格。分别提取并解析出它们的数字值及对应的币种（如 CNY、USD 等，对应的币种字段为 priceExwCurrency/priceFobCurrency）。如果供应商同一种车型同时报了出厂价和港口价，请同时录入。如果没有提供某项价格，则填 null 或 0。',
+    '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
+    '注意价格提取：priceExw 表示出厂价/EXW价格，priceFca 表示FCA价格，priceFob 表示港口价/FOB价格。分别提取并解析出它们的数字值及对应币种（如 CNY、USD 等，对应币种字段为 priceExwCurrency/priceFcaCurrency/priceFobCurrency）。officialPrice 表示官方/国内指导价，可以保留原文如“11.98万”。如果供应商同一种车型同时报了多个条款价格，请同时录入。如果没有提供某项价格，则填 null 或 0。',
     '如果供应商把多个信息写在同一格或同一句话里，请按业务含义拆字段。',
     '如果价格口径不确定、车型库可能不匹配、颜色缩写不确定，请保留原文并把字段名写入 uncertainFields。',
     '不要编造看不到的信息；库存数量不明确时填 0；价格不明确时填 0。',
@@ -1061,9 +1111,9 @@ function issueTagsFor(candidate, match) {
   const tags = []
   if (!candidate.modelName) tags.push('missing_model')
   if (!candidate.trimName) tags.push('missing_trim')
-  if (!candidate.supplierPrice) tags.push('missing_price')
+  if (!candidate.supplierPrice && !candidate.priceExw && !candidate.priceFca && !candidate.priceFob) tags.push('missing_price')
   if (!candidate.stockQuantity) tags.push('missing_stock')
-  if (!candidate.currency) tags.push('missing_currency')
+  if (!candidate.currency && !candidate.priceExwCurrency && !candidate.priceFcaCurrency && !candidate.priceFobCurrency) tags.push('missing_currency')
   if (!candidate.tradeTerm) tags.push('missing_trade_term')
   if (!candidate.location) tags.push('missing_location')
   if (match.matchStatus !== 'matched') tags.push(match.matchStatus === 'needs_confirmation' ? 'profile_needs_confirmation' : 'unmatched_profile')
@@ -1093,8 +1143,11 @@ function serializeCandidate(row) {
     tradeTerm: row.trade_term,
     priceExw: row.price_exw ? Number(row.price_exw) : null,
     priceExwCurrency: row.price_exw_currency,
+    priceFca: row.price_fca ? Number(row.price_fca) : null,
+    priceFcaCurrency: row.price_fca_currency,
     priceFob: row.price_fob ? Number(row.price_fob) : null,
     priceFobCurrency: row.price_fob_currency,
+    officialPrice: row.official_price,
     location: row.location,
     preorderMinDays: Number(row.preorder_min_days),
     preorderMaxDays: Number(row.preorder_max_days),
@@ -1553,14 +1606,19 @@ function insertCandidate(db, candidate, context) {
 
   let priceExw = candidate.priceExw ? Number(candidate.priceExw) : null
   let priceExwCurrency = candidate.priceExwCurrency || null
+  let priceFca = candidate.priceFca ? Number(candidate.priceFca) : null
+  let priceFcaCurrency = candidate.priceFcaCurrency || null
   let priceFob = candidate.priceFob ? Number(candidate.priceFob) : null
   let priceFobCurrency = candidate.priceFobCurrency || null
 
-  if (!priceExw && !priceFob && Number(candidate.supplierPrice) > 0) {
+  if (!priceExw && !priceFca && !priceFob && Number(candidate.supplierPrice) > 0) {
     const term = String(candidate.tradeTerm || '').toUpperCase()
     if (term === 'FOB') {
       priceFob = Number(candidate.supplierPrice)
       priceFobCurrency = candidate.currency || 'USD'
+    } else if (term === 'FCA') {
+      priceFca = Number(candidate.supplierPrice)
+      priceFcaCurrency = candidate.currency || 'USD'
     } else {
       priceExw = Number(candidate.supplierPrice)
       priceExwCurrency = candidate.currency || 'USD'
@@ -1572,11 +1630,12 @@ function insertCandidate(db, candidate, context) {
       batch_id, snapshot_id, file_id, source_sheet, row_index, fingerprint,
       raw_fields, raw_text, brand, model_name, year, trim_name,
       exterior_color, interior_color, stock_quantity, supplier_price, currency,
-      trade_term, price_exw, price_exw_currency, price_fob, price_fob_currency,
+      trade_term, price_exw, price_exw_currency, price_fca, price_fca_currency,
+      price_fob, price_fob_currency, official_price,
       location, preorder_min_days, preorder_max_days, can_preorder,
       notes, profile_id, match_status, match_confidence, review_status,
       issue_tags, change_status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     context.batchId,
     context.snapshotId,
@@ -1598,8 +1657,11 @@ function insertCandidate(db, candidate, context) {
     candidate.tradeTerm ?? '',
     priceExw,
     priceExwCurrency,
+    priceFca,
+    priceFcaCurrency,
     priceFob,
     priceFobCurrency,
+    candidate.officialPrice ?? '',
     candidate.location ?? '',
     Math.max(0, Math.floor(Number(candidate.preorderMinDays) || 0)),
     Math.max(0, Math.floor(Number(candidate.preorderMaxDays) || 0)),
@@ -1642,8 +1704,11 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
         previous.trade_term !== current.trade_term ||
         Number(previous.price_exw) !== Number(current.price_exw) ||
         previous.price_exw_currency !== current.price_exw_currency ||
+        Number(previous.price_fca) !== Number(current.price_fca) ||
+        previous.price_fca_currency !== current.price_fca_currency ||
         Number(previous.price_fob) !== Number(current.price_fob) ||
         previous.price_fob_currency !== current.price_fob_currency ||
+        previous.official_price !== current.official_price ||
         previous.location !== current.location
       db.prepare('UPDATE vehicle_source_candidates SET change_status = ? WHERE id = ?')
         .run(changed ? CHANGE_STATUS.changed : CHANGE_STATUS.unchanged, current.id)
@@ -1659,11 +1724,12 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
           batch_id, snapshot_id, file_id, source_sheet, row_index, fingerprint,
           raw_fields, raw_text, brand, model_name, year, trim_name,
           exterior_color, interior_color, stock_quantity, supplier_price, currency,
-          trade_term, price_exw, price_exw_currency, price_fob, price_fob_currency,
+          trade_term, price_exw, price_exw_currency, price_fca, price_fca_currency,
+          price_fob, price_fob_currency, official_price,
           location, preorder_min_days, preorder_max_days, can_preorder,
           notes, profile_id, match_status, match_confidence, review_status,
           issue_tags, change_status, canonical_action, created_at, updated_at
-        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         snapshot.batch_id,
         snapshotId,
@@ -1683,8 +1749,11 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
         previous.trade_term,
         previous.price_exw,
         previous.price_exw_currency,
+        previous.price_fca,
+        previous.price_fca_currency,
         previous.price_fob,
         previous.price_fob_currency,
+        previous.official_price,
         previous.location,
         previous.preorder_min_days,
         previous.preorder_max_days,
@@ -1901,7 +1970,9 @@ const FIELD_CHANGE_FIELDS = [
   ['currency', 'currency', '币种'],
   ['tradeTerm', 'trade_term', '贸易条款'],
   ['priceExw', 'price_exw', 'EXW价格'],
+  ['priceFca', 'price_fca', 'FCA价格'],
   ['priceFob', 'price_fob', 'FOB价格'],
+  ['officialPrice', 'official_price', '官方指导价参考'],
   ['location', 'location', '库存地'],
   ['preorderMinDays', 'preorder_min_days', '预订最短天数'],
   ['preorderMaxDays', 'preorder_max_days', '预订最长天数'],
@@ -2155,6 +2226,13 @@ function exportBatchWorkbook(db, batchId) {
     '供应商价格': Number(row.supplier_price),
     '币种': row.currency,
     '贸易条款': row.trade_term,
+    'EXW价格': row.price_exw ? Number(row.price_exw) : '',
+    'EXW币种': row.price_exw_currency ?? '',
+    'FCA价格': row.price_fca ? Number(row.price_fca) : '',
+    'FCA币种': row.price_fca_currency ?? '',
+    'FOB价格': row.price_fob ? Number(row.price_fob) : '',
+    'FOB币种': row.price_fob_currency ?? '',
+    '官方指导价参考': row.official_price ?? '',
     '库存地': row.location,
     '可预订': row.can_preorder ? '是' : '否',
     '预订最短天数': Number(row.preorder_min_days),
@@ -2689,8 +2767,11 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       tradeTerm: compactText(input.tradeTerm ?? existing.trade_term).toUpperCase(),
       priceExw: input.priceExw === null || input.priceExw === '' ? null : (Number(input.priceExw) || null),
       priceExwCurrency: input.priceExwCurrency ? compactText(input.priceExwCurrency) : (existing.price_exw_currency || 'USD'),
+      priceFca: input.priceFca === null || input.priceFca === '' ? null : (Number(input.priceFca) || null),
+      priceFcaCurrency: input.priceFcaCurrency ? compactText(input.priceFcaCurrency) : (existing.price_fca_currency || 'USD'),
       priceFob: input.priceFob === null || input.priceFob === '' ? null : (Number(input.priceFob) || null),
       priceFobCurrency: input.priceFobCurrency ? compactText(input.priceFobCurrency) : (existing.price_fob_currency || 'USD'),
+      officialPrice: compactText(input.officialPrice ?? existing.official_price),
       location: compactText(input.location ?? existing.location),
       preorderMinDays: Math.max(0, Math.floor(Number(input.preorderMinDays ?? existing.preorder_min_days) || 0)),
       preorderMaxDays: Math.max(0, Math.floor(Number(input.preorderMaxDays ?? existing.preorder_max_days) || 0)),
@@ -2716,7 +2797,8 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         SET fingerprint = ?, brand = ?, model_name = ?, year = ?, trim_name = ?,
             exterior_color = ?, interior_color = ?, stock_quantity = ?,
             supplier_price = ?, currency = ?, trade_term = ?, 
-            price_exw = ?, price_exw_currency = ?, price_fob = ?, price_fob_currency = ?,
+            price_exw = ?, price_exw_currency = ?, price_fca = ?, price_fca_currency = ?,
+            price_fob = ?, price_fob_currency = ?, official_price = ?,
             location = ?, preorder_min_days = ?, preorder_max_days = ?, can_preorder = ?,
             notes = ?, profile_id = ?, match_status = ?, match_confidence = ?,
             review_status = ?, issue_tags = ?, canonical_action = ?,
@@ -2736,8 +2818,11 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         updated.tradeTerm,
         updated.priceExw,
         updated.priceExwCurrency,
+        updated.priceFca,
+        updated.priceFcaCurrency,
         updated.priceFob,
         updated.priceFobCurrency,
+        updated.officialPrice,
         updated.location,
         updated.preorderMinDays,
         updated.preorderMaxDays,
@@ -2869,6 +2954,7 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
     : 0
 
   const exwSources = sources.map((s) => ({ price: Number(s.price_exw), currency: s.price_exw_currency || 'USD' })).filter((s) => s.price > 0)
+  const fcaSources = sources.map((s) => ({ price: Number(s.price_fca), currency: s.price_fca_currency || 'USD' })).filter((s) => s.price > 0)
   const fobSources = sources.map((s) => ({ price: Number(s.price_fob), currency: s.price_fob_currency || 'USD' })).filter((s) => s.price > 0)
 
   const rateRow = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
@@ -2879,46 +2965,35 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
     return price
   }
 
-  let lowestExwCost = 0
-  let lowestExwCurrency = 'USD'
-  if (exwSources.length > 0) {
-    const lowest = exwSources.reduce((min, s) => {
+  function lowestSource(sourceRows) {
+    if (sourceRows.length === 0) return { price: 0, currency: 'USD' }
+    return sourceRows.reduce((min, s) => {
       return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
-    }, exwSources[0])
-    lowestExwCost = lowest.price
-    lowestExwCurrency = lowest.currency
+    }, sourceRows[0])
   }
 
-  let lowestFobCost = 0
-  let lowestFobCurrency = 'USD'
-  if (fobSources.length > 0) {
-    const lowest = fobSources.reduce((min, s) => {
-      return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
-    }, fobSources[0])
-    lowestFobCost = lowest.price
-    lowestFobCurrency = lowest.currency
+  function cooperationPriceFor(price, currency) {
+    if (price <= 0) return 0
+    return currency === 'CNY'
+      ? price + COOPERATION_PRICE_MARKUP_USD * exchangeRate
+      : price + COOPERATION_PRICE_MARKUP_USD
   }
 
-  let partnerPriceExw = 0
-  if (lowestExwCost > 0) {
-    if (lowestExwCurrency === 'CNY') {
-      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
-    } else {
-      partnerPriceExw = lowestExwCost + COOPERATION_PRICE_MARKUP_USD
-    }
-  }
+  const lowestExw = lowestSource(exwSources)
+  const lowestFca = lowestSource(fcaSources)
+  const lowestFob = lowestSource(fobSources)
+  const lowestExwCost = lowestExw.price
+  const lowestExwCurrency = lowestExw.currency
+  const lowestFcaCost = lowestFca.price
+  const lowestFcaCurrency = lowestFca.currency
+  const lowestFobCost = lowestFob.price
+  const lowestFobCurrency = lowestFob.currency
+  const partnerPriceExw = cooperationPriceFor(lowestExwCost, lowestExwCurrency)
+  const partnerPriceFca = cooperationPriceFor(lowestFcaCost, lowestFcaCurrency)
+  const partnerPriceFob = cooperationPriceFor(lowestFobCost, lowestFobCurrency)
 
-  let partnerPriceFob = 0
-  if (lowestFobCost > 0) {
-    if (lowestFobCurrency === 'CNY') {
-      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD * exchangeRate
-    } else {
-      partnerPriceFob = lowestFobCost + COOPERATION_PRICE_MARKUP_USD
-    }
-  }
-
-  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFobCost > 0 ? lowestFobCost : 0)
-  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFob > 0 ? partnerPriceFob : 0)
+  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFcaCost > 0 ? lowestFcaCost : (lowestFobCost > 0 ? lowestFobCost : 0))
+  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFca > 0 ? partnerPriceFca : (partnerPriceFob > 0 ? partnerPriceFob : 0))
   const now = new Date()
   const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
 
@@ -2930,9 +3005,10 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
         partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
         customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
         cost_exw = ?, cost_exw_currency = ?,
+        cost_fca = ?, cost_fca_currency = ?,
         cost_fob = ?, cost_fob_currency = ?,
-        partner_price_exw = ?, partner_price_fob = ?,
-        customer_price_exw = ?, customer_price_fob = ?,
+        partner_price_exw = ?, partner_price_fca = ?, partner_price_fob = ?,
+        customer_price_exw = ?, customer_price_fca = ?, customer_price_fob = ?,
         price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
         price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
     WHERE id = ?
@@ -2949,11 +3025,15 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
     cooperationPrice,
     lowestExwCost > 0 ? lowestExwCost : null,
     lowestExwCost > 0 ? lowestExwCurrency : null,
+    lowestFcaCost > 0 ? lowestFcaCost : null,
+    lowestFcaCost > 0 ? lowestFcaCurrency : null,
     lowestFobCost > 0 ? lowestFobCost : null,
     lowestFobCost > 0 ? lowestFobCurrency : null,
     partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFca > 0 ? partnerPriceFca : null,
     partnerPriceFob > 0 ? partnerPriceFob : null,
     partnerPriceExw > 0 ? partnerPriceExw : null,
+    partnerPriceFca > 0 ? partnerPriceFca : null,
     partnerPriceFob > 0 ? partnerPriceFob : null,
     cooperationPrice,
     now.toISOString(),
@@ -2974,7 +3054,7 @@ function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
       now.toISOString(),
       validUntil.toISOString(),
       changedBy,
-      `按最低供应商报价自动生成 EXW/FOB 合作价`
+      `按最低供应商报价自动生成 EXW/FCA/FOB 合作价`
     )
   }
 }
@@ -3108,7 +3188,7 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       UPDATE supplier_sources
       SET stock_quantity = ?, stock_colors = ?, preorder_min_days = ?, preorder_max_days = ?,
           can_preorder = ?, supplier_price = ?, price_exw = ?, price_exw_currency = ?,
-          price_fob = ?, price_fob_currency = ?,
+          price_fca = ?, price_fca_currency = ?, price_fob = ?, price_fob_currency = ?,
           updated_by = ?, updated_at = ?, notes = ?
       WHERE id = ?
     `).run(
@@ -3117,9 +3197,11 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       candidate.preorder_min_days,
       candidate.preorder_max_days,
       candidate.can_preorder ? 1 : 0,
-      candidate.price_exw || candidate.price_fob || candidate.supplier_price || 0,
+      candidate.price_exw || candidate.price_fca || candidate.price_fob || candidate.supplier_price || 0,
       candidate.price_exw,
       candidate.price_exw_currency,
+      candidate.price_fca,
+      candidate.price_fca_currency,
       candidate.price_fob,
       candidate.price_fob_currency,
       username,
@@ -3132,9 +3214,10 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       INSERT INTO supplier_sources (
         vehicle_id, supplier_name, stock_quantity, stock_colors,
         preorder_min_days, preorder_max_days, can_preorder,
-        supplier_price, price_exw, price_exw_currency, price_fob, price_fob_currency,
+        supplier_price, price_exw, price_exw_currency, price_fca, price_fca_currency,
+        price_fob, price_fob_currency,
         created_by, updated_by, updated_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       vehicleId,
       supplierName,
@@ -3143,9 +3226,11 @@ function syncCandidateToVehicleInventory(db, candidateId, username) {
       candidate.preorder_min_days,
       candidate.preorder_max_days,
       candidate.can_preorder ? 1 : 0,
-      candidate.price_exw || candidate.price_fob || candidate.supplier_price || 0,
+      candidate.price_exw || candidate.price_fca || candidate.price_fob || candidate.supplier_price || 0,
       candidate.price_exw,
       candidate.price_exw_currency,
+      candidate.price_fca,
+      candidate.price_fca_currency,
       candidate.price_fob,
       candidate.price_fob_currency,
       username,

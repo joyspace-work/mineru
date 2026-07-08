@@ -116,13 +116,17 @@ type Vehicle = {
   cost?: number
   costExw?: number | null
   costExwCurrency?: string
+  costFca?: number | null
+  costFcaCurrency?: string
   costFob?: number | null
   costFobCurrency?: string
   canSeePrice: boolean
   visiblePrice: number
   partnerPriceExw?: number | null
+  partnerPriceFca?: number | null
   partnerPriceFob?: number | null
   customerPriceExw?: number | null
+  customerPriceFca?: number | null
   customerPriceFob?: number | null
   priceLabel: string
 }
@@ -184,6 +188,8 @@ type SupplierSource = {
   supplierPrice: number
   priceExw?: number | null
   priceExwCurrency?: string
+  priceFca?: number | null
+  priceFcaCurrency?: string
   priceFob?: number | null
   priceFobCurrency?: string
   createdBy: string
@@ -437,8 +443,11 @@ type SourceImportCandidate = {
   tradeTerm: string
   priceExw: number | null
   priceExwCurrency?: string
+  priceFca: number | null
+  priceFcaCurrency?: string
   priceFob: number | null
   priceFobCurrency?: string
+  officialPrice: string
   location: string
   preorderMinDays: number
   preorderMaxDays: number
@@ -1361,31 +1370,6 @@ function App() {
               <Search size={16} />
               <input placeholder={i18n.t('searchPlaceholder')} />
             </div>
-            {['admin', 'sales'].includes(data.user.role) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', background: '#f1f5f9', padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                <span style={{ color: '#64748b' }}>美金汇率:</span>
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={exchangeRate}
-                  onChange={async (e) => {
-                    const newRate = Number(e.target.value)
-                    setExchangeRate(newRate)
-                    if (newRate > 0) {
-                      try {
-                        await api('/api/settings/exchange-rate', {
-                          method: 'POST',
-                          body: JSON.stringify({ exchangeRate: newRate }),
-                        })
-                      } catch (err: unknown) {
-                        showToast(getErrorMessage(err, '汇率更新失败'), 'error')
-                      }
-                    }
-                  }}
-                  style={{ width: '60px', border: 'none', background: 'transparent', fontWeight: 'bold', padding: 0, margin: 0, textAlign: 'center', outline: 'none', fontSize: '13px', color: '#1e293b' }}
-                />
-              </div>
-            )}
             <LanguageToggle />
             <button
               aria-label={i18n.t('notifications')}
@@ -1452,6 +1436,7 @@ function App() {
               profiles={data.vehicleProfiles}
               showToast={showToast}
               exchangeRate={exchangeRate}
+              setExchangeRate={setExchangeRate}
               onChanged={loadData}
             />
           </DataPanel>
@@ -1926,12 +1911,14 @@ function SourceImportWorkbench({
   profiles,
   showToast,
   exchangeRate,
+  setExchangeRate,
   onChanged,
 }: {
   currentUser: User
   profiles: VehicleProfile[]
   showToast: (text: string, type?: 'success' | 'info' | 'error' | 'warning') => void
   exchangeRate: number
+  setExchangeRate: (value: number) => void
   onChanged: () => Promise<void>
 }) {
   const { statusLabel } = useI18n()
@@ -2371,10 +2358,35 @@ function SourceImportWorkbench({
                     <span>{detail.batch.snapshotName || '未命名快照'} · {detail.batch.snapshotTime} · {detail.batch.importedBy}</span>
                   </div>
                 </div>
-                <button onClick={() => void downloadExport(detail.batch.id)} type="button">
-                  <Download size={16} />
-                  导出飞书 Excel
-                </button>
+                <div className="source-toolbar-actions">
+                  <label className="exchange-rate-inline">
+                    <span>美金汇率</span>
+                    <input
+                      min="0"
+                      onChange={async (event) => {
+                        const newRate = Number(event.target.value)
+                        setExchangeRate(newRate)
+                        if (newRate > 0) {
+                          try {
+                            await api('/api/settings/exchange-rate', {
+                              method: 'POST',
+                              body: JSON.stringify({ exchangeRate: newRate }),
+                            })
+                          } catch (err: unknown) {
+                            showToast(getErrorMessage(err, '汇率更新失败'), 'error')
+                          }
+                        }
+                      }}
+                      step="0.0001"
+                      type="number"
+                      value={exchangeRate}
+                    />
+                  </label>
+                  <button onClick={() => void downloadExport(detail.batch.id)} type="button">
+                    <Download size={16} />
+                    导出飞书 Excel
+                  </button>
+                </div>
               </div>
               <div className="source-file-list">
                 {detail.files.map((file) => (
@@ -2409,7 +2421,9 @@ function SourceImportWorkbench({
                     <span>内饰色</span>
                     <span>数量</span>
                     <span>EXW 价格</span>
+                    <span>FCA 价格</span>
                     <span>FOB 价格</span>
+                    <span>指导价</span>
                     <span>库存地</span>
                     <span>车型库匹配</span>
                     <span>问题标签</span>
@@ -2445,6 +2459,18 @@ function SourceImportWorkbench({
                         ) : '-'}
                       </span>
                       <span>
+                        {candidate.priceFca ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: '1.2' }}>
+                            <strong>{candidate.priceFcaCurrency === 'CNY' ? '¥' : '$'}{candidate.priceFca.toLocaleString()}</strong>
+                            <small style={{ color: '#64748b', fontSize: '10px' }}>
+                              {candidate.priceFcaCurrency === 'CNY'
+                                ? `$${(candidate.priceFca / exchangeRate).toFixed(0)}`
+                                : `¥${(candidate.priceFca * exchangeRate).toFixed(0)}`}
+                            </small>
+                          </div>
+                        ) : '-'}
+                      </span>
+                      <span>
                         {candidate.priceFob ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: '1.2' }}>
                             <strong>{candidate.priceFobCurrency === 'CNY' ? '¥' : '$'}{candidate.priceFob.toLocaleString()}</strong>
@@ -2456,6 +2482,7 @@ function SourceImportWorkbench({
                           </div>
                         ) : '-'}
                       </span>
+                      <span>{candidate.officialPrice || '-'}</span>
                       <span>{candidate.location || '-'}</span>
                       <span style={{ fontSize: '12px', color: '#475569' }}>
                         {(() => {
@@ -2791,6 +2818,27 @@ function CandidateEditor({
           </div>
         </label>
         <label>
+          FCA 价格
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <input
+              min="0"
+              onChange={(event) => update('priceFca', event.target.value === '' ? null : Number(event.target.value))}
+              type="number"
+              value={draft.priceFca ?? ''}
+              style={{ flex: 1 }}
+              placeholder="未填写"
+            />
+            <select
+              onChange={(event) => update('priceFcaCurrency', event.target.value)}
+              value={draft.priceFcaCurrency || 'USD'}
+              style={{ width: '75px' }}
+            >
+              <option value="USD">USD</option>
+              <option value="CNY">CNY</option>
+            </select>
+          </div>
+        </label>
+        <label>
           FOB 价格
           <div style={{ display: 'flex', gap: '4px' }}>
             <input
@@ -2811,6 +2859,7 @@ function CandidateEditor({
             </select>
           </div>
         </label>
+        <label>官方指导价参考<input onChange={(event) => update('officialPrice', event.target.value)} placeholder="例如：11.98万" value={draft.officialPrice || ''} /></label>
         <label>库存地<input onChange={(event) => update('location', event.target.value)} value={draft.location} /></label>
         <label>车型库<select onChange={(event) => update('profileId', event.target.value ? Number(event.target.value) : null)} value={draft.profileId ?? ''}>
           <option value="">暂不关联车型库</option>
@@ -2968,6 +3017,17 @@ function VehicleTable({
         if (prices.length === 0) return null
         return prices.reduce((min, p) => p.usdVal < min.usdVal ? p : min, prices[0])
       })(),
+      startingFca: (() => {
+        const listed = variants.some((v) => v.isListed) ? variants.filter((v) => v.isListed) : variants
+        const prices = listed.map((v) => {
+          const val = v.partnerPriceFca
+          if (!val) return null
+          const isCny = v.costFcaCurrency === 'CNY'
+          return { val, usdVal: isCny ? val / exchangeRate : val, currency: v.costFcaCurrency || 'USD' }
+        }).filter(Boolean) as { val: number; usdVal: number; currency: string }[]
+        if (prices.length === 0) return null
+        return prices.reduce((min, p) => p.usdVal < min.usdVal ? p : min, prices[0])
+      })(),
       startingFob: (() => {
         const listed = variants.some((v) => v.isListed) ? variants.filter((v) => v.isListed) : variants
         const prices = listed.map((v) => {
@@ -3108,12 +3168,17 @@ function VehicleTable({
                             EXW: <strong className={group.hasCurrentPrice ? 'price-current' : 'price-expired'}>{formatPrice(group.startingExw.val, group.startingExw.currency)} 起</strong>
                           </span>
                         )}
+                        {group.startingFca && (
+                          <span style={{ fontSize: '12px', color: '#1e293b' }}>
+                            FCA: <strong className={group.hasCurrentPrice ? 'price-current' : 'price-expired'}>{formatPrice(group.startingFca.val, group.startingFca.currency)} 起</strong>
+                          </span>
+                        )}
                         {group.startingFob && (
                           <span style={{ fontSize: '12px', color: '#1e293b' }}>
                             FOB: <strong className={group.hasCurrentPrice ? 'price-current' : 'price-expired'}>{formatPrice(group.startingFob.val, group.startingFob.currency)} 起</strong>
                           </span>
                         )}
-                        {!group.startingExw && !group.startingFob && (
+                        {!group.startingExw && !group.startingFca && !group.startingFob && (
                           <strong className="price-expired">待录入价格</strong>
                         )}
                       </>
@@ -3165,19 +3230,24 @@ function VehicleTable({
                                     EXW: <strong className={vehicle.isPriceValid ? 'price-current' : 'price-expired'}>{formatPrice(vehicle.partnerPriceExw, vehicle.costExwCurrency)}</strong>
                                   </span>
                                 ) : null}
+                                {vehicle.partnerPriceFca ? (
+                                  <span style={{ fontSize: '12px', color: '#1e293b' }}>
+                                    FCA: <strong className={vehicle.isPriceValid ? 'price-current' : 'price-expired'}>{formatPrice(vehicle.partnerPriceFca, vehicle.costFcaCurrency)}</strong>
+                                  </span>
+                                ) : null}
                                 {vehicle.partnerPriceFob ? (
                                   <span style={{ fontSize: '12px', color: '#1e293b' }}>
                                     FOB: <strong className={vehicle.isPriceValid ? 'price-current' : 'price-expired'}>{formatPrice(vehicle.partnerPriceFob, vehicle.costFobCurrency)}</strong>
                                   </span>
                                 ) : null}
-                                {!vehicle.partnerPriceExw && !vehicle.partnerPriceFob && (
+                                {!vehicle.partnerPriceExw && !vehicle.partnerPriceFca && !vehicle.partnerPriceFob && (
                                   <strong className="price-expired">待录入合作价</strong>
                                 )}
                               </div>
                             ) : (
                               <strong className="price-expired">询价后报价</strong>
                             )}
-                            {vehicle.canSeePrice && (vehicle.partnerPriceExw || vehicle.partnerPriceFob) && (
+                            {vehicle.canSeePrice && (vehicle.partnerPriceExw || vehicle.partnerPriceFca || vehicle.partnerPriceFob) && (
                               <small style={{ marginTop: '2px', display: 'block' }}>
                                 {vehicle.isPriceValid ? `有效至 ${formatDate(vehicle.priceValidUntil)}` : `已于 ${formatDate(vehicle.priceValidUntil)} 过期`}
                               </small>
@@ -3389,6 +3459,7 @@ function VehicleResourceDetails({
         {canSeeCost && (
           <>
             <div><span>采购成本 (EXW)</span><strong className="sensitive">{formatPrice(vehicle.costExw, vehicle.costExwCurrency)}</strong></div>
+            <div><span>采购成本 (FCA)</span><strong className="sensitive">{formatPrice(vehicle.costFca, vehicle.costFcaCurrency)}</strong></div>
             <div><span>采购成本 (FOB)</span><strong className="sensitive">{formatPrice(vehicle.costFob, vehicle.costFobCurrency)}</strong></div>
           </>
         )}
@@ -3411,7 +3482,7 @@ function VehicleResourceDetails({
           </div>
           {vehicle.supplierSources && vehicle.supplierSources.length > 0 ? (
             <div className="supplier-source-table">
-              <div className="supplier-source-head"><span>供应商</span><span>现车</span><span>颜色数量</span><span>预订周期</span><span>EXW 价格</span><span>FOB 价格</span><span>更新时间</span><span>操作</span></div>
+              <div className="supplier-source-head"><span>供应商</span><span>现车</span><span>颜色数量</span><span>预订周期</span><span>EXW 价格</span><span>FCA 价格</span><span>FOB 价格</span><span>更新时间</span><span>操作</span></div>
               {vehicle.supplierSources.map((source) => (
                 <div className="supplier-source-row" key={source.id}>
                   <div><strong>{source.supplierName}</strong><small>{source.notes}</small></div>
@@ -3419,6 +3490,7 @@ function VehicleResourceDetails({
                   <span>{source.stockColors.map((entry) => `${entry.color} ${entry.quantity} 台`).join('；') || '无'}</span>
                   <span>{source.canPreorder ? `${source.preorderMinDays}-${source.preorderMaxDays} 天` : '不可预订'}</span>
                   <span className="sensitive" style={{ fontWeight: 'bold' }}>{formatPrice(source.priceExw, source.priceExwCurrency)}</span>
+                  <span className="sensitive" style={{ fontWeight: 'bold' }}>{formatPrice(source.priceFca, source.priceFcaCurrency)}</span>
                   <span className="sensitive" style={{ fontWeight: 'bold' }}>{formatPrice(source.priceFob, source.priceFobCurrency)}</span>
                   <span>{formatDate(source.updatedAt)}<small>录入：{source.createdBy}<br />更新：{source.updatedBy}</small></span>
                   <div className="source-row-actions">
@@ -4161,6 +4233,7 @@ function VehiclePriceForm({
   onCreated: () => Promise<void>
 }) {
   const [partnerPriceExw, setPartnerPriceExw] = useState(vehicle.partnerPriceExw ? String(vehicle.partnerPriceExw) : '')
+  const [partnerPriceFca, setPartnerPriceFca] = useState(vehicle.partnerPriceFca ? String(vehicle.partnerPriceFca) : '')
   const [partnerPriceFob, setPartnerPriceFob] = useState(vehicle.partnerPriceFob ? String(vehicle.partnerPriceFob) : '')
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
@@ -4168,8 +4241,8 @@ function VehiclePriceForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (!partnerPriceExw && !partnerPriceFob) {
-      setError('请至少填写一个 EXW 合作价或 FOB 合作价')
+    if (!partnerPriceExw && !partnerPriceFca && !partnerPriceFob) {
+      setError('请至少填写一个 EXW、FCA 或 FOB 合作价')
       return
     }
     setBusy(true)
@@ -4179,6 +4252,7 @@ function VehiclePriceForm({
         method: 'POST',
         body: JSON.stringify({
           partnerPriceExw: partnerPriceExw ? Number(partnerPriceExw) : null,
+          partnerPriceFca: partnerPriceFca ? Number(partnerPriceFca) : null,
           partnerPriceFob: partnerPriceFob ? Number(partnerPriceFob) : null,
           notes,
         }),
@@ -4198,16 +4272,20 @@ function VehiclePriceForm({
           <div><p className="eyebrow">价格维护</p><h2>更新基础合作价</h2><span>{vehicle.model} · {vehicle.trim}</span></div>
           <button aria-label="关闭" onClick={onClose} type="button">×</button>
         </div>
-        <div className="price-snapshot" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <div className="price-snapshot" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
           <div>
             <span>当前 EXW 合作价</span>
             <strong>{formatPrice(vehicle.partnerPriceExw, vehicle.costExwCurrency)}</strong>
           </div>
           <div>
+            <span>当前 FCA 合作价</span>
+            <strong>{formatPrice(vehicle.partnerPriceFca, vehicle.costFcaCurrency)}</strong>
+          </div>
+          <div>
             <span>当前 FOB 合作价</span>
             <strong>{formatPrice(vehicle.partnerPriceFob, vehicle.costFobCurrency)}</strong>
           </div>
-          <small style={{ gridColumn: 'span 2' }}>{vehicle.isPriceValid ? `有效至 ${formatDate(vehicle.priceValidUntil)}` : '当前价格已过期'}</small>
+          <small style={{ gridColumn: 'span 3' }}>{vehicle.isPriceValid ? `有效至 ${formatDate(vehicle.priceValidUntil)}` : '当前价格已过期'}</small>
         </div>
         <div className="form-grid">
           <label>
@@ -4217,6 +4295,16 @@ function VehiclePriceForm({
               onChange={(event) => setPartnerPriceExw(event.target.value)}
               type="number"
               value={partnerPriceExw}
+              placeholder="未设置"
+            />
+          </label>
+          <label>
+            新 FCA 合作价 ({vehicle.costFcaCurrency || 'USD'})
+            <input
+              min="0"
+              onChange={(event) => setPartnerPriceFca(event.target.value)}
+              type="number"
+              value={partnerPriceFca}
               placeholder="未设置"
             />
           </label>
@@ -4257,6 +4345,8 @@ function SupplierSourceForm({
   const [supplierName, setSupplierName] = useState(source?.supplierName ?? '')
   const [priceExw, setPriceExw] = useState(source?.priceExw ? String(source.priceExw) : '')
   const [priceExwCurrency, setPriceExwCurrency] = useState(source?.priceExwCurrency ?? 'USD')
+  const [priceFca, setPriceFca] = useState(source?.priceFca ? String(source.priceFca) : '')
+  const [priceFcaCurrency, setPriceFcaCurrency] = useState(source?.priceFcaCurrency ?? 'USD')
   const [priceFob, setPriceFob] = useState(source?.priceFob ? String(source.priceFob) : '')
   const [priceFobCurrency, setPriceFobCurrency] = useState(source?.priceFobCurrency ?? 'USD')
   const [canPreorder, setCanPreorder] = useState(source?.canPreorder ?? true)
@@ -4273,8 +4363,8 @@ function SupplierSourceForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (!priceExw && !priceFob) {
-      setError('请至少填写一个 EXW 报价或 FOB 报价。')
+    if (!priceExw && !priceFca && !priceFob) {
+      setError('请至少填写一个 EXW、FCA 或 FOB 报价。')
       return
     }
     setBusy(true)
@@ -4286,6 +4376,8 @@ function SupplierSourceForm({
           supplierName,
           priceExw: priceExw ? Number(priceExw) : null,
           priceExwCurrency,
+          priceFca: priceFca ? Number(priceFca) : null,
+          priceFcaCurrency,
           priceFob: priceFob ? Number(priceFob) : null,
           priceFobCurrency,
           canPreorder,
@@ -4326,6 +4418,27 @@ function SupplierSourceForm({
               <select
                 onChange={(event) => setPriceExwCurrency(event.target.value)}
                 value={priceExwCurrency}
+                style={{ width: '75px' }}
+              >
+                <option value="USD">USD</option>
+                <option value="CNY">CNY</option>
+              </select>
+            </div>
+          </label>
+          <label>
+            FCA 价格
+            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+              <input
+                min="0"
+                onChange={(event) => setPriceFca(event.target.value)}
+                type="number"
+                value={priceFca}
+                placeholder="未填写"
+                style={{ flex: 1 }}
+              />
+              <select
+                onChange={(event) => setPriceFcaCurrency(event.target.value)}
+                value={priceFcaCurrency}
                 style={{ width: '75px' }}
               >
                 <option value="USD">USD</option>
