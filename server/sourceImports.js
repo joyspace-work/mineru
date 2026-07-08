@@ -596,16 +596,17 @@ function normalizeCandidate(rawInput, context) {
     normalized[targetField] = compactText(value)
   })
 
+  if (!normalized.modelName && carry.modelName) normalized.modelName = carry.modelName
+  if (!normalized.trimName && carry.trimName) normalized.trimName = carry.trimName
+  if (!normalized.brand && carry.brand) normalized.brand = carry.brand
+  if (!normalized.year && carry.year) normalized.year = carry.year
+
   if (!normalized.modelName && fullText) {
     const split = splitModelAndTrim(fullText.split(/[|，,]/)[0])
     normalized.modelName = split.modelName
     normalized.trimName = normalized.trimName || split.trimName
     normalized.year = normalized.year || split.year
   }
-  if (!normalized.modelName && carry.modelName) normalized.modelName = carry.modelName
-  if (!normalized.trimName && carry.trimName) normalized.trimName = carry.trimName
-  if (!normalized.brand && carry.brand) normalized.brand = carry.brand
-  if (!normalized.year && carry.year) normalized.year = carry.year
 
   normalized.modelName = applyValueRules(normalized.modelName, 'modelName', rules, supplierName, ruleHits)
   normalized.trimName = applyValueRules(normalized.trimName, 'trimName', rules, supplierName, ruleHits)
@@ -1480,29 +1481,60 @@ function parseXlsxFile(filePath, context) {
     const headerLabels = rows[bestHeader.index].map((header, index) =>
       compactText(header) || `Column ${index + 1}`,
     )
+
+    // Build Markdown Table Headers
+    const markdownTableRows = []
+    markdownTableRows.push(`| ${headerLabels.join(' | ')} |`)
+    markdownTableRows.push(`| ${headerLabels.map(() => '---').join(' | ')} |`)
+
     const headerTargets = new Map()
     bestHeader.headerMap.forEach(({ field, header }) => headerTargets.set(header, field))
     rows.slice(bestHeader.index + 1).forEach((row, offset) => {
       const rawFields = {}
-      row.forEach((cell, index) => {
-        const value = compactText(cell)
-        if (!value) return
-        rawFields[headerLabels[index]] = value
+      const markdownCells = []
+
+      headerLabels.forEach((label, index) => {
+        let value = compactText(row[index])
+        // If cell is empty, and it is a typical merged field, carry it forward for the raw fields representation
+        if (!value && ['车型', '指导价', '品牌', '年款', '配置', '车型名称', '型号', '型号名称'].some(name => label.includes(name))) {
+          if (label.includes('指导价') && carry.officialPrice) {
+            value = carry.officialPrice
+          } else if (label.includes('品牌') && carry.brand) {
+            value = carry.brand
+          } else if (carry.modelName) {
+            value = carry.modelName
+          }
+        }
+        if (value) {
+          rawFields[label] = value
+        }
+        markdownCells.push(value || '')
       })
+
       const rawText = buildRawText(rawFields, row.join(' '))
       if (!rawText) return
-      rawTextParts.push(rawText)
+
+      markdownTableRows.push(`| ${markdownCells.map(val => String(val).replace(/\|/g, '\\|')).join(' | ')} |`)
+
       const normalized = normalizeCandidate(
         { rawFields, rawText, supplierName: context.supplierName, rules: context.rules, carry },
         { rules: context.rules, headerTargets },
       )
+
       if (!normalized.modelName && carry.modelName) normalized.modelName = carry.modelName
       if (!normalized.trimName && carry.trimName) normalized.trimName = carry.trimName
+      if (!normalized.brand && carry.brand) normalized.brand = carry.brand
+      if (!normalized.year && carry.year) normalized.year = carry.year
+
       if (!candidateHasBusinessSignal(normalized)) return
+
+      // Update carry values based on successfully resolved candidate fields
       if (normalized.modelName) carry.modelName = normalized.modelName
       if (normalized.trimName) carry.trimName = normalized.trimName
       if (normalized.brand) carry.brand = normalized.brand
       if (normalized.year) carry.year = normalized.year
+      if (normalized.officialPrice) carry.officialPrice = normalized.officialPrice
+
       candidates.push({
         ...normalized,
         rawFields,
@@ -1511,8 +1543,12 @@ function parseXlsxFile(filePath, context) {
         sourceSheet: sheetName,
       })
     })
+
+    if (markdownTableRows.length > 2) {
+      rawTextParts.push(`### Sheet: ${sheetName}\n` + markdownTableRows.join('\n'))
+    }
   }
-  return { rawText: rawTextParts.slice(0, 300).join('\n'), candidates }
+  return { rawText: rawTextParts.slice(0, 50).join('\n\n'), candidates }
 }
 
 function parseGenericAttachment(file) {
