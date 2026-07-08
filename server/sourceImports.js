@@ -331,6 +331,46 @@ function initSourceImportTables(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS vehicle_source_field_changes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL,
+      batch_id INTEGER NOT NULL,
+      supplier_name TEXT NOT NULL DEFAULT '',
+      field_name TEXT NOT NULL,
+      field_label TEXT NOT NULL DEFAULT '',
+      before_value TEXT NOT NULL DEFAULT '',
+      after_value TEXT NOT NULL DEFAULT '',
+      change_type TEXT NOT NULL,
+      source_presence TEXT NOT NULL DEFAULT '',
+      suggestion_key TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (candidate_id) REFERENCES vehicle_source_candidates(id),
+      FOREIGN KEY (batch_id) REFERENCES vehicle_source_import_batches(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS vehicle_source_rule_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      suggestion_key TEXT NOT NULL UNIQUE,
+      rule_type TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'supplier',
+      supplier_name TEXT NOT NULL DEFAULT '',
+      source_key TEXT NOT NULL DEFAULT '',
+      source_value TEXT NOT NULL DEFAULT '',
+      target_field TEXT NOT NULL DEFAULT '',
+      target_value TEXT NOT NULL DEFAULT '',
+      change_type TEXT NOT NULL DEFAULT '',
+      evidence_count INTEGER NOT NULL DEFAULT 0,
+      confidence_score INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_by TEXT NOT NULL DEFAULT '',
+      decided_by TEXT NOT NULL DEFAULT '',
+      decided_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS vehicle_source_audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       entity_type TEXT NOT NULL,
@@ -341,6 +381,15 @@ function initSourceImportTables(db) {
       after_value TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+  `)
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_vehicle_source_field_changes_candidate
+      ON vehicle_source_field_changes(candidate_id);
+    CREATE INDEX IF NOT EXISTS idx_vehicle_source_field_changes_pattern
+      ON vehicle_source_field_changes(supplier_name, field_name, before_value, after_value, change_type);
+    CREATE INDEX IF NOT EXISTS idx_vehicle_source_rule_suggestions_status
+      ON vehicle_source_rule_suggestions(status, evidence_count);
   `)
 }
 
@@ -430,9 +479,29 @@ function targetFieldForHeader(header, rules) {
   return partialAlias?.[1] ?? ''
 }
 
-function applyValueRules(value, field, rules, supplierName) {
+function rememberRuleHit(ruleHits, rule, field, fromValue, toValue) {
+  if (!ruleHits || !rule || compactText(fromValue) === compactText(toValue)) return
+  ruleHits.push({
+    id: Number(rule.id),
+    ruleType: rule.rule_type,
+    field,
+    fromValue: compactText(fromValue),
+    toValue: compactText(toValue),
+  })
+}
+
+function applyValueRules(value, field, rules, supplierName, ruleHits) {
   const original = compactText(value)
-  if (!original) return original
+  if (!original) {
+    const defaultRule = rules.find((entry) => {
+      if (entry.rule_type !== 'supplier_default') return false
+      if (entry.target_field && entry.target_field !== field) return false
+      if (entry.scope === 'supplier' && entry.supplier_name && entry.supplier_name !== supplierName) return false
+      return compactText(entry.target_value)
+    })
+    rememberRuleHit(ruleHits, defaultRule, field, '', defaultRule?.target_value)
+    return defaultRule?.target_value || original
+  }
   const normalized = normalizeText(original)
   const rule = rules.find((entry) => {
     if (!['value_alias', 'profile_alias'].includes(entry.rule_type)) return false
@@ -440,6 +509,7 @@ function applyValueRules(value, field, rules, supplierName) {
     if (entry.scope === 'supplier' && entry.supplier_name && entry.supplier_name !== supplierName) return false
     return normalizeText(entry.source_value) === normalized
   })
+  rememberRuleHit(ruleHits, rule, field, original, rule?.target_value)
   return rule?.target_value || original
 }
 
@@ -490,6 +560,7 @@ function normalizeCandidate(rawInput, context) {
   const { rawFields = {}, rawText = '', supplierName, rules = {}, carry = {} } = rawInput
   const fullText = buildRawText(rawFields, rawText)
   const normalized = {}
+  const ruleHits = []
   for (const field of STANDARD_FIELDS) normalized[field] = ''
 
   Object.entries(rawFields).forEach(([header, value]) => {
@@ -509,12 +580,12 @@ function normalizeCandidate(rawInput, context) {
   if (!normalized.brand && carry.brand) normalized.brand = carry.brand
   if (!normalized.year && carry.year) normalized.year = carry.year
 
-  normalized.modelName = applyValueRules(normalized.modelName, 'modelName', rules, supplierName)
-  normalized.trimName = applyValueRules(normalized.trimName, 'trimName', rules, supplierName)
-  normalized.location = applyValueRules(normalized.location || inferLocation(fullText), 'location', rules, supplierName)
-  normalized.tradeTerm = applyValueRules(normalized.tradeTerm || inferTradeTerm(fullText), 'tradeTerm', rules, supplierName).toUpperCase()
-  normalized.exteriorColor = applyValueRules(normalized.exteriorColor, 'exteriorColor', rules, supplierName)
-  normalized.interiorColor = applyValueRules(normalized.interiorColor, 'interiorColor', rules, supplierName)
+  normalized.modelName = applyValueRules(normalized.modelName, 'modelName', rules, supplierName, ruleHits)
+  normalized.trimName = applyValueRules(normalized.trimName, 'trimName', rules, supplierName, ruleHits)
+  normalized.location = applyValueRules(normalized.location || inferLocation(fullText), 'location', rules, supplierName, ruleHits)
+  normalized.tradeTerm = applyValueRules(normalized.tradeTerm || inferTradeTerm(fullText), 'tradeTerm', rules, supplierName, ruleHits).toUpperCase()
+  normalized.exteriorColor = applyValueRules(normalized.exteriorColor, 'exteriorColor', rules, supplierName, ruleHits)
+  normalized.interiorColor = applyValueRules(normalized.interiorColor, 'interiorColor', rules, supplierName, ruleHits)
 
   const textPrice = fullText.match(/(?:USD|美金|美元|\$|人民币|RMB|CNY)?\s*(\d{4,7}(?:\.\d+)?)/i)
   const supplierPrice = asNumber(normalized.supplierPrice) || asNumber(textPrice?.[0] ?? '')
@@ -531,6 +602,8 @@ function normalizeCandidate(rawInput, context) {
     normalized.year = year?.[0] ?? ''
   }
 
+  normalized.appliedRuleIds = [...new Set(ruleHits.map((hit) => hit.id).filter(Boolean))]
+  normalized.ruleHits = ruleHits
   return normalized
 }
 
@@ -1126,6 +1199,30 @@ function serializeRule(row) {
   }
 }
 
+function serializeRuleSuggestion(row) {
+  return {
+    id: Number(row.id),
+    suggestionKey: row.suggestion_key,
+    ruleType: row.rule_type,
+    scope: row.scope,
+    supplierName: row.supplier_name,
+    sourceKey: row.source_key,
+    sourceValue: row.source_value,
+    targetField: row.target_field,
+    targetValue: row.target_value,
+    changeType: row.change_type,
+    evidenceCount: Number(row.evidence_count),
+    confidenceScore: Number(row.confidence_score),
+    status: row.status,
+    metadata: jsonParse(row.metadata, {}),
+    createdBy: row.created_by,
+    decidedBy: row.decided_by,
+    decidedAt: row.decided_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 function serializeSupplier(row) {
   return {
     id: Number(row.id),
@@ -1432,6 +1529,16 @@ async function parseFileWithOptionalAi({ file, storedPath, extension, context, a
   }
 }
 
+function withRuleHitNotes(parsed) {
+  const hitCount = parsed.candidates.reduce((sum, candidate) => sum + (candidate.ruleHits?.length ?? 0), 0)
+  if (hitCount <= 0) return parsed
+  const notes = compactText(parsed.parserNotes || '')
+  return {
+    ...parsed,
+    parserNotes: [notes, `本次应用历史规则 ${hitCount} 次。`].filter(Boolean).join(' '),
+  }
+}
+
 function insertCandidate(db, candidate, context) {
   if (candidateLooksLikeHeader(candidate)) return null
   const now = new Date().toISOString()
@@ -1507,6 +1614,9 @@ function insertCandidate(db, candidate, context) {
     now,
     now,
   )
+  for (const ruleId of candidate.appliedRuleIds ?? []) {
+    db.prepare('UPDATE vehicle_source_rules SET usage_count = usage_count + 1, updated_at = ? WHERE id = ?').run(now, ruleId)
+  }
   return Number(result.lastInsertRowid)
 }
 
@@ -1779,6 +1889,228 @@ function saveCorrectionRules(db, oldRow, updated, scope, actor) {
   return created
 }
 
+const FIELD_CHANGE_FIELDS = [
+  ['brand', 'brand', '品牌'],
+  ['modelName', 'model_name', '车型'],
+  ['year', 'year', '年款'],
+  ['trimName', 'trim_name', '配置版本'],
+  ['exteriorColor', 'exterior_color', '外观色'],
+  ['interiorColor', 'interior_color', '内饰色'],
+  ['stockQuantity', 'stock_quantity', '库存数量'],
+  ['supplierPrice', 'supplier_price', '供应商价格'],
+  ['currency', 'currency', '币种'],
+  ['tradeTerm', 'trade_term', '贸易条款'],
+  ['priceExw', 'price_exw', 'EXW价格'],
+  ['priceFob', 'price_fob', 'FOB价格'],
+  ['location', 'location', '库存地'],
+  ['preorderMinDays', 'preorder_min_days', '预订最短天数'],
+  ['preorderMaxDays', 'preorder_max_days', '预订最长天数'],
+  ['canPreorder', 'can_preorder', '是否可预订'],
+  ['notes', 'notes', '备注'],
+  ['profileId', 'profile_id', '车型库'],
+  ['canonicalAction', 'canonical_action', '同源处理'],
+  ['reviewStatus', 'review_status', '审核状态'],
+]
+
+const VALUE_ALIAS_SUGGESTION_FIELDS = new Set([
+  'brand',
+  'modelName',
+  'trimName',
+  'exteriorColor',
+  'interiorColor',
+  'location',
+  'tradeTerm',
+  'currency',
+])
+
+const SUPPLIER_DEFAULT_FIELDS = new Set(['location', 'tradeTerm', 'currency'])
+const SUGGESTION_EVIDENCE_THRESHOLD = 2
+
+function displayValue(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return compactText(value)
+}
+
+function valuesEqualForExperience(before, after) {
+  return normalizeText(displayValue(before)) === normalizeText(displayValue(after))
+}
+
+function classifyFieldChange(fieldName, beforeValue, afterValue) {
+  const before = displayValue(beforeValue)
+  const after = displayValue(afterValue)
+  if (fieldName === 'reviewStatus' && after === REVIEW_STATUS.rejected) return 'human_rejection'
+  if (fieldName === 'profileId' && !before && after) return 'profile_match_correction'
+  if (!before && after) return 'human_supplement'
+  if (before && !after) return 'manual_clear'
+  return 'recognition_correction'
+}
+
+function buildSuggestionInput(change) {
+  if (change.changeType === 'profile_match_correction') {
+    return {
+      ruleType: 'profile_alias',
+      sourceValue: change.previousModelName,
+      targetField: 'profileId',
+      targetValue: change.afterLabel || change.afterValue,
+      metadata: { profileId: Number(change.afterRaw) || null },
+    }
+  }
+  if (change.changeType === 'human_supplement') {
+    if (!SUPPLIER_DEFAULT_FIELDS.has(change.fieldName) || !change.afterValue) return null
+    return {
+      ruleType: 'supplier_default',
+      sourceValue: '',
+      targetField: change.fieldName,
+      targetValue: change.afterValue,
+      metadata: { sourcePresence: change.sourcePresence },
+    }
+  }
+  if (change.changeType !== 'recognition_correction') return null
+  if (!VALUE_ALIAS_SUGGESTION_FIELDS.has(change.fieldName)) return null
+  if (!change.beforeValue || !change.afterValue) return null
+  return {
+    ruleType: 'value_alias',
+    sourceValue: change.beforeValue,
+    targetField: change.fieldName,
+    targetValue: change.afterValue,
+    metadata: { sourcePresence: change.sourcePresence },
+  }
+}
+
+function suggestionKeyFor({ supplierName, ruleType, sourceValue, targetField, targetValue }) {
+  return [
+    ruleType,
+    normalizeText(supplierName),
+    normalizeText(sourceValue),
+    targetField,
+    normalizeText(targetValue),
+  ].join('|')
+}
+
+function upsertRuleSuggestion(db, change, actor) {
+  const suggestion = buildSuggestionInput(change)
+  if (!suggestion) return ''
+  const supplierName = change.supplierName || ''
+  const suggestionKey = suggestionKeyFor({ supplierName, ...suggestion })
+  const now = new Date().toISOString()
+  const metadata = {
+    ...suggestion.metadata,
+    fieldLabel: change.fieldLabel,
+    lastCandidateId: change.candidateId,
+    lastChangeId: change.id,
+    changeType: change.changeType,
+  }
+  const existing = db.prepare('SELECT * FROM vehicle_source_rule_suggestions WHERE suggestion_key = ?').get(suggestionKey)
+  if (existing) {
+    const nextEvidenceCount = Number(existing.evidence_count) + 1
+    const confidence = Math.min(95, Math.max(50, 45 + nextEvidenceCount * 12))
+    db.prepare(`
+      UPDATE vehicle_source_rule_suggestions
+      SET evidence_count = ?, confidence_score = ?, metadata = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      nextEvidenceCount,
+      confidence,
+      JSON.stringify({ ...jsonParse(existing.metadata, {}), ...metadata }),
+      now,
+      existing.id,
+    )
+    return suggestionKey
+  }
+  const confidence = 55
+  db.prepare(`
+    INSERT INTO vehicle_source_rule_suggestions (
+      suggestion_key, rule_type, scope, supplier_name, source_key, source_value,
+      target_field, target_value, change_type, evidence_count, confidence_score,
+      status, metadata, created_by, created_at, updated_at
+    ) VALUES (?, ?, 'supplier', ?, ?, ?, ?, ?, ?, 1, ?, 'pending', ?, ?, ?, ?)
+  `).run(
+    suggestionKey,
+    suggestion.ruleType,
+    supplierName,
+    change.fieldName,
+    suggestion.sourceValue,
+    suggestion.targetField,
+    suggestion.targetValue,
+    change.changeType,
+    confidence,
+    JSON.stringify(metadata),
+    actor,
+    now,
+    now,
+  )
+  return suggestionKey
+}
+
+function profileLabel(db, profileId) {
+  if (!profileId) return ''
+  const profile = db.prepare('SELECT id, brand, model, year, trim FROM vehicle_profiles WHERE id = ?').get(profileId)
+  return profile ? `${profile.brand} ${profile.model} ${profile.year} ${profile.trim}` : String(profileId)
+}
+
+function recordFieldChanges(db, oldRow, updated, actor) {
+  const batch = db.prepare('SELECT supplier_name FROM vehicle_source_import_batches WHERE id = ?').get(oldRow.batch_id)
+  const supplierName = batch?.supplier_name ?? ''
+  const now = new Date().toISOString()
+  const insert = db.prepare(`
+    INSERT INTO vehicle_source_field_changes (
+      candidate_id, batch_id, supplier_name, field_name, field_label,
+      before_value, after_value, change_type, source_presence,
+      suggestion_key, created_by, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  const changes = []
+  for (const [apiField, column, label] of FIELD_CHANGE_FIELDS) {
+    const beforeRaw = column === 'profile_id' ? oldRow[column] : oldRow[column]
+    const afterRaw = updated[apiField]
+    const beforeValue = column === 'profile_id'
+      ? profileLabel(db, beforeRaw)
+      : apiField === 'canPreorder'
+        ? (oldRow.can_preorder ? '是' : '否')
+        : displayValue(beforeRaw)
+    const afterValue = column === 'profile_id'
+      ? profileLabel(db, afterRaw)
+      : apiField === 'canPreorder'
+        ? (updated.canPreorder ? '是' : '否')
+        : displayValue(afterRaw)
+    if (valuesEqualForExperience(beforeValue, afterValue)) continue
+    const changeType = classifyFieldChange(apiField, beforeValue, afterValue)
+    const sourcePresence = beforeValue ? 'present_in_parsed_source' : 'missing_in_parsed_source'
+    const change = {
+      candidateId: Number(oldRow.id),
+      batchId: Number(oldRow.batch_id),
+      supplierName,
+      fieldName: apiField,
+      fieldLabel: label,
+      beforeValue,
+      afterValue,
+      afterRaw,
+      afterLabel: afterValue,
+      previousModelName: oldRow.model_name,
+      changeType,
+      sourcePresence,
+    }
+    const suggestionKey = upsertRuleSuggestion(db, change, actor)
+    const result = insert.run(
+      change.candidateId,
+      change.batchId,
+      supplierName,
+      apiField,
+      label,
+      beforeValue,
+      afterValue,
+      changeType,
+      sourcePresence,
+      suggestionKey,
+      actor,
+      now,
+    )
+    changes.push({ ...change, id: Number(result.lastInsertRowid), suggestionKey })
+  }
+  return changes
+}
+
 function audit(db, entityType, entityId, action, actor, beforeValue, afterValue) {
   db.prepare(`
     INSERT INTO vehicle_source_audit_logs (
@@ -1849,6 +2181,40 @@ function exportBatchWorkbook(db, batchId) {
       '使用次数': rule.usageCount,
     }))
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(ruleRows), '沉淀规则')
+  const changeRows = db.prepare(`
+    SELECT * FROM vehicle_source_field_changes
+    WHERE batch_id = ?
+    ORDER BY id DESC
+  `).all(batch.id).map((change) => ({
+    '候选ID': Number(change.candidate_id),
+    '供应商': change.supplier_name,
+    '字段': change.field_label || change.field_name,
+    '修改前': change.before_value,
+    '修改后': change.after_value,
+    '修改类型': change.change_type,
+    '来源判断': change.source_presence,
+    '规则建议Key': change.suggestion_key,
+    '修改人': change.created_by,
+    '修改时间': change.created_at,
+  }))
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(changeRows), '字段修改记录')
+  const suggestionRows = db.prepare(`
+    SELECT * FROM vehicle_source_rule_suggestions
+    ORDER BY updated_at DESC
+    LIMIT 300
+  `).all().map(serializeRuleSuggestion).map((suggestion) => ({
+    '建议类型': suggestion.ruleType,
+    '状态': suggestion.status,
+    '供应商': suggestion.supplierName,
+    '原始值': suggestion.sourceValue,
+    '目标字段': suggestion.targetField,
+    '目标值': suggestion.targetValue,
+    '修改类型': suggestion.changeType,
+    '证据次数': suggestion.evidenceCount,
+    '置信度': suggestion.confidenceScore,
+    '更新时间': suggestion.updatedAt,
+  }))
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(suggestionRows), '规则建议')
   return {
     filename: `${batch.supplier_name || 'source'}-${batch.id}-standard.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
     buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
@@ -1986,6 +2352,21 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       ORDER BY id DESC
       LIMIT 80
     `).all().map(serializeRule)
+    const ruleSuggestions = db.prepare(`
+      SELECT * FROM vehicle_source_rule_suggestions
+      WHERE status = 'pending'
+        AND evidence_count >= ?
+      ORDER BY confidence_score DESC, evidence_count DESC, updated_at DESC
+      LIMIT 30
+    `).all(SUGGESTION_EVIDENCE_THRESHOLD).map(serializeRuleSuggestion)
+    const experienceMetrics = db.prepare(`
+      SELECT
+        COUNT(*) AS total_changes,
+        SUM(CASE WHEN change_type = 'recognition_correction' THEN 1 ELSE 0 END) AS recognition_corrections,
+        SUM(CASE WHEN change_type = 'human_supplement' THEN 1 ELSE 0 END) AS human_supplements,
+        SUM(CASE WHEN change_type = 'profile_match_correction' THEN 1 ELSE 0 END) AS profile_corrections
+      FROM vehicle_source_field_changes
+    `).get()
     const metrics = db.prepare(`
       SELECT
         COUNT(*) AS total,
@@ -1997,13 +2378,59 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       batches,
       suppliers,
       rules,
+      ruleSuggestions,
       aiStatus: getAiImportStatus(),
       metrics: {
         totalCandidates: Number(metrics.total ?? 0),
         needsReview: Number(metrics.needs_review ?? 0),
         duplicateRisk: Number(metrics.duplicate_risk ?? 0),
+        totalFieldChanges: Number(experienceMetrics.total_changes ?? 0),
+        recognitionCorrections: Number(experienceMetrics.recognition_corrections ?? 0),
+        humanSupplements: Number(experienceMetrics.human_supplements ?? 0),
+        profileCorrections: Number(experienceMetrics.profile_corrections ?? 0),
       },
     })
+  })
+
+  app.patch('/api/source-imports/rule-suggestions/:suggestionId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const suggestion = db.prepare('SELECT * FROM vehicle_source_rule_suggestions WHERE id = ?').get(req.params.suggestionId)
+    if (!suggestion) return res.status(404).json({ error: '规则建议不存在' })
+    const action = compactText(req.body?.action)
+    const now = new Date().toISOString()
+    if (!['remember_supplier', 'remember_global', 'snooze', 'ignore'].includes(action)) {
+      return res.status(400).json({ error: '规则建议处理动作无效' })
+    }
+    db.exec('BEGIN')
+    try {
+      let ruleId = null
+      if (action === 'remember_supplier' || action === 'remember_global') {
+        ruleId = createRule(db, {
+          ruleType: suggestion.rule_type,
+          scope: action === 'remember_global' ? 'global' : 'supplier',
+          supplierName: action === 'remember_global' ? '' : suggestion.supplier_name,
+          sourceKey: suggestion.source_key,
+          sourceValue: suggestion.source_value,
+          targetField: suggestion.target_field,
+          targetValue: suggestion.target_value,
+          metadata: jsonParse(suggestion.metadata, {}),
+          confidence: `suggested_${suggestion.confidence_score}`,
+          createdBy: req.user.username,
+        })
+      }
+      const status = action === 'snooze' ? 'snoozed' : action === 'ignore' ? 'ignored' : 'accepted'
+      db.prepare(`
+        UPDATE vehicle_source_rule_suggestions
+        SET status = ?, decided_by = ?, decided_at = ?, updated_at = ?
+        WHERE id = ?
+      `).run(status, req.user.username, now, now, suggestion.id)
+      audit(db, 'rule_suggestion', suggestion.id, action, req.user.username, serializeRuleSuggestion(suggestion), { ruleId, status })
+      db.exec('COMMIT')
+      const updated = db.prepare('SELECT * FROM vehicle_source_rule_suggestions WHERE id = ?').get(suggestion.id)
+      res.json({ suggestion: serializeRuleSuggestion(updated), ruleId })
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   })
 
   app.get('/api/source-imports/ai/status', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -2188,13 +2615,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       const fileId = Number(fileResult.lastInsertRowid)
       try {
         const parserContext = { supplierName, rules }
-        const parsed = await parseFileWithOptionalAi({
+        const parsed = withRuleHitNotes(await parseFileWithOptionalAi({
           file,
           storedPath,
           extension,
           context: parserContext,
           aiMode,
-        })
+        }))
         parsedCandidatesForName.push(...parsed.candidates)
         const insertContext = { batchId, snapshotId, fileId, supplierName, rules }
         for (const candidate of parsed.candidates) insertCandidate(db, candidate, insertContext)
@@ -2330,6 +2757,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       if (input.saveRuleScope && input.saveRuleScope !== 'none') {
         saveCorrectionRules(db, existing, updated, input.saveRuleScope, req.user.username)
       }
+      recordFieldChanges(db, existing, updated, req.user.username)
       syncCandidateToVehicleInventory(db, existing.id, req.user.username)
       audit(db, 'candidate', existing.id, 'update_candidate', req.user.username, serializeCandidate(existing), updated)
       db.exec('COMMIT')

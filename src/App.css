@@ -369,7 +369,7 @@
 .source-import-summary {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .source-batch-toolbar {
@@ -774,25 +774,28 @@
 .source-lower-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.7fr) minmax(300px, 0.9fr);
 }
 
 .duplicate-panel,
-.rules-panel {
+.rules-panel,
+.rule-suggestions-panel {
   display: grid;
   gap: 10px;
   padding: 14px;
 }
 
 .duplicate-panel header strong,
-.rules-panel header strong {
+.rules-panel header strong,
+.rule-suggestions-panel header strong {
   align-items: center;
   display: inline-flex;
   gap: 6px;
 }
 
 .duplicate-panel article,
-.rules-panel div {
+.rules-panel div,
+.rule-suggestions-panel article {
   background: #fbfdff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -802,22 +805,31 @@
 }
 
 .duplicate-panel article > div:first-child,
-.rules-panel div {
+.rules-panel div,
+.rule-suggestions-panel article > div:first-child {
   display: grid;
   gap: 4px;
 }
 
-.duplicate-panel article > div:last-child {
+.duplicate-panel article > div:last-child,
+.suggestion-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.duplicate-panel button {
+.duplicate-panel button,
+.rule-suggestions-panel button {
   background: #e2e8f0;
   color: #102033;
   font-size: 12px;
   padding: 8px 10px;
+}
+
+.rule-suggestions-panel .danger-outline {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #be123c;
 }
 
 @media (max-width: 1180px) {

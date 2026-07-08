@@ -72,6 +72,10 @@ type Permissions = {
   canRequestQuote: boolean
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 type StaffUser = {
   id: number
   username: string
@@ -487,6 +491,28 @@ type SourceImportRule = {
   updatedAt: string
 }
 
+type SourceImportRuleSuggestion = {
+  id: number
+  suggestionKey: string
+  ruleType: string
+  scope: string
+  supplierName: string
+  sourceKey: string
+  sourceValue: string
+  targetField: string
+  targetValue: string
+  changeType: string
+  evidenceCount: number
+  confidenceScore: number
+  status: string
+  metadata: Record<string, unknown>
+  createdBy: string
+  decidedBy: string
+  decidedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 type SourceImportAiStatus = {
   enabled: boolean
   provider: string
@@ -531,11 +557,16 @@ type SourceImportListResponse = {
   batches: SourceImportBatch[]
   suppliers: SourceSupplier[]
   rules: SourceImportRule[]
+  ruleSuggestions: SourceImportRuleSuggestion[]
   aiStatus: SourceImportAiStatus
   metrics: {
     totalCandidates: number
     needsReview: number
     duplicateRisk: number
+    totalFieldChanges: number
+    recognitionCorrections: number
+    humanSupplements: number
+    profileCorrections: number
   }
 }
 
@@ -1346,8 +1377,8 @@ function App() {
                           method: 'POST',
                           body: JSON.stringify({ exchangeRate: newRate }),
                         })
-                      } catch (err: any) {
-                        showToast(err.message || '汇率更新失败', 'error')
+                      } catch (err: unknown) {
+                        showToast(getErrorMessage(err, '汇率更新失败'), 'error')
                       }
                     }
                   }}
@@ -1868,6 +1899,28 @@ function issueLabel(issue: string) {
   return labels[issue] ?? issue
 }
 
+function ruleTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    value_alias: '值别名',
+    profile_alias: '车型匹配',
+    supplier_default: '供应商默认值',
+    supplier_same_origin: '同源判断',
+    field_mapping: '字段映射',
+  }
+  return labels[type] ?? type
+}
+
+function changeTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    recognition_correction: '识别纠错',
+    human_supplement: '人工补充',
+    profile_match_correction: '车型匹配纠正',
+    human_rejection: '人工驳回',
+    manual_clear: '人工清空',
+  }
+  return labels[type] ?? type
+}
+
 function SourceImportWorkbench({
   currentUser,
   profiles,
@@ -1919,8 +1972,8 @@ function SourceImportWorkbench({
       setEditingBatch(null)
       await loadList()
       await loadBatch(editingBatch.id)
-    } catch (e: any) {
-      showToast(e.message || '编辑失败', 'error')
+    } catch (e: unknown) {
+      showToast(getErrorMessage(e, '编辑失败'), 'error')
     } finally {
       setBusy(false)
     }
@@ -1945,8 +1998,8 @@ function SourceImportWorkbench({
       setDetail(null)
       await loadList()
       await onChanged()
-    } catch (e: any) {
-      showToast(e.message || '删除失败', 'error')
+    } catch (e: unknown) {
+      showToast(getErrorMessage(e, '删除失败'), 'error')
     } finally {
       setBusy(false)
     }
@@ -2102,14 +2155,39 @@ function SourceImportWorkbench({
     await loadList()
   }
 
-  const filteredCandidates = useMemo(() => {
-    const candidates = detail?.candidates ?? []
-    if (candidateFilter === 'all') return candidates
-    if (candidateFilter === 'issues') return candidates.filter((candidate) => candidate.issueTags.length > 0)
-    if (candidateFilter === 'duplicates') return candidates.filter((candidate) => candidate.issueTags.includes('duplicate_risk'))
-    if (candidateFilter === 'missing') return candidates.filter((candidate) => candidate.changeStatus === 'missing_from_latest_snapshot')
-    return candidates.filter((candidate) => candidate.reviewStatus === candidateFilter)
-  }, [detail, candidateFilter])
+  async function resolveRuleSuggestion(
+    suggestionId: number,
+    action: 'remember_supplier' | 'remember_global' | 'snooze' | 'ignore',
+  ) {
+    try {
+      await api(`/api/source-imports/rule-suggestions/${suggestionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action }),
+      })
+      const actionText: Record<typeof action, string> = {
+        remember_supplier: '已记住为供应商规则',
+        remember_global: '已记住为全局规则',
+        snooze: '已暂不处理',
+        ignore: '已忽略该建议',
+      }
+      showToast(actionText[action], 'success')
+      await loadList()
+    } catch (e: unknown) {
+      showToast(getErrorMessage(e, '规则建议处理失败'), 'error')
+    }
+  }
+
+  const candidates = detail?.candidates ?? []
+  const filteredCandidates =
+    candidateFilter === 'all'
+      ? candidates
+      : candidateFilter === 'issues'
+        ? candidates.filter((candidate) => candidate.issueTags.length > 0)
+        : candidateFilter === 'duplicates'
+          ? candidates.filter((candidate) => candidate.issueTags.includes('duplicate_risk'))
+          : candidateFilter === 'missing'
+            ? candidates.filter((candidate) => candidate.changeStatus === 'missing_from_latest_snapshot')
+            : candidates.filter((candidate) => candidate.reviewStatus === candidateFilter)
 
   const selectedCandidate = detail?.candidates.find((candidate) => candidate.id === selectedCandidateId) ?? null
   const aiStatus = list?.aiStatus
@@ -2273,6 +2351,7 @@ function SourceImportWorkbench({
                 <Metric label="待处理" value={`${detail.batch.summary.needsReview}`} note={`${detail.batch.summary.withIssues} 条带问题标签`} />
                 <Metric label="同源风险" value={`${detail.duplicates.filter((duplicate) => duplicate.status !== 'resolved').length}`} note="跨供应商疑似重复" />
                 <Metric label="快照变化" value={`${detail.snapshots[0]?.changedCount ?? 0}`} note={`${detail.snapshots[0]?.missingCount ?? 0} 条本次未出现`} />
+                <Metric label="经验记录" value={`${list?.metrics.totalFieldChanges ?? 0}`} note={`${list?.metrics.recognitionCorrections ?? 0} 次纠错 · ${list?.metrics.humanSupplements ?? 0} 次补充`} />
               </div>
               <div className="source-batch-toolbar">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -2439,6 +2518,35 @@ function SourceImportWorkbench({
                   ))}
                   {list?.rules.length === 0 && <p>人工确认和修正后，系统会在这里自动沉淀规则。</p>}
                 </section>
+                <section className="rule-suggestions-panel">
+                  <header>
+                    <strong><Sparkles size={16} /> 规则建议</strong>
+                    <span>{list?.ruleSuggestions.length ?? 0} 条待确认</span>
+                  </header>
+                  {list?.ruleSuggestions.length ? (
+                    list.ruleSuggestions.slice(0, 8).map((suggestion) => (
+                      <article key={suggestion.id}>
+                        <div>
+                          <strong>{suggestion.sourceValue || '空值'} → {suggestion.targetValue}</strong>
+                          <span>
+                            {ruleTypeLabel(suggestion.ruleType)} · {changeTypeLabel(suggestion.changeType)} ·
+                            {suggestion.supplierName ? ` ${suggestion.supplierName}` : ' 全局'} ·
+                            {suggestion.targetField}
+                          </span>
+                          <small>{suggestion.evidenceCount} 次相同修改 · 置信度 {suggestion.confidenceScore}%</small>
+                        </div>
+                        <div className="suggestion-actions">
+                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'remember_supplier')} type="button">记住给供应商</button>
+                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'remember_global')} type="button">记住全局</button>
+                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'snooze')} type="button">稍后</button>
+                          <button className="danger-outline" onClick={() => void resolveRuleSuggestion(suggestion.id, 'ignore')} type="button">忽略</button>
+                        </div>
+                      </article>
+                    ))
+                  ) : (
+                    <p>修改记录累计到一定次数后，系统会在这里集中提出可沉淀的规则建议。</p>
+                  )}
+                </section>
               </div>
             </>
           ) : (
@@ -2590,7 +2698,7 @@ function CandidateEditor({
 }) {
   const { statusLabel } = useI18n()
   const [draft, setDraft] = useState<SourceImportCandidate | null>(candidate)
-  const [saveRuleScope, setSaveRuleScope] = useState<'none' | 'supplier' | 'global'>('supplier')
+  const [saveRuleScope, setSaveRuleScope] = useState<'none' | 'supplier' | 'global'>('none')
   const [busy, setBusy] = useState(false)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -2726,11 +2834,11 @@ function CandidateEditor({
         <div className="footer-left">
           <label className="candidate-notes">备注<textarea onChange={(event) => update('notes', event.target.value)} value={draft.notes} /></label>
           <div className="rule-save-mode">
-            <span>本次修正如何沉淀</span>
+            <span>立即沉淀为正式规则</span>
             <select onChange={(event) => setSaveRuleScope(event.target.value as 'none' | 'supplier' | 'global')} value={saveRuleScope}>
-              <option value="none">仅修改本次</option>
-              <option value="supplier">保存为该供应商规则</option>
-              <option value="global">保存为全局规则</option>
+              <option value="none">不立即沉淀，进入经验池</option>
+              <option value="supplier">直接保存为该供应商规则</option>
+              <option value="global">直接保存为全局规则</option>
             </select>
           </div>
         </div>
