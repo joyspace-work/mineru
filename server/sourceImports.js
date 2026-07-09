@@ -2627,9 +2627,10 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         }
       }
 
-      // 3. Delete duplicates
+      // 3. Delete duplicate links and field-change records tied to these candidates
       db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
-      db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE duplicate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
+      db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE matched_candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
+      db.prepare('DELETE FROM vehicle_source_field_changes WHERE batch_id = ?').run(batchId)
       
       // 4. Delete candidates
       db.prepare('DELETE FROM vehicle_source_candidates WHERE batch_id = ?').run(batchId)
