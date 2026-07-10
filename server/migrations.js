@@ -155,9 +155,10 @@ const MIGRATIONS = [
     id: 9,
     name: 'vehicle_source_candidates: add dual price columns (price_exw, price_fob)',
     up(db) {
-      // price_exw / price_fob on candidates = raw supplier quoted price from import file
-      // Trade-term context: any non-FOB term (EXW, FCA, DAP, CIF, empty) is mapped to price_exw
-      // as a conservative default. FOB-explicit records go to price_fob.
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return // table created lazily by sourceImports.js
       const cols = [
         ['price_exw', 'REAL'],
         ['price_exw_currency', 'TEXT'],
@@ -179,10 +180,10 @@ const MIGRATIONS = [
     id: 10,
     name: 'vehicle_source_candidates: back-fill price_exw/fob from legacy supplier_price',
     up(db) {
-      // FOB-explicit records → price_fob; everything else → price_exw
-      // This covers trade_term values: EXW, FCA, DAP, CIF, '' (empty), NULL
-      // Reasoning: if a supplier gives a price without specifying FOB, the price is
-      // typically at or near factory-gate (EXW/FCA), so defaulting to price_exw is safe.
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return
       db.prepare(`
         UPDATE vehicle_source_candidates
         SET price_exw = supplier_price,
@@ -239,28 +240,33 @@ const MIGRATIONS = [
         }
       }
 
-      const candidateCols = [
-        ['price_fca', 'REAL'],
-        ['price_fca_currency', 'TEXT'],
-        ['official_price', 'TEXT'],
-      ]
-      const candidateExisting = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
-      for (const [name, def] of candidateCols) {
-        if (!candidateExisting.includes(name)) {
-          db.exec(`ALTER TABLE vehicle_source_candidates ADD COLUMN ${name} ${def}`)
+      const candidateTableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (candidateTableExists) {
+        const candidateCols = [
+          ['price_fca', 'REAL'],
+          ['price_fca_currency', 'TEXT'],
+          ['official_price', 'TEXT'],
+        ]
+        const candidateExisting = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+        for (const [name, def] of candidateCols) {
+          if (!candidateExisting.includes(name)) {
+            db.exec(`ALTER TABLE vehicle_source_candidates ADD COLUMN ${name} ${def}`)
+          }
         }
-      }
 
-      db.prepare(`
-        UPDATE vehicle_source_candidates
-        SET price_fca = price_exw,
-            price_fca_currency = price_exw_currency,
-            price_exw = NULL,
-            price_exw_currency = NULL
-        WHERE trade_term = 'FCA'
-          AND price_fca IS NULL
-          AND price_exw IS NOT NULL
-      `).run()
+        db.prepare(`
+          UPDATE vehicle_source_candidates
+          SET price_fca = price_exw,
+              price_fca_currency = price_exw_currency,
+              price_exw = NULL,
+              price_exw_currency = NULL
+          WHERE trade_term = 'FCA'
+            AND price_fca IS NULL
+            AND price_exw IS NOT NULL
+        `).run()
+      }
 
       db.prepare(`
         UPDATE supplier_sources
@@ -272,6 +278,30 @@ const MIGRATIONS = [
           AND price_fca IS NULL
           AND price_exw IS NOT NULL
       `).run()
+    },
+  },
+  {
+    id: 13,
+    name: 'vehicle_source_candidates: add feishu_record_id column',
+    up(db) {
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return
+      const existing = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+      if (!existing.includes('feishu_record_id')) {
+        db.exec('ALTER TABLE vehicle_source_candidates ADD COLUMN feishu_record_id TEXT')
+      }
+    },
+  },
+  {
+    id: 14,
+    name: 'add nl_text to vehicle_source_rules',
+    up(db) {
+      const existing = db.prepare('PRAGMA table_info(vehicle_source_rules)').all().map((c) => c.name)
+      if (!existing.includes('nl_text')) {
+        db.exec('ALTER TABLE vehicle_source_rules ADD COLUMN nl_text TEXT NOT NULL DEFAULT \'\'')
+      }
     },
   },
 ]

@@ -1,7 +1,8 @@
 import multer from 'multer'
 import XLSX from 'xlsx'
-import { mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
+import { execSync, execFileSync } from 'node:child_process'
 
 function loadLocalEnvFile() {
   try {
@@ -170,31 +171,35 @@ function getAiProviderConfig() {
       : 'openai')
   ).toLowerCase()
 
+  let config
   if (provider === 'gemini') {
-    return {
+    config = {
       provider,
       enabled: Boolean(process.env.GEMINI_API_KEY),
       apiKey: process.env.GEMINI_API_KEY || '',
       model: process.env.GEMINI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gemini-2.5-flash',
       baseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai').replace(/\/$/, ''),
     }
-  }
-  if (provider === 'openrouter') {
-    return {
+  } else if (provider === 'openrouter') {
+    config = {
       provider,
       enabled: Boolean(process.env.OPENROUTER_API_KEY),
       apiKey: process.env.OPENROUTER_API_KEY || '',
       model: process.env.OPENROUTER_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'openrouter/free',
       baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     }
+  } else {
+    config = {
+      provider: 'openai',
+      enabled: Boolean(process.env.OPENAI_API_KEY),
+      apiKey: process.env.OPENAI_API_KEY || '',
+      model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gpt-4.1-mini',
+      baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
+    }
   }
-  return {
-    provider: 'openai',
-    enabled: Boolean(process.env.OPENAI_API_KEY),
-    apiKey: process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gpt-4.1-mini',
-    baseUrl: 'https://api.openai.com/v1',
-  }
+
+  process.stderr.write('[AI Config] provider=' + config.provider + ' baseUrl=' + config.baseUrl + ' model=' + config.model + ' enabled=' + config.enabled + '\n')
+  return config
 }
 
 const AI_SUPPORTED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
@@ -237,7 +242,8 @@ function initSourceImportTables(db) {
       is_active INTEGER NOT NULL DEFAULT 1,
       created_by TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      feishu_record_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS vehicle_source_import_files (
@@ -319,8 +325,7 @@ function initSourceImportTables(db) {
       updated_at TEXT NOT NULL,
       FOREIGN KEY (batch_id) REFERENCES vehicle_source_import_batches(id),
       FOREIGN KEY (snapshot_id) REFERENCES vehicle_source_snapshots(id),
-      FOREIGN KEY (file_id) REFERENCES vehicle_source_import_files(id),
-      FOREIGN KEY (profile_id) REFERENCES vehicle_profiles(id)
+      FOREIGN KEY (file_id) REFERENCES vehicle_source_import_files(id)
     );
 
     CREATE TABLE IF NOT EXISTS vehicle_source_duplicate_links (
@@ -866,21 +871,22 @@ async function callOpenRouterSourceImportAi({ filePath, file, text, context, mod
     requestBody.response_format = { type: 'json_object' }
   }
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 180000)
+  const timeoutId = setTimeout(() => controller.abort(), 300000)
   let response
   try {
     response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://127.0.0.1:5173',
-      'X-Title': 'EV Export Management Source Import',
-    },
-    body: JSON.stringify(requestBody),
-    signal: controller.signal,
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://127.0.0.1:5173',
+        'X-Title': 'EV Export Management Source Import',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
     })
   } catch (error) {
+    clearTimeout(timeoutId)
     if (error.name === 'AbortError') throw new Error('OpenRouter AI 解析超时，请稍后重试或更换更稳定的视觉模型')
     throw error
   } finally {
@@ -900,42 +906,53 @@ async function callOpenRouterSourceImportAi({ filePath, file, text, context, mod
 
 async function callOpenAiSourceImportAi({ filePath, file, text, context, mode, config }) {
   const extension = extname(file.originalname).toLowerCase()
-  const content = [{
-    type: 'input_text',
-    text: sourceImportPrompt({ text, context, mode }),
-  }]
+  const content = [{ type: 'text', text: sourceImportPrompt({ text, context, mode }) }]
   if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
     content.push({
-      type: 'input_image',
-      image_url: buildImageDataUrl(filePath, file, extension),
+      type: 'image_url',
+      image_url: { url: buildImageDataUrl(filePath, file, extension) },
     })
   }
-  const response = await fetch(`${config.baseUrl}/responses`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: config.model,
-      input: [{
-        role: 'user',
-        content,
-      }],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'vehicle_source_parse',
-          schema: sourceImportJsonSchema(),
-        },
+  const requestBody = {
+    model: config.model,
+    messages: [{ role: 'user', content }],
+  }
+  if (!AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
+    requestBody.response_format = { type: 'json_object' }
+  }
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 300000)
+  let response
+  try {
+    process.stderr.write('[AI] Calling ' + config.model + '...\n')
+    const startTime = Date.now()
+    response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
       },
-    }),
-  })
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    })
+    process.stderr.write('[AI] Response in ' + ((Date.now() - startTime) / 1000).toFixed(1) + 's\n')
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error.name === 'AbortError') throw new Error('AI 解析超时，请稍后重试或使用更小的图片')
+    throw error
+  }
+  clearTimeout(timeoutId)
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
+    process.stderr.write('[AI Error] ' + JSON.stringify(body).slice(0, 500) + '\n')
     throw new Error(body?.error?.message || `AI 解析失败：HTTP ${response.status}`)
   }
-  return extractJsonObject(extractResponseText(body))
+  const responseText = body?.choices?.[0]?.message?.content
+  return extractJsonObject(responseText) ?? {
+    rawText: responseText,
+    parserNotes: 'AI返回了非JSON文本，系统已按OCR文本继续拆字段。',
+    candidates: parseTextContent(responseText, { ...context, sourceSheet: 'AI OCR文本' }).candidates,
+  }
 }
 
 async function callGeminiSourceImportAi({ filePath, file, text, context, mode, config }) {
@@ -1085,6 +1102,8 @@ function findProfileMatch(db, candidate, rules, supplierName) {
       }
     }
   }
+  const profileTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_profiles'").get()
+  if (!profileTableExists) return { profileId: null, matchStatus: 'no_profiles', matchConfidence: 0 }
   const profiles = db.prepare('SELECT id, brand, model, year, trim FROM vehicle_profiles').all()
   let best = { profileId: null, score: 0 }
   const sourceModel = `${candidate.brand} ${candidate.modelName}`
@@ -1164,6 +1183,7 @@ function serializeCandidate(row) {
     canonicalAction: row.canonical_action,
     reviewedBy: row.reviewed_by,
     reviewedAt: row.reviewed_at,
+    feishuRecordId: row.feishu_record_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1320,7 +1340,9 @@ function ensureSupplier(db, supplierName, actor = '') {
       supplier_name, created_by, created_at, updated_at
     ) VALUES (?, ?, ?, ?)
   `).run(normalizedName, actor, now, now)
-  return db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(result.lastInsertRowid)
+  const created = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(result.lastInsertRowid)
+  try { syncSupplierToFeishuBase(db, created.id) } catch (e) { /* sync best-effort */ }
+  return created
 }
 
 const SNAPSHOT_RANGE_PATTERNS = [
@@ -1616,6 +1638,9 @@ async function parseFileWithOptionalAi({ file, storedPath, extension, context, a
       parserNotes: `AI 解析未完成，已使用传统规则结果 ${traditional.candidates.length} 条。原因：${error.message}`,
     }
   }
+
+  process.stderr.write('[AI Config] provider=' + config.provider + ' baseUrl=' + config.baseUrl + ' model=' + config.model + ' enabled=' + config.enabled + '\n')
+  return config
 }
 
 function withRuleHitNotes(parsed) {
@@ -1626,6 +1651,59 @@ function withRuleHitNotes(parsed) {
     ...parsed,
     parserNotes: [notes, `本次应用历史规则 ${hitCount} 次。`].filter(Boolean).join(' '),
   }
+}
+
+function splitCandidateByColor(candidate) {
+  const ext = String(candidate.exteriorColor || '').trim()
+  const intr = String(candidate.interiorColor || '').trim()
+  const qty = Math.max(0, Math.floor(Number(candidate.stockQuantity) || 0))
+  
+  // Try to parse quantity-prefixed color combos like "20白/灰+10灰/灰"
+  const parsed = parseColorPairsWithQty(ext, intr)
+  if (parsed.length <= 1) {
+    // Fall back to simple color-only parsing
+    const pairs = parseColorPairs(ext, intr)
+    if (pairs.length <= 1) return [candidate]
+    const splitQty = qty > 0 ? Math.floor(qty / pairs.length) : 0
+    const remainder = qty > 0 ? qty % pairs.length : 0
+    return pairs.map(([exterior, interior], index) => ({
+      ...candidate, exteriorColor: exterior, interiorColor: interior || '',
+      stockQuantity: splitQty + (index === 0 ? remainder : 0),
+    }))
+  }
+  return parsed.map(p => ({ ...candidate, exteriorColor: p.exteriorColor, interiorColor: p.interiorColor, stockQuantity: p.stockQuantity }))
+}
+
+function parseColorPairsWithQty(exterior, interior) {
+  // Pattern: "20白/灰+10灰/灰" or "20白+10灰"
+  // Split by + to get individual combos
+  const results = []
+  const parts = (exterior || '').split(/[+]/).map(s => s.trim()).filter(Boolean)
+  for (const part of parts) {
+    // Extract leading number
+    const numMatch = part.match(/^(\d+)\s*(.*)/)
+    if (!numMatch) continue
+    const qty = parseInt(numMatch[1], 10)
+    const rest = numMatch[2].trim()
+    // Split by / to get exterior/interior
+    const sub = rest.split('/').map(s => s.trim()).filter(Boolean)
+    const extColor = sub[0] || ''
+    const intColor = sub[1] || ''
+    results.push({ exteriorColor: extColor, interiorColor: intColor, stockQuantity: qty })
+  }
+  return results
+}
+
+function parseColorPairs(exterior, interior) {
+  const comboParts = interior ? interior.split(/[,，、;；]/).map(s => s.trim()).filter(Boolean) : []
+  const extParts = exterior ? exterior.split(/[,，、;；]/).map(s => s.trim()).filter(Boolean) : []
+  if (comboParts.length > 1) return comboParts.map(part => { const sub = part.split('/'); return [extParts[0] || sub[0] || '', sub[1] || sub[0] || ''] })
+  if (extParts.length > 1) return extParts.map(part => { const sub = part.split('/'); const interiorFromIntr = interior ? interior.split('/')[0] || interior : ''; return [sub[0] || '', interiorFromIntr] })
+  if (exterior && interior) return [[exterior, interior]]
+  const extSplit = exterior ? exterior.split('/').map(s => s.trim()).filter(Boolean) : []
+  const intSplit = interior ? interior.split('/').map(s => s.trim()).filter(Boolean) : []
+  if (extSplit.length === 2 && intSplit.length === 2) return [[extSplit[0], intSplit[0]], [extSplit[1], intSplit[1]]]
+  return [[exterior || '', interior || '']]
 }
 
 function insertCandidate(db, candidate, context) {
@@ -1976,7 +2054,7 @@ function saveCorrectionRules(db, oldRow, updated, scope, actor) {
       createdBy: actor,
     }))
   }
-  if (oldRow.model_name && updated.profileId) {
+  if (oldRow.model_name && updated.profileId && db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_profiles'").get()) {
     const profile = db.prepare('SELECT id, brand, model, year, trim FROM vehicle_profiles WHERE id = ?').get(updated.profileId)
     if (profile) {
       created.push(createRule(db, {
@@ -2151,7 +2229,7 @@ function upsertRuleSuggestion(db, change, actor) {
 }
 
 function profileLabel(db, profileId) {
-  if (!profileId) return ''
+  if (!profileId || !db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_profiles'").get()) return String(profileId || '')
   const profile = db.prepare('SELECT id, brand, model, year, trim FROM vehicle_profiles WHERE id = ?').get(profileId)
   return profile ? `${profile.brand} ${profile.model} ${profile.year} ${profile.trim}` : String(profileId)
 }
@@ -2234,121 +2312,24 @@ function audit(db, entityType, entityId, action, actor, beforeValue, afterValue)
   )
 }
 
-function exportBatchWorkbook(db, batchId) {
-  const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
-  if (!batch) return null
-  const rows = db.prepare(`
-    SELECT c.*, f.original_name
-    FROM vehicle_source_candidates c
-    LEFT JOIN vehicle_source_import_files f ON f.id = c.file_id
-    WHERE c.batch_id = ?
-      AND c.review_status <> ?
-    ORDER BY c.change_status, c.id
-  `).all(batchId, REVIEW_STATUS.rejected)
-  const exportRows = rows.map((row) => ({
-    '供应商': batch.supplier_name,
-    '快照时间': batch.snapshot_time,
-    '审核状态': row.review_status,
-    '变化状态': row.change_status,
-    '车型匹配状态': row.match_status,
-    '匹配置信度': row.match_confidence,
-    '品牌': row.brand,
-    '车型': row.model_name,
-    '年款': row.year,
-    '配置版本': row.trim_name,
-    '外观色': row.exterior_color,
-    '内饰色': row.interior_color,
-    '数量': Number(row.stock_quantity),
-    '供应商价格': Number(row.supplier_price),
-    '币种': row.currency,
-    '贸易条款': row.trade_term,
-    'EXW价格': row.price_exw ? Number(row.price_exw) : '',
-    'EXW币种': row.price_exw_currency ?? '',
-    'FCA价格': row.price_fca ? Number(row.price_fca) : '',
-    'FCA币种': row.price_fca_currency ?? '',
-    'FOB价格': row.price_fob ? Number(row.price_fob) : '',
-    'FOB币种': row.price_fob_currency ?? '',
-    '官方指导价参考': row.official_price ?? '',
-    '库存地': row.location,
-    '可预订': row.can_preorder ? '是' : '否',
-    '预订最短天数': Number(row.preorder_min_days),
-    '预订最长天数': Number(row.preorder_max_days),
-    '同源处理': row.canonical_action,
-    '问题标签': jsonParse(row.issue_tags, []).join(', '),
-    '来源文件': row.original_name ?? '',
-    '来源表/页': row.source_sheet,
-    '来源行': Number(row.row_index),
-    '备注': row.notes,
-    '原始文本': row.raw_text,
-  }))
-  const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(exportRows), '标准车源')
-  const ruleRows = db.prepare('SELECT * FROM vehicle_source_rules WHERE status = "active" ORDER BY id DESC').all()
-    .map(serializeRule)
-    .map((rule) => ({
-      '规则类型': rule.ruleType,
-      '范围': rule.scope,
-      '供应商': rule.supplierName,
-      '原始值': rule.sourceValue,
-      '目标字段': rule.targetField,
-      '目标值': rule.targetValue,
-      '使用次数': rule.usageCount,
-    }))
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(ruleRows), '沉淀规则')
-  const changeRows = db.prepare(`
-    SELECT * FROM vehicle_source_field_changes
-    WHERE batch_id = ?
-    ORDER BY id DESC
-  `).all(batch.id).map((change) => ({
-    '候选ID': Number(change.candidate_id),
-    '供应商': change.supplier_name,
-    '字段': change.field_label || change.field_name,
-    '修改前': change.before_value,
-    '修改后': change.after_value,
-    '修改类型': change.change_type,
-    '来源判断': change.source_presence,
-    '规则建议Key': change.suggestion_key,
-    '修改人': change.created_by,
-    '修改时间': change.created_at,
-  }))
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(changeRows), '字段修改记录')
-  const suggestionRows = db.prepare(`
-    SELECT * FROM vehicle_source_rule_suggestions
-    ORDER BY updated_at DESC
-    LIMIT 300
-  `).all().map(serializeRuleSuggestion).map((suggestion) => ({
-    '建议类型': suggestion.ruleType,
-    '状态': suggestion.status,
-    '供应商': suggestion.supplierName,
-    '原始值': suggestion.sourceValue,
-    '目标字段': suggestion.targetField,
-    '目标值': suggestion.targetValue,
-    '修改类型': suggestion.changeType,
-    '证据次数': suggestion.evidenceCount,
-    '置信度': suggestion.confidenceScore,
-    '更新时间': suggestion.updatedAt,
-  }))
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(suggestionRows), '规则建议')
-  return {
-    filename: `${batch.supplier_name || 'source'}-${batch.id}-standard.xlsx`.replace(/[\\/:*?"<>|]/g, '_'),
-    buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
-  }
-}
 
 export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, dataDir }) {
   initSourceImportTables(db)
 
-  // One-time startup synchronization for existing approved candidates
-  try {
-    const approvedCandidates = db.prepare("SELECT id FROM vehicle_source_candidates WHERE review_status = 'approved'").all()
-    console.log(`[Startup Sync] Found ${approvedCandidates.length} approved candidates to sync...`)
-    for (const candidate of approvedCandidates) {
-      syncCandidateToVehicleInventory(db, candidate.id, 'system')
+  // Startup sync for unsynced approved candidates (async, non-blocking)
+  setTimeout(() => {
+    try {
+      const approvedCandidates = db.prepare("SELECT id FROM vehicle_source_candidates WHERE review_status = 'approved' AND feishu_record_id IS NULL").all()
+      if (approvedCandidates.length === 0) return
+      console.log(`[Startup Sync] Found ${approvedCandidates.length} unsynced approved candidates...`)
+      for (const candidate of approvedCandidates) {
+        syncCandidateToFeishuBase(db, candidate.id, 'system')
+      }
+      console.log('[Startup Sync] Successfully synced all approved candidates to Feishu Base.')
+    } catch (e) {
+      console.error('[Startup Sync] Error during approved candidates sync:', e)
     }
-    console.log('[Startup Sync] Successfully synced all approved candidates to vehicle inventory.')
-  } catch (e) {
-    console.error('[Startup Sync] Error during approved candidates sync:', e)
-  }
+  }, 1000)
 
   const sourceImportDir = resolve(dataDir, 'source-imports')
   const tempDir = resolve(sourceImportDir, '_tmp')
@@ -2394,6 +2375,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         now,
       )
       const created = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(result.lastInsertRowid)
+      try { syncSupplierToFeishuBase(db, created.id) } catch (e) { console.error('[Feishu] Supplier sync error:', e.message) }
       res.status(201).json({ supplier: serializeSupplier(created) })
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) {
@@ -2440,6 +2422,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         existing.id,
       )
       const updated = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(existing.id)
+      try { syncSupplierToFeishuBase(db, updated.id) } catch (e) { console.error('[Feishu] Supplier sync error:', e.message) }
       res.json({ supplier: serializeSupplier(updated) })
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) {
@@ -2447,6 +2430,58 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       }
       throw error
     }
+  })
+
+  app.delete('/api/source-imports/suppliers/:supplierId', requireAuth, requireRole('admin'), (req, res) => {
+    const existing = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(req.params.supplierId)
+    if (!existing) return res.status(404).json({ error: '供应商不存在' })
+
+    let feishuRecordId = existing.feishu_record_id
+
+    // If no feishu_record_id, try looking up by supplier name in Feishu
+    if (!feishuRecordId && existing.supplier_name) {
+      try {
+        const result = execSync(
+          `lark-cli base +record-list --base-token ${FEISHU_BASE_TOKEN} --table-id ${FEISHU_SUPPLIERS_TABLE_ID} --as user --limit 50 --format json`,
+          { encoding: 'utf8', timeout: 15000 },
+        )
+        const parsed = JSON.parse(result)
+        if (parsed.ok && parsed.data?.data?.length) {
+          const fields = parsed.data.fields || []
+          const records = parsed.data.data || []
+          const recordIds = parsed.data.record_id_list || []
+          for (let i = 0; i < records.length; i++) {
+            const vals = {}
+            if (Array.isArray(records[i])) {
+              fields.forEach((name, j) => { vals[name] = records[i][j] })
+            }
+            if (vals['Supplier Name'] === existing.supplier_name) {
+              feishuRecordId = recordIds[i]
+              break
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[Feishu] Lookup error:', e.message)
+      }
+    }
+
+    if (feishuRecordId) {
+      try {
+        execFileSync('lark-cli', [
+          'base', '+record-delete',
+          '--base-token', FEISHU_BASE_TOKEN,
+          '--table-id', FEISHU_SUPPLIERS_TABLE_ID,
+          '--as', 'user',
+          '--record-id', feishuRecordId,
+          '--yes',
+        ], { stdio: 'pipe', timeout: 15000 })
+      } catch (e) {
+        console.error('[Feishu] Delete error:', e.message)
+      }
+    }
+    db.prepare('DELETE FROM vehicle_source_suppliers WHERE id = ?').run(existing.id)
+    res.status(204).end()
   })
 
   app.get('/api/source-imports', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -2543,12 +2578,44 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       res.json({ suggestion: serializeRuleSuggestion(updated), ruleId })
     } catch (error) {
       db.exec('ROLLBACK')
-      throw error
+      console.error('[Batch Delete] Error:', error.message)
+      res.status(500).json({ error: '删除导入批次失败' })
     }
   })
 
   app.get('/api/source-imports/ai/status', requireAuth, requireRole('admin', 'sales'), (req, res) => {
     res.json(getAiImportStatus())
+  })
+
+  app.get('/api/source-imports/rules', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const rules = db.prepare('SELECT * FROM vehicle_source_rules ORDER BY id DESC').all().map(serializeRule)
+    res.json({ rules })
+  })
+
+  app.post('/api/source-imports/rules', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const { ruleType, scope, supplierName, sourceKey, sourceValue, targetField, targetValue } = req.body ?? {}
+    if (!ruleType || !targetField) return res.status(400).json({ error: '规则类型和目标字段为必填' })
+    const now = new Date().toISOString()
+    const result = db.prepare(`INSERT INTO vehicle_source_rules (rule_type, scope, supplier_name, source_key, source_value, target_field, target_value, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(ruleType, scope || 'global', supplierName || '', sourceKey || '', sourceValue || '', targetField, targetValue || '', req.user.username, now, now)
+    const rule = db.prepare('SELECT * FROM vehicle_source_rules WHERE id = ?').get(Number(result.lastInsertRowid))
+    res.status(201).json({ rule: serializeRule(rule) })
+  })
+
+  app.patch('/api/source-imports/rules/:ruleId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const existing = db.prepare('SELECT * FROM vehicle_source_rules WHERE id = ?').get(req.params.ruleId)
+    if (!existing) return res.status(404).json({ error: '规则不存在' })
+    const { ruleType, scope, supplierName, sourceKey, sourceValue, targetField, targetValue } = req.body ?? {}
+    const now = new Date().toISOString()
+    db.prepare(`UPDATE vehicle_source_rules SET rule_type = ?, scope = ?, supplier_name = ?, source_key = ?, source_value = ?, target_field = ?, target_value = ?, updated_at = ? WHERE id = ?`).run(ruleType ?? existing.rule_type, scope ?? existing.scope, supplierName ?? existing.supplier_name, sourceKey ?? existing.source_key, sourceValue ?? existing.source_value, targetField ?? existing.target_field, targetValue ?? existing.target_value, now, existing.id)
+    const rule = db.prepare('SELECT * FROM vehicle_source_rules WHERE id = ?').get(existing.id)
+    res.json({ rule: serializeRule(rule) })
+  })
+
+  app.delete('/api/source-imports/rules/:ruleId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    const existing = db.prepare('SELECT * FROM vehicle_source_rules WHERE id = ?').get(req.params.ruleId)
+    if (!existing) return res.status(404).json({ error: '规则不存在' })
+    db.prepare('DELETE FROM vehicle_source_rules WHERE id = ?').run(existing.id)
+    res.status(204).end()
   })
 
   app.get('/api/source-imports/batches/:batchId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -2610,38 +2677,21 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     const supplierName = batch.supplier_name
     db.exec('BEGIN')
     try {
-      // 1. Find all candidates from this batch
-      const candidates = db.prepare('SELECT id, profile_id FROM vehicle_source_candidates WHERE batch_id = ?').all(batchId)
-      
-      // 2. For each candidate, clean up supplier sources if they were approved
-      for (const candidate of candidates) {
-        if (candidate.profile_id) {
-          const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
-          for (const v of vehiclesMatching) {
-            db.prepare(`
-              DELETE FROM supplier_sources 
-              WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
-            `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
-            syncLocalVehicleAvailability(db, v.id, req.user.username)
-          }
-        }
-      }
-
-      // 3. Delete duplicate links and field-change records tied to these candidates
+      // Delete duplicate links and field-change records
       db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
       db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE matched_candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
       db.prepare('DELETE FROM vehicle_source_field_changes WHERE batch_id = ?').run(batchId)
       
-      // 4. Delete candidates
+      // Delete candidates
       db.prepare('DELETE FROM vehicle_source_candidates WHERE batch_id = ?').run(batchId)
       
-      // 5. Delete files
+      // Delete files
       db.prepare('DELETE FROM vehicle_source_import_files WHERE batch_id = ?').run(batchId)
       
-      // 6. Delete snapshots
+      // Delete snapshots
       db.prepare('DELETE FROM vehicle_source_snapshots WHERE batch_id = ?').run(batchId)
       
-      // 7. Delete batch
+      // Delete batch
       db.prepare('DELETE FROM vehicle_source_import_batches WHERE id = ?').run(batchId)
 
       // 8. Delete physical files from disk
@@ -2657,7 +2707,8 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       res.json({ success: true })
     } catch (error) {
       db.exec('ROLLBACK')
-      throw error
+      console.error('[Delete Batch] Error:', error.message)
+      res.status(500).json({ error: '删除批次失败' })
     }
   })
 
@@ -2739,7 +2790,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         }))
         parsedCandidatesForName.push(...parsed.candidates)
         const insertContext = { batchId, snapshotId, fileId, supplierName, rules }
-        for (const candidate of parsed.candidates) insertCandidate(db, candidate, insertContext)
+        for (const candidate of parsed.candidates) {
+          const splits = splitCandidateByColor(candidate)
+          for (const splitCandidate of splits) insertCandidate(db, splitCandidate, insertContext)
+          if (splits.length > 1) {
+            parsed.parserNotes = `${parsed.parserNotes || ''} 其中一条按配色拆成 ${splits.length} 条。`.trim()
+          }
+        }
         db.prepare(`
           UPDATE vehicle_source_import_files
           SET parse_status = 'parsed', parser_notes = ?, raw_text = ?
@@ -2783,7 +2840,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     `).run(needsReviewCount > 0 || duplicateCount > 0 ? SOURCE_IMPORT_STATUSES.needsReview : SOURCE_IMPORT_STATUSES.reviewed, new Date().toISOString(), batchId)
     audit(db, 'batch', batchId, 'create_import_batch', req.user.username, null, { candidateCount, duplicateCount })
 
-    const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
+     const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
     res.status(201).json({ batch: serializeBatch(batch, db) })
   })
 
@@ -2880,7 +2937,6 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         saveCorrectionRules(db, existing, updated, input.saveRuleScope, req.user.username)
       }
       recordFieldChanges(db, existing, updated, req.user.username)
-      syncCandidateToVehicleInventory(db, existing.id, req.user.username)
       audit(db, 'candidate', existing.id, 'update_candidate', req.user.username, serializeCandidate(existing), updated)
       db.exec('COMMIT')
     } catch (error) {
@@ -2888,6 +2944,10 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       throw error
     }
     const saved = db.prepare('SELECT * FROM vehicle_source_candidates WHERE id = ?').get(existing.id)
+    if (saved.review_status === 'approved') {
+      try { syncCandidateToFeishuBase(db, saved.id, req.user.username) } catch (e) { console.error('[Feishu Sync] Error:', e.message) }
+      try { syncSnapshotToFeishuBase(db, saved.id, req.user.username) } catch (e) { console.error('[Snapshot Sync] Error:', e.message) }
+    }
     res.json({ candidate: serializeCandidate(saved) })
   })
 
@@ -2936,347 +2996,144 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     const updated = db.prepare('SELECT * FROM vehicle_source_duplicate_links WHERE id = ?').get(duplicate.id)
     res.json({ duplicate: serializeDuplicate(updated) })
   })
-
-  app.get('/api/source-imports/batches/:batchId/export', requireAuth, requireRole('admin', 'sales'), (req, res) => {
-    const workbook = exportBatchWorkbook(db, req.params.batchId)
-    if (!workbook) return res.status(404).json({ error: '导入批次不存在' })
-    db.prepare(`
-      UPDATE vehicle_source_import_batches
-      SET status = ?, updated_at = ?
-      WHERE id = ?
-    `).run(SOURCE_IMPORT_STATUSES.exported, new Date().toISOString(), req.params.batchId)
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(workbook.filename)}`)
-    res.send(workbook.buffer)
-  })
 }
 
-function syncLocalVehicleAvailability(db, vehicleId, changedBy = 'system') {
-  const VEHICLE_STATUS = {
-    inStock: 'in_stock',
-    preorder: 'preorder',
-    unavailable: 'temporarily_unavailable',
+
+
+function syncProfileToFeishuBase(db, profileId) {}
+
+function syncSupplierToFeishuBase(db, supplierId) {
+  const s = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(supplierId)
+  if (!s) return
+  const channelTypeMap = { unknown: '其他', primary_source: '源头供应商', distributor: '渠道商', agent: '代理商' }
+  const regionOptions = ['重庆', '天津', '上海', '广州', '深圳', '北京', '武汉', '成都', '合肥']
+  const location = regionOptions.includes(s.location || '') ? s.location : ''
+  const channelType = channelTypeMap[s.channel_type] || '其他'
+  const status = s.is_active ? 'Active' : 'Inactive'
+  const fields = ['Supplier Name', 'Contact Person', 'Phone', 'WeChat', 'Region', 'Channel Type', 'Status', 'Notes', 'Created At']
+  const row = [s.supplier_name || '', s.contact_name || '', s.phone || '', s.wechat || '', location, channelType, status, s.notes || '', s.created_at || '']
+
+  if (s.feishu_record_id) {
+    feishuUpdateRow(FEISHU_SUPPLIERS_TABLE_ID, s.feishu_record_id, fields, row)
+    return
   }
-  const COOPERATION_PRICE_MARKUP_USD = 100
-
-  const sources = db.prepare('SELECT * FROM supplier_sources WHERE vehicle_id = ?').all(vehicleId)
-  const vehicle = db.prepare('SELECT * FROM vehicles WHERE id = ?').get(vehicleId)
-  if (!vehicle) return
-  const stockQuantity = sources.reduce((sum, source) => sum + Number(source.stock_quantity), 0)
-  const colorTotals = new Map()
-  for (const source of sources) {
-    let parsedColors = []
-    try {
-      parsedColors = JSON.parse(source.stock_colors || '[]')
-    } catch (e) {
-      parsedColors = []
-    }
-    for (const entry of parsedColors) {
-      if (entry && entry.color) {
-        colorTotals.set(entry.color, (colorTotals.get(entry.color) ?? 0) + Number(entry.quantity || 0))
-      }
-    }
-  }
-  const preorderSources = sources.filter((source) => Boolean(source.can_preorder))
-  const status = stockQuantity > 0
-    ? VEHICLE_STATUS.inStock
-    : preorderSources.length > 0
-      ? VEHICLE_STATUS.preorder
-      : VEHICLE_STATUS.unavailable
-  const preorderMinDays = preorderSources.length > 0
-    ? Math.min(...preorderSources.map((source) => Number(source.preorder_min_days || 0)))
-    : 0
-  const preorderMaxDays = preorderSources.length > 0
-    ? Math.max(...preorderSources.map((source) => Number(source.preorder_max_days || 0)))
-    : 0
-
-  const exwSources = sources.map((s) => ({ price: Number(s.price_exw), currency: s.price_exw_currency || 'USD' })).filter((s) => s.price > 0)
-  const fcaSources = sources.map((s) => ({ price: Number(s.price_fca), currency: s.price_fca_currency || 'USD' })).filter((s) => s.price > 0)
-  const fobSources = sources.map((s) => ({ price: Number(s.price_fob), currency: s.price_fob_currency || 'USD' })).filter((s) => s.price > 0)
-
-  const rateRow = db.prepare("SELECT value FROM system_settings WHERE key = 'exchange_rate'").get()
-  const exchangeRate = Number(rateRow?.value ?? 7.2)
-
-  function toUsd(price, currency) {
-    if (currency === 'CNY') return price / exchangeRate
-    return price
-  }
-
-  function lowestSource(sourceRows) {
-    if (sourceRows.length === 0) return { price: 0, currency: 'USD' }
-    return sourceRows.reduce((min, s) => {
-      return toUsd(s.price, s.currency) < toUsd(min.price, min.currency) ? s : min
-    }, sourceRows[0])
-  }
-
-  function cooperationPriceFor(price, currency) {
-    if (price <= 0) return 0
-    return currency === 'CNY'
-      ? price + COOPERATION_PRICE_MARKUP_USD * exchangeRate
-      : price + COOPERATION_PRICE_MARKUP_USD
-  }
-
-  const lowestExw = lowestSource(exwSources)
-  const lowestFca = lowestSource(fcaSources)
-  const lowestFob = lowestSource(fobSources)
-  const lowestExwCost = lowestExw.price
-  const lowestExwCurrency = lowestExw.currency
-  const lowestFcaCost = lowestFca.price
-  const lowestFcaCurrency = lowestFca.currency
-  const lowestFobCost = lowestFob.price
-  const lowestFobCurrency = lowestFob.currency
-  const partnerPriceExw = cooperationPriceFor(lowestExwCost, lowestExwCurrency)
-  const partnerPriceFca = cooperationPriceFor(lowestFcaCost, lowestFcaCurrency)
-  const partnerPriceFob = cooperationPriceFor(lowestFobCost, lowestFobCurrency)
-
-  const cost = lowestExwCost > 0 ? lowestExwCost : (lowestFcaCost > 0 ? lowestFcaCost : (lowestFobCost > 0 ? lowestFobCost : 0))
-  const cooperationPrice = partnerPriceExw > 0 ? partnerPriceExw : (partnerPriceFca > 0 ? partnerPriceFca : (partnerPriceFob > 0 ? partnerPriceFob : 0))
-  const now = new Date()
-  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-
-  // Update vehicle
-  db.prepare(`
-    UPDATE vehicles
-    SET status = ?, stock_quantity = ?, stock_colors = ?,
-        preorder_min_days = ?, preorder_max_days = ?, cost = ?,
-        partner_price = CASE WHEN ? > 0 THEN ? ELSE partner_price END,
-        customer_price = CASE WHEN ? > 0 THEN ? ELSE customer_price END,
-        cost_exw = ?, cost_exw_currency = ?,
-        cost_fca = ?, cost_fca_currency = ?,
-        cost_fob = ?, cost_fob_currency = ?,
-        partner_price_exw = ?, partner_price_fca = ?, partner_price_fob = ?,
-        customer_price_exw = ?, customer_price_fca = ?, customer_price_fob = ?,
-        price_updated_at = CASE WHEN ? > 0 THEN ? ELSE price_updated_at END,
-        price_valid_until = CASE WHEN ? > 0 THEN ? ELSE price_valid_until END
-    WHERE id = ?
-  `).run(
-    status,
-    stockQuantity,
-    JSON.stringify([...colorTotals.entries()].map(([color, quantity]) => ({ color, quantity }))),
-    preorderMinDays,
-    preorderMaxDays,
-    cost,
-    cooperationPrice,
-    cooperationPrice,
-    cooperationPrice,
-    cooperationPrice,
-    lowestExwCost > 0 ? lowestExwCost : null,
-    lowestExwCost > 0 ? lowestExwCurrency : null,
-    lowestFcaCost > 0 ? lowestFcaCost : null,
-    lowestFcaCost > 0 ? lowestFcaCurrency : null,
-    lowestFobCost > 0 ? lowestFobCost : null,
-    lowestFobCost > 0 ? lowestFobCurrency : null,
-    partnerPriceExw > 0 ? partnerPriceExw : null,
-    partnerPriceFca > 0 ? partnerPriceFca : null,
-    partnerPriceFob > 0 ? partnerPriceFob : null,
-    partnerPriceExw > 0 ? partnerPriceExw : null,
-    partnerPriceFca > 0 ? partnerPriceFca : null,
-    partnerPriceFob > 0 ? partnerPriceFob : null,
-    cooperationPrice,
-    now.toISOString(),
-    cooperationPrice,
-    validUntil.toISOString(),
-    vehicleId
-  )
-
-  // Insert price history if price changed
-  if (cooperationPrice > 0 && Number(vehicle.partner_price) !== cooperationPrice) {
-    db.prepare(`
-      INSERT INTO vehicle_price_history (
-        vehicle_id, partner_price, valid_from, valid_until, changed_by, notes
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      vehicleId,
-      cooperationPrice,
-      now.toISOString(),
-      validUntil.toISOString(),
-      changedBy,
-      `按最低供应商报价自动生成 EXW/FCA/FOB 合作价`
-    )
+  const recordId = feishuAppendRow(FEISHU_SUPPLIERS_TABLE_ID, fields, row)
+  if (recordId) {
+    db.prepare('UPDATE vehicle_source_suppliers SET feishu_record_id = ? WHERE id = ?').run(recordId, supplierId)
   }
 }
 
-function syncCandidateToVehicleInventory(db, candidateId, username) {
+function syncSnapshotToFeishuBase(db, candidateId, username) {
+  const candidate = db.prepare('SELECT c.*, b.supplier_name FROM vehicle_source_candidates c JOIN vehicle_source_import_batches b ON b.id = c.batch_id WHERE c.id = ?').get(candidateId)
+  if (!candidate) return
+  const snapshot = db.prepare('SELECT * FROM vehicle_source_snapshots WHERE batch_id = ? ORDER BY id DESC LIMIT 1').get(candidate.batch_id)
+  if (!snapshot) return
+  const leadTime = candidate.preorder_min_days > 0 ? `${candidate.preorder_min_days}-${candidate.preorder_max_days}天` : ''
+  const fields = ['Snapshot ID', 'Batch ID', 'Supplier', 'Snapshot Time', 'Version', 'Brand', 'Model', 'Year', 'Trim', 'Exterior Color', 'Interior Color', 'Stock Qty', 'Price EXW', 'Price FCA', 'Price FOB', 'Trade Term', 'Location', 'Lead Time', 'Change Status', 'Recorder', 'Approved At']
+  const row = [`SNAP-${candidate.batch_id}-${candidate.id}-${Date.now()}`, `BATCH-${candidate.batch_id}`, candidate.supplier_name, snapshot.snapshot_time, snapshot.version_no, candidate.brand || '', candidate.model_name || '', candidate.year || '', candidate.trim_name || '', candidate.exterior_color || '', candidate.interior_color || '', candidate.stock_quantity || 0, candidate.price_exw || 0, candidate.price_fca || 0, candidate.price_fob || 0, candidate.trade_term || '', candidate.location || '', leadTime, candidate.change_status || 'new', username || '', new Date().toISOString()]
+  feishuAppendRow(FEISHU_SNAPSHOTS_TABLE_ID, fields, row)
+}
+
+const FEISHU_BASE_TOKEN = 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
+const FEISHU_VEHICLES_TABLE_ID = 'tblTKcuyW7AuZ9nd'
+const FEISHU_PROFILES_TABLE_ID = 'tblMmmXZfuWXbsmw'
+const FEISHU_SUPPLIERS_TABLE_ID = 'tblRnBLfMzZZQk7Z'
+const FEISHU_SNAPSHOTS_TABLE_ID = 'tblKIte5bOq24B5q'
+
+function feishuAppendRow(tableId, fields, row) {
+  const payload = JSON.stringify({ fields, rows: [row] })
+  try {
+    const result = execFileSync('lark-cli', [
+      'base', '+record-batch-create',
+      '--base-token', FEISHU_BASE_TOKEN,
+      '--table-id', tableId,
+      '--as', 'user',
+      '--json', payload,
+    ], { stdio: 'pipe', timeout: 30000, encoding: 'utf8' })
+    const parsed = JSON.parse(result)
+    if (parsed.ok && parsed.data?.record_id_list?.length > 0) {
+      return parsed.data.record_id_list[0]
+    }
+    return null
+  } catch (err) {
+    const msg = err.stderr ? err.stderr.toString() : err.message
+    console.error('[Feishu Append] Error:', msg.slice(0, 300))
+    return null
+  }
+}
+
+function feishuUpdateRow(tableId, recordId, fields, row) {
+  const patch = {}
+  fields.forEach((name, i) => { patch[name] = row[i] })
+  const payload = JSON.stringify({ record_id_list: [recordId], patch })
+  try {
+    execFileSync('lark-cli', [
+      'base', '+record-batch-update',
+      '--base-token', FEISHU_BASE_TOKEN,
+      '--table-id', tableId,
+      '--as', 'user',
+      '--json', payload,
+    ], { stdio: 'pipe', timeout: 30000 })
+    return true
+  } catch (err) {
+    const msg = err.stderr ? err.stderr.toString() : err.message
+    console.error('[Feishu Update] Error:', msg.slice(0, 300))
+    return false
+  }
+}
+
+function syncCandidateToFeishuBase(db, candidateId, username) {
   const candidate = db.prepare('SELECT * FROM vehicle_source_candidates WHERE id = ?').get(candidateId)
   if (!candidate) return
+  if (candidate.review_status !== 'approved') return
 
-  // Get supplier name from batch
   const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(candidate.batch_id)
   const supplierName = batch ? batch.supplier_name : '未知供应商'
 
-  // If candidate is NOT approved:
-  if (candidate.review_status !== 'approved') {
-    if (candidate.profile_id) {
-      const vehiclesMatching = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').all(candidate.profile_id)
-      for (const v of vehiclesMatching) {
-        db.prepare(`
-          DELETE FROM supplier_sources 
-          WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
-        `).run(v.id, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
-        syncLocalVehicleAvailability(db, v.id, username)
-      }
+  let energyType = ''
+  let batteryKwh = null
+  let rangeKm = null
+
+  const vehicleId = `EV-${Date.now().toString(36).toUpperCase()}-${candidateId}`
+  const leadTime = candidate.preorder_min_days > 0
+    ? `${candidate.preorder_min_days}-${candidate.preorder_max_days} days`
+    : ''
+  const status = candidate.stock_quantity > 0 ? 'In Stock' : 'Preorder'
+
+  const fields = [
+    'Vehicle ID', 'Brand', 'Model', 'Year', 'Trim',
+    'Exterior Color', 'Interior Color', 'Stock Quantity',
+    'Cost (EXW)', 'Cost (FOB)', 'Cost (FCA)',
+    'Trade Term', 'Energy Type', 'Battery (kWh)', 'Range (km)',
+    'Location', 'Supplier', 'Lead Time', 'Status', 'Recorder',
+    'Public Notes', 'Is Listed',
+  ]
+  const row = [
+    vehicleId, candidate.brand || '', candidate.model_name || '',
+    candidate.year || '', candidate.trim_name || '',
+    candidate.exterior_color || '', candidate.interior_color || '',
+    candidate.stock_quantity || 0,
+    candidate.price_exw || 0, candidate.price_fob || 0, candidate.price_fca || 0,
+    candidate.trade_term || 'EXW',
+    energyType, batteryKwh, rangeKm,
+    candidate.location || '', supplierName, leadTime, status,
+    username || '', candidate.notes || '', true,
+  ]
+
+  const existingRecordId = candidate.feishu_record_id
+  const hasValidFeishuId = existingRecordId && String(existingRecordId).startsWith('rec')
+
+  if (hasValidFeishuId) {
+    // Update existing Feishu record
+    if (feishuUpdateRow(FEISHU_VEHICLES_TABLE_ID, existingRecordId, fields, row)) {
+      console.log(`[Feishu Sync] Updated record for candidate ${candidateId}: ${existingRecordId}`)
     }
-    return
-  }
-
-  // If candidate is approved:
-  let profileId = candidate.profile_id
-  const now = new Date()
-  const validUntil = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000)
-
-  if (!profileId) {
-    // Try to find an existing profile matching the brand, model, year, trim
-    const brand = candidate.brand.trim()
-    const model = candidate.model_name.trim()
-    const year = candidate.year.trim()
-    const trim = candidate.trim_name.trim()
-
-    // If they are all empty, we can't create a profile!
-    if (!brand || !model) return 
-
-    let existingProfile = db.prepare(`
-      SELECT id FROM vehicle_profiles 
-      WHERE brand = ? AND model = ? AND year = ? AND trim = ?
-    `).get(brand, model, year, trim)
-
-    if (existingProfile) {
-      profileId = existingProfile.id
-    } else {
-      // Guess energy type
-      let energyType = '纯电'
-      const textToTest = (model + ' ' + trim).toLowerCase()
-      if (textToTest.includes('dm-i') || textToTest.includes('dmi') || textToTest.includes('dm-p') || textToTest.includes('混动') || textToTest.includes('phev') || textToTest.includes('hybrid')) {
-        energyType = '插电混动'
-      } else if (textToTest.includes('增程') || textToTest.includes('erev')) {
-        energyType = '增程式'
-      }
-
-      // Create new profile
-      const result = db.prepare(`
-        INSERT INTO vehicle_profiles (
-          brand, model, year, trim, energy_type, battery_capacity, range_km,
-          drivetrain, body_type, dimensions, wheelbase, motor_power, seats,
-          fast_charge_time, slow_charge_time, official_price, features,
-          source_url, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, '', 0, '', '', '', '', '', 5, '', '', 0, '[]', '', '自动生成', ?, ?)
-      `).run(brand, model, year, trim, energyType, now.toISOString(), now.toISOString())
-      
-      profileId = Number(result.lastInsertRowid)
+  } else {
+    // Create new Feishu record
+    const recordId = feishuAppendRow(FEISHU_VEHICLES_TABLE_ID, fields, row)
+    if (recordId) {
+      db.prepare('UPDATE vehicle_source_candidates SET feishu_record_id = ? WHERE id = ?').run(recordId, candidateId)
+      console.log(`[Feishu Sync] Created record for candidate ${candidateId}: ${recordId}`)
     }
-
-    // Update candidate with the matched/created profile_id
-    db.prepare('UPDATE vehicle_source_candidates SET profile_id = ? WHERE id = ?').run(profileId, candidate.id)
   }
-
-  const profile = db.prepare('SELECT * FROM vehicle_profiles WHERE id = ?').get(profileId)
-  if (!profile) return
-
-  // 1. Find or create the vehicle in `vehicles` table
-  let vehicle = db.prepare('SELECT * FROM vehicles WHERE profile_id = ?').get(profileId)
-  let vehicleId
-
-  if (!vehicle) {
-    const rows = db.prepare('SELECT id FROM vehicles').all()
-    const maxId = rows.reduce((max, row) => {
-      const number = Number(String(row.id).replace('EV-', ''))
-      return Number.isFinite(number) ? Math.max(max, number) : max
-    }, 0)
-    vehicleId = `EV-${String(maxId + 1).padStart(3, '0')}`
-
-    db.prepare(`
-      INSERT INTO vehicles (
-        id, profile_id, model, trim, year, color, location, status, stock_quantity,
-        preorder_min_days, preorder_max_days, available_colors, stock_colors,
-        battery_capacity, range_km, drivetrain, energy_type, image_url, public_notes,
-        price_updated_at, price_valid_until, is_listed, vin, cost, partner_price, customer_price
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, '[]', ?, ?, ?, ?, '', '', ?, ?, 1, '', 0, 0, 0)
-    `).run(
-      vehicleId,
-      profile.id,
-      `${profile.brand} ${profile.model}`,
-      profile.trim,
-      profile.year,
-      candidate.exterior_color ? '颜色可选' : '待确认',
-      candidate.location || '',
-      'temporarily_unavailable',
-      JSON.stringify(candidate.exterior_color ? [candidate.exterior_color] : []),
-      profile.battery_capacity || '',
-      Number(profile.range_km) || 0,
-      profile.drivetrain || '',
-      profile.energy_type || '',
-      now.toISOString(),
-      validUntil.toISOString()
-    )
-  } else {
-    vehicleId = vehicle.id
-  }
-
-  // 2. Find or create the supplier source in `supplier_sources`
-  const sourceNotes = `${candidate.notes || ''} [Source Candidate ID: ${candidate.id}]`.trim()
-  const existingSource = db.prepare(`
-    SELECT * FROM supplier_sources 
-    WHERE vehicle_id = ? AND supplier_name = ? AND notes LIKE ?
-  `).get(vehicleId, supplierName, `%[Source Candidate ID: ${candidate.id}]%`)
-
-  const colorsJson = JSON.stringify(candidate.exterior_color ? [{ color: candidate.exterior_color, quantity: candidate.stock_quantity }] : [])
-
-  if (existingSource) {
-    db.prepare(`
-      UPDATE supplier_sources
-      SET stock_quantity = ?, stock_colors = ?, preorder_min_days = ?, preorder_max_days = ?,
-          can_preorder = ?, supplier_price = ?, price_exw = ?, price_exw_currency = ?,
-          price_fca = ?, price_fca_currency = ?, price_fob = ?, price_fob_currency = ?,
-          updated_by = ?, updated_at = ?, notes = ?
-      WHERE id = ?
-    `).run(
-      candidate.stock_quantity,
-      colorsJson,
-      candidate.preorder_min_days,
-      candidate.preorder_max_days,
-      candidate.can_preorder ? 1 : 0,
-      candidate.price_exw || candidate.price_fca || candidate.price_fob || candidate.supplier_price || 0,
-      candidate.price_exw,
-      candidate.price_exw_currency,
-      candidate.price_fca,
-      candidate.price_fca_currency,
-      candidate.price_fob,
-      candidate.price_fob_currency,
-      username,
-      now.toISOString(),
-      sourceNotes,
-      existingSource.id
-    )
-  } else {
-    db.prepare(`
-      INSERT INTO supplier_sources (
-        vehicle_id, supplier_name, stock_quantity, stock_colors,
-        preorder_min_days, preorder_max_days, can_preorder,
-        supplier_price, price_exw, price_exw_currency, price_fca, price_fca_currency,
-        price_fob, price_fob_currency,
-        created_by, updated_by, updated_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      vehicleId,
-      supplierName,
-      candidate.stock_quantity,
-      colorsJson,
-      candidate.preorder_min_days,
-      candidate.preorder_max_days,
-      candidate.can_preorder ? 1 : 0,
-      candidate.price_exw || candidate.price_fca || candidate.price_fob || candidate.supplier_price || 0,
-      candidate.price_exw,
-      candidate.price_exw_currency,
-      candidate.price_fca,
-      candidate.price_fca_currency,
-      candidate.price_fob,
-      candidate.price_fob_currency,
-      username,
-      username,
-      now.toISOString(),
-      sourceNotes
-    )
-  }
-
-  // 3. Sync vehicle availability and prices
-  syncLocalVehicleAvailability(db, vehicleId, username)
 }

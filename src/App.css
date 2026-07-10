@@ -88,18 +88,26 @@
 }
 
 .supplier-select-field {
-  align-items: end;
+  align-items: stretch;
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .supplier-select-field label {
+  align-self: center;
   min-width: 0;
+}
+
+.supplier-select-field .supplier-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .supplier-add-button {
   min-height: 40px;
+  min-width: 80px;
   white-space: nowrap;
 }
 
