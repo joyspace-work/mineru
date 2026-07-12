@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
 const FEISHU_BASE_TOKEN = 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
 const FEISHU_EXPERIENCES_TABLE_ID = 'tblwWEYbWbV3WGlH'
@@ -86,14 +87,34 @@ async function getConfigsTableId() {
   return null
 }
 
+function readLocalPromptSafe(localPath) {
+  try {
+    if (existsSync(localPath)) {
+      return readFileSync(localPath, 'utf8')
+    }
+  } catch (_) { /* ignore */ }
+  return `你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。
+
+【输入变量说明】
+- 供应商: {{supplierName}}
+- 解析方式: {{mode}}
+- 经验参考:
+{{experiences}}
+
+【提取字段及格式红线】
+请输出一个 JSON 数组，每个元素包含 brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceFca, priceFob, officialPrice, location, deliveryTime, notes 字段。
+官方指导价不等于贸易 EXW 价格，不能填入 priceExw 字段，应当置为 null。
+直接输出合法的 JSON 数组，严禁使用 markdown 包裹，不要输出任何额外的行文分析和解释。`
+}
+
 export async function loadPromptFromFeishu() {
   const localPath = resolve(process.cwd(), 'server/prompts/sourceImport.txt')
   const tableId = await getConfigsTableId()
-
+ 
   if (!tableId) {
-    return readFileSync(localPath, 'utf8')
+    return readLocalPromptSafe(localPath)
   }
-
+ 
   try {
     const result = execFileSync('lark-cli', [
       'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
@@ -117,8 +138,8 @@ export async function loadPromptFromFeishu() {
   } catch (e) {
     console.error('[Feishu Config] Error loading prompt from Feishu, fallback to local file:', e.message)
   }
-
-  const defaultValue = readFileSync(localPath, 'utf8')
+ 
+  const defaultValue = readLocalPromptSafe(localPath)
   savePromptToFeishu(defaultValue).catch(() => { })
   return defaultValue
 }
@@ -188,38 +209,61 @@ export async function refinePromptWithExperiences() {
   // Load latest prompt from Feishu (or local fallback)
   const currentPrompt = await loadPromptFromFeishu()
 
-  // 1. Fetch confirmed experiences from Feishu
+  // 1. Fetch confirmed experiences: Try SQLite first for fast local development loop
   const confirmedRules = []
   try {
-    const result = execFileSync('lark-cli', [
-      'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
-      '--table-id', FEISHU_EXPERIENCES_TABLE_ID,
-      '--as', 'user', '--limit', '200', '--format', 'json',
-    ], { encoding: 'utf8', timeout: 15000 })
-    const parsed = JSON.parse(result)
-    if (parsed.ok && parsed.data?.data?.length) {
-      const fields = parsed.data.fields || []
-      const records = parsed.data.data || []
-      for (let i = 0; i < records.length; i++) {
-        const vals = {}
-        if (Array.isArray(records[i])) fields.forEach((name, j) => { vals[name] = records[i][j] })
-        const status = vals['Status'] || vals['状态'] || ''
-        const statusVal = Array.isArray(status) ? status[0] : status
-        if (statusVal !== 'confirmed' && statusVal !== '已确认') continue
+    const dbPath = resolve(process.cwd(), 'data/ev-export.db')
+    if (existsSync(dbPath)) {
+      const localDb = new DatabaseSync(dbPath)
+      const rows = localDb.prepare("SELECT * FROM vehicle_source_experiences WHERE status = 'confirmed'").all()
+      for (const row of rows) {
         confirmedRules.push({
-          field: vals['Field'] || vals['字段'] || '',
-          original: vals['Original Value'] || vals['原始值'] || '',
-          corrected: vals['Corrected Value'] || vals['修正值'] || '',
-          rawText: vals['原始识别内容'] || vals['Original Raw Text'] || '',
-          feedback: vals['用户反馈'] || vals['User Feedback'] || '',
-          beforeForm: vals['解析前表单'] || vals['Before Form'] || '',
-          afterForm: vals['解析后表单'] || vals['After Form'] || ''
+          field: row.field || '',
+          original: row.original_value || '',
+          corrected: row.corrected_value || '',
+          rawText: row.raw_text || '',
+          feedback: row.feedback_text || '',
+          beforeForm: row.before_form || '',
+          afterForm: row.after_form || ''
         })
       }
     }
-  } catch (e) {
-    console.error('[Prompt Refiner] Error fetching experiences:', e.message)
-    return
+  } catch (localDbErr) {
+    console.error('[Prompt Refiner] Local DB experiences load error:', localDbErr.message)
+  }
+
+  // 2. Fallback to Feishu if local rules list is empty (and downgrade error to warning)
+  if (confirmedRules.length === 0) {
+    try {
+      const result = execFileSync('lark-cli', [
+        'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
+        '--table-id', FEISHU_EXPERIENCES_TABLE_ID,
+        '--as', 'user', '--limit', '200', '--format', 'json',
+      ], { encoding: 'utf8', timeout: 15000 })
+      const parsed = JSON.parse(result)
+      if (parsed.ok && parsed.data?.data?.length) {
+        const fields = parsed.data.fields || []
+        const records = parsed.data.data || []
+        for (let i = 0; i < records.length; i++) {
+          const vals = {}
+          if (Array.isArray(records[i])) fields.forEach((name, j) => { vals[name] = records[i][j] })
+          const status = vals['Status'] || vals['状态'] || ''
+          const statusVal = Array.isArray(status) ? status[0] : status
+          if (statusVal !== 'confirmed' && statusVal !== '已确认') continue
+          confirmedRules.push({
+            field: vals['Field'] || vals['字段'] || '',
+            original: vals['Original Value'] || vals['原始值'] || '',
+            corrected: vals['Corrected Value'] || vals['修正值'] || '',
+            rawText: vals['原始识别内容'] || vals['Original Raw Text'] || '',
+            feedback: vals['用户反馈'] || vals['User Feedback'] || '',
+            beforeForm: vals['解析前表单'] || vals['Before Form'] || '',
+            afterForm: vals['解析后表单'] || vals['After Form'] || ''
+          })
+        }
+      }
+    } catch (e) {
+      console.warn('[Prompt Refiner] Feishu experiences load skipped:', e.message)
+    }
   }
 
   if (confirmedRules.length === 0) return { refined: false, reason: '暂无可用的确认经验，无需优化' }

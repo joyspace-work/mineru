@@ -1,8 +1,9 @@
 import multer from 'multer'
 import XLSX from 'xlsx'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 import { execSync, execFileSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import { loadPromptFromFeishu, refinePromptWithExperiences } from './promptRefiner.js'
 
 function loadLocalEnvFile() {
@@ -868,73 +869,101 @@ async function sourceImportPrompt({ text, context, mode }) {
 
   // Dynamically inject confirmed experiences as few-shot examples
   let experiencesBlock = ''
+  const confirmedRules = []
+
+  // 1. Try local SQLite DB first
   try {
-    const result = execFileSync('lark-cli', [
-      'base', '+record-list', '--base-token', 'Xvdfbpk7cadLrnsVCFFcHbhOnCb',
-      '--table-id', 'tblwWEYbWbV3WGlH',
-      '--as', 'user', '--limit', '50', '--format', 'json',
-    ], { encoding: 'utf8', timeout: 15000 })
-    const parsed = JSON.parse(result)
-    if (parsed.ok && parsed.data?.data?.length) {
-      const fields = parsed.data.fields || []
-      const records = parsed.data.data || []
-      const examples = []
-      for (let i = 0; i < records.length; i++) {
-        const vals = {}
-        if (Array.isArray(records[i])) fields.forEach((name, j) => { vals[name] = records[i][j] })
-        const status = Array.isArray(vals['Status'] || vals['状态'] || '') ? (vals['Status'] || vals['状态'] || '')[0] : (vals['Status'] || vals['状态'] || '')
-        if (status !== 'confirmed' && status !== '已确认') continue
-        const field = vals['Field'] || vals['字段'] || ''
-        const original = vals['Original Value'] || vals['原始值'] || ''
-        const corrected = vals['Corrected Value'] || vals['修正值'] || ''
-        const feedback = vals['用户反馈'] || vals['User Feedback'] || ''
-        const rawText = vals['原始识别内容'] || vals['Original Raw Text'] || ''
-        const beforeForm = vals['解析前表单'] || vals['Before Form'] || ''
-        const afterForm = vals['解析后表单'] || vals['After Form'] || ''
-        if (!field) continue
-        // Build a rich experience entry with full context
-        const lines = [`- 【字段 ${field}】`]
-        if (original || corrected) {
-          lines.push(`  原始提取值: "${original}" → 修正值: "${corrected}"`)
-        }
-        if (feedback) {
-          lines.push(`  用户纠错原因: ${feedback}`)
-        }
-        if (rawText) {
-          lines.push(`  原始数据源文本: "${rawText.slice(0, 300)}"`)
-        }
-        if (beforeForm && afterForm) {
-          try {
-            const before = JSON.parse(beforeForm)
-            const after = JSON.parse(afterForm)
-            // Only show business-relevant field changes, skip system/internal fields
-            const businessKeys = ['brand','modelName','year','trimName','exteriorColor','interiorColor',
-              'stockQuantity','priceExw','priceExwCurrency','priceFca','priceFcaCurrency','priceFob',
-              'priceFobCurrency','officialPrice','location','deliveryTime','tradeTerm',
-              'preorderMinDays','preorderMaxDays','canPreorder','notes','supplierPrice','currency']
-            const changes = []
-            for (const key of businessKeys) {
-              const bv = before[key] !== undefined ? JSON.stringify(before[key]) : ''
-              const av = after[key] !== undefined ? JSON.stringify(after[key]) : ''
-              if (bv !== av && (bv || av)) {
-                changes.push(`    ${key}: ${bv || '(空)'} → ${av || '(空)'}`)
-              }
-            }
-            if (changes.length > 0) {
-              lines.push(`  表单变更对比（仅业务字段）:`)
-              lines.push(...changes.slice(0, 8))
-            }
-          } catch (_) { /* skip if not valid JSON */ }
-        }
-        examples.push(lines.join('\n'))
-        if (examples.length >= 15) break
-      }
-      if (examples.length > 0) {
-        experiencesBlock = '\n\n【⚠️ 经验参考 —— 以下是历史纠错记录，解析时必须严格遵守这些经验规则】\n' + examples.join('\n\n') + '\n'
+    const dbPath = resolve(process.cwd(), 'data/ev-export.db')
+    if (existsSync(dbPath)) {
+      const localDb = new DatabaseSync(dbPath)
+      const rows = localDb.prepare("SELECT * FROM vehicle_source_experiences WHERE status = 'confirmed' ORDER BY id DESC LIMIT 15").all()
+      for (const row of rows) {
+        confirmedRules.push({
+          field: row.field || '',
+          original: row.original_value || '',
+          corrected: row.corrected_value || '',
+          rawText: row.raw_text || '',
+          feedback: row.feedback_text || '',
+          beforeForm: row.before_form || '',
+          afterForm: row.after_form || ''
+        })
       }
     }
-  } catch (e) {
-    console.error('[Source Import Prompt] Error loading experiences:', e.message)
+  } catch (localDbErr) {
+    console.error('[Source Import Prompt] Local DB experiences load error:', localDbErr.message)
+  }
+
+  // 2. Fallback to Feishu if local rules list is empty
+  if (confirmedRules.length === 0) {
+    try {
+      const result = execFileSync('lark-cli', [
+        'base', '+record-list', '--base-token', 'Xvdfbpk7cadLrnsVCFFcHbhOnCb',
+        '--table-id', 'tblwWEYbWbV3WGlH',
+        '--as', 'user', '--limit', '50', '--format', 'json',
+      ], { encoding: 'utf8', timeout: 15000 })
+      const parsed = JSON.parse(result)
+      if (parsed.ok && parsed.data?.data?.length) {
+        const fields = parsed.data.fields || []
+        const records = parsed.data.data || []
+        for (let i = 0; i < records.length; i++) {
+          const vals = {}
+          if (Array.isArray(records[i])) fields.forEach((name, j) => { vals[name] = records[i][j] })
+          const status = Array.isArray(vals['Status'] || vals['状态'] || '') ? (vals['Status'] || vals['状态'] || '')[0] : (vals['Status'] || vals['状态'] || '')
+          if (status !== 'confirmed' && status !== '已确认') continue
+          confirmedRules.push({
+            field: vals['Field'] || vals['字段'] || '',
+            original: vals['Original Value'] || vals['原始值'] || '',
+            corrected: vals['Corrected Value'] || vals['修正值'] || '',
+            feedback: vals['用户反馈'] || vals['User Feedback'] || '',
+            rawText: vals['原始识别内容'] || vals['Original Raw Text'] || '',
+            beforeForm: vals['解析前表单'] || vals['Before Form'] || '',
+            afterForm: vals['解析后表单'] || vals['After Form'] || ''
+          })
+        }
+      }
+    } catch (e) {
+      console.warn('[Source Import Prompt] Feishu experiences load skipped:', e.message)
+    }
+  }
+
+  // Format confirmedRules to examples
+  if (confirmedRules.length > 0) {
+    const examples = confirmedRules.map(r => {
+      const lines = [`- 【字段 ${r.field}】`]
+      if (r.original || r.corrected) {
+        lines.push(`  原始提取值: "${r.original}" → 修正值: "${r.corrected}"`)
+      }
+      if (r.feedback) {
+        lines.push(`  用户纠错原因: ${r.feedback}`)
+      }
+      if (r.rawText) {
+        lines.push(`  原始数据源文本: "${r.rawText.slice(0, 300)}"`)
+      }
+      if (r.beforeForm && r.afterForm) {
+        try {
+          const before = JSON.parse(r.beforeForm)
+          const after = JSON.parse(r.afterForm)
+          const businessKeys = ['brand','modelName','year','trimName','exteriorColor','interiorColor',
+            'stockQuantity','priceExw','priceExwCurrency','priceFca','priceFcaCurrency','priceFob',
+            'priceFobCurrency','officialPrice','location','deliveryTime','tradeTerm',
+            'preorderMinDays','preorderMaxDays','canPreorder','notes','supplierPrice','currency']
+          const changes = []
+          for (const key of businessKeys) {
+            const bv = before[key] !== undefined ? JSON.stringify(before[key]) : ''
+            const av = after[key] !== undefined ? JSON.stringify(after[key]) : ''
+            if (bv !== av && (bv || av)) {
+              changes.push(`    ${key}: ${bv || '(空)'} → ${av || '(空)'}`)
+            }
+          }
+          if (changes.length > 0) {
+            lines.push(`  表单变更对比（仅业务字段）:`)
+            lines.push(...changes.slice(0, 8))
+          }
+        } catch (_) {}
+      }
+      return lines.join('\n')
+    })
+    experiencesBlock = '\n\n【⚠️ 经验参考 —— 以下是历史纠错记录，解析时必须严格遵守这些经验规则】\n' + examples.join('\n\n') + '\n'
   }
 
   console.log('[Source Import Prompt] experiencesBlock length:', experiencesBlock.length, experiencesBlock ? experiencesBlock.slice(0, 200) : '(empty)')
@@ -3147,6 +3176,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
 - field: 发生错误的字段名（必须是 brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceFca, priceFob, officialPrice, location, deliveryTime, notes 之一）
 - originalValue: 导致解析出错的“原始值”或“错误词汇”。它必须在原始文本或原始错误结果中出现过。
 - correctedValue: 用户修正后的“正确值”。它必须代表最终正确的输出。
+- 【绝对红线】：严禁提取未发生任何修改的字段！如果原始错误结果与人工修改后正确结果完全一致，绝对不允许生成对应的规则！
 
 你必须只返回一个 JSON 数组，格式如下：
 [
@@ -3203,6 +3233,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     const ruleIndexCounter = { value: 0 }
     for (const rule of rules) {
       if (!rule.field || !rule.originalValue || !rule.correctedValue) continue
+      if (String(rule.originalValue).trim() === String(rule.correctedValue).trim()) continue
       ruleIndexCounter.value++
 
       // Generate unique contribution description for this rule
