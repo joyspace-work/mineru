@@ -452,6 +452,22 @@ type SourceImportDuplicate = {
   matchedSupplier?: string
 }
 
+type SourceImportExperience = {
+  id: number
+  feishuRecordId: string | null
+  field: string
+  originalValue: string
+  correctedValue: string
+  status: string
+  rawText: string
+  feedbackText: string
+  beforeForm: any
+  afterForm: any
+  contributionNote: string
+  createdBy: string
+  createdAt: string
+}
+
 type SourceImportAiStatus = {
   enabled: boolean
   provider: string
@@ -1503,6 +1519,14 @@ function SourceImportWorkbench({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [candidateFilter, setCandidateFilter] = useState('all')
+  const [experiences, setExperiences] = useState<SourceImportExperience[]>([])
+
+  async function loadExperiences() {
+    try {
+      const response = await api<{ experiences: SourceImportExperience[] }>('/api/source-imports/experiences')
+      setExperiences(response.experiences || [])
+    } catch (_) { /* ignore */ }
+  }
   const [collapseSidebar, setCollapseSidebar] = useState(false)
   const [editingBatch, setEditingBatch] = useState<SourceImportBatch | null>(null)
   const [editSnapshotName, setEditSnapshotName] = useState('')
@@ -1563,10 +1587,9 @@ function SourceImportWorkbench({
     const response = await api<SourceImportListResponse>('/api/source-imports')
     setList(response)
     if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
+    await loadExperiences()
   }
-
-
-
+ 
   async function loadBatch(batchId: number, preferredCandidateId?: number | null) {
     const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${batchId}`)
     setDetail(response)
@@ -1575,6 +1598,7 @@ function SourceImportWorkbench({
       if (current && response.candidates.some((candidate) => candidate.id === current)) return current
       return response.candidates[0]?.id ?? null
     })
+    await loadExperiences()
   }
 
   function findNextFilteredCandidateId(currentId: number): number | null {
@@ -1629,6 +1653,7 @@ function SourceImportWorkbench({
       if (cancelled) return
       setList(response)
       if (response.batches[0]) setSelectedBatchId(response.batches[0].id)
+      await loadExperiences()
     })
     return () => {
       cancelled = true
@@ -2055,37 +2080,72 @@ function SourceImportWorkbench({
                   />
                 )}
               </div>
-              <div className="source-lower-grid">
-                <section className="duplicate-panel">
-                  <header>
-                    <strong><Link2 size={16} /> 同源重复建议</strong>
-                    <span>{detail.duplicates.length} 条</span>
+              <div className="source-lower-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginTop: '20px' }}>
+                <section className="duplicate-panel" style={{ background: '#fff', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                  <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px' }}>
+                    <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: '#1e293b' }}><Link2 size={16} /> 同源重复建议</strong>
+                    <span style={{ fontSize: '12px', color: '#64748b', background: '#f1f5f9', padding: '2px 8px', borderRadius: '12px' }}>{detail.duplicates.length} 条</span>
                   </header>
-                  {detail.duplicates.length === 0 ? (
-                    <p>本批次暂无明显跨供应商同源风险。</p>
-                  ) : detail.duplicates.map((duplicate) => {
-                    const candidate = detail.candidates.find((item) => item.id === duplicate.candidateId)
-                    return (
-                      <article key={duplicate.id}>
-                        <div>
-                          <strong>{candidate?.modelName || `候选 #${duplicate.candidateId}`}</strong>
-                          <span>{duplicate.reason}</span>
-                          <small>
-                            匹配历史车源：{duplicate.matchedSupplier || '未知渠道'} 的 {duplicate.matchedModel || '未知车型'}
-                            {duplicate.matchedPrice != null && ` (${duplicate.matchedCurrency || 'USD'} ${duplicate.matchedPrice})`} 
-                            · {statusLabel(duplicate.status)} {duplicate.resolution && `· ${duplicate.resolution}`}
-                          </small>
+                  <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                    {detail.duplicates.length === 0 ? (
+                      <p style={{ color: '#64748b', fontSize: '13px' }}>本批次暂无明显跨供应商同源风险。</p>
+                    ) : detail.duplicates.map((duplicate) => {
+                      const candidate = detail.candidates.find((item) => item.id === duplicate.candidateId)
+                      return (
+                        <article key={duplicate.id} style={{ padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
+                          <div style={{ marginBottom: '6px' }}>
+                            <strong style={{ display: 'block', fontSize: '13px', color: '#1e293b', marginBottom: '2px' }}>{candidate?.modelName || `候选 #${duplicate.candidateId}`}</strong>
+                            <span style={{ display: 'block', fontSize: '12px', color: '#dc2626', marginBottom: '4px' }}>{duplicate.reason}</span>
+                            <small style={{ fontSize: '11px', color: '#64748b' }}>
+                              匹配历史车源：{duplicate.matchedSupplier || '未知渠道'} 的 {duplicate.matchedModel || '未知车型'}
+                              {duplicate.matchedPrice != null && ` (${duplicate.matchedCurrency || 'USD'} ${duplicate.matchedPrice})`} 
+                              · {statusLabel(duplicate.status)} {duplicate.resolution && `· ${duplicate.resolution}`}
+                            </small>
+                          </div>
+                          {duplicate.status !== 'resolved' && (
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                              <button onClick={() => void resolveDuplicate(duplicate.id, 'same_origin')} type="button" style={{ padding: '4px 8px', fontSize: '11px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>确认同源</button>
+                              <button onClick={() => void resolveDuplicate(duplicate.id, 'not_duplicate')} type="button" style={{ padding: '4px 8px', fontSize: '11px', background: '#e2e8f0', color: '#334155', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>不是重复</button>
+                              <button onClick={() => void resolveDuplicate(duplicate.id, 'defer')} type="button" style={{ padding: '4px 8px', fontSize: '11px', background: '#f1f5f9', color: '#64748b', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>稍后处理</button>
+                            </div>
+                          )}
+                        </article>
+                      )
+                    })}
+                  </div>
+                </section>
+ 
+                <section className="experience-panel" style={{ background: '#fff', borderRadius: '8px', padding: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+                  <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px' }}>
+                    <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', color: '#1e293b' }}><Sparkles size={16} style={{ color: '#6366f1' }} /> 已确认 AI 纠错经验</strong>
+                    <span style={{ fontSize: '12px', color: '#64748b', background: '#f1f5f9', padding: '2px 8px', borderRadius: '12px' }}>{experiences.length} 条</span>
+                  </header>
+                  <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                    {experiences.length === 0 ? (
+                      <p style={{ color: '#64748b', fontSize: '13px' }}>系统暂无已沉淀的 AI 纠错经验。</p>
+                    ) : experiences.map((exp) => (
+                      <article key={exp.id} style={{ padding: '10px 0', borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: 600, color: '#4f46e5', fontSize: '12px' }}>
+                            字段: {exp.field}
+                          </span>
+                          <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                            {new Date(exp.createdAt).toLocaleString()}
+                          </span>
                         </div>
-                        {duplicate.status !== 'resolved' && (
-                          <div>
-                            <button onClick={() => void resolveDuplicate(duplicate.id, 'same_origin')} type="button">确认同源</button>
-                            <button onClick={() => void resolveDuplicate(duplicate.id, 'not_duplicate')} type="button">不是重复</button>
-                            <button onClick={() => void resolveDuplicate(duplicate.id, 'defer')} type="button">稍后处理</button>
+                        <div style={{ fontSize: '12px', color: '#334155', marginBottom: '4px' }}>
+                          <strong>错误值</strong>: <code style={{ textDecoration: 'line-through', background: '#fee2e2', color: '#991b1b', padding: '1px 4px', borderRadius: '3px' }}>{exp.originalValue}</code>
+                          &nbsp;&rarr;&nbsp;
+                          <strong>正确值</strong>: <code style={{ background: '#dcfce7', color: '#166534', padding: '1px 4px', borderRadius: '3px', fontWeight: 600 }}>{exp.correctedValue}</code>
+                        </div>
+                        {exp.feedbackText && (
+                          <div style={{ fontSize: '11px', color: '#475569', background: '#f8fafc', padding: '6px', borderRadius: '4px', borderLeft: '3px solid #cbd5e1', marginTop: '4px' }}>
+                            <strong>反馈意见:</strong> {exp.feedbackText}
                           </div>
                         )}
                       </article>
-                    )
-                  })}
+                    ))}
+                  </div>
                 </section>
               </div>
             </>

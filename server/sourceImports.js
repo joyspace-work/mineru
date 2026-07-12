@@ -414,6 +414,22 @@ function initSourceImportTables(db) {
       after_value TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS vehicle_source_experiences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      feishu_record_id TEXT,
+      field TEXT NOT NULL DEFAULT '',
+      original_value TEXT NOT NULL DEFAULT '',
+      corrected_value TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      raw_text TEXT NOT NULL DEFAULT '',
+      feedback_text TEXT NOT NULL DEFAULT '',
+      before_form TEXT NOT NULL DEFAULT '{}',
+      after_form TEXT NOT NULL DEFAULT '{}',
+      contribution_note TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
   `)
 
   db.exec(`
@@ -3024,6 +3040,32 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     res.json({ candidate: serializeCandidate(saved) })
   })
 
+  app.get('/api/source-imports/experiences', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    try {
+      const experiences = db.prepare('SELECT * FROM vehicle_source_experiences ORDER BY id DESC LIMIT 50').all()
+      res.json({
+        experiences: experiences.map(e => ({
+          id: Number(e.id),
+          feishuRecordId: e.feishu_record_id,
+          field: e.field,
+          originalValue: e.original_value,
+          correctedValue: e.corrected_value,
+          status: e.status,
+          rawText: e.raw_text,
+          feedbackText: e.feedback_text,
+          beforeForm: jsonParse(e.before_form, {}),
+          afterForm: jsonParse(e.after_form, {}),
+          contributionNote: e.contribution_note,
+          createdBy: e.created_by,
+          createdAt: e.created_at
+        }))
+      })
+    } catch (err) {
+      console.error('[Experiences List] Error:', err.message)
+      res.status(500).json({ error: '拉取经验列表失败: ' + err.message })
+    }
+  })
+
   app.post('/api/source-imports/candidates/:candidateId/refine-experience', requireAuth, requireRole('admin', 'sales'), async (req, res) => {
     const candidateId = Number(req.params.candidateId)
     const { feedbackText, currentFormValues } = req.body
@@ -3192,6 +3234,32 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       const recordId = feishuAppendRow(FEISHU_EXPERIENCES_TABLE_ID, fields, row)
       if (!recordId) {
         syncErrors.push(`字段 ${rule.field} 写入飞书失败`)
+      }
+
+      // 同时保存至本地 vehicle_source_experiences 表中以备本地高可读高速渲染参考
+      try {
+        db.prepare(`
+          INSERT INTO vehicle_source_experiences (
+            feishu_record_id, field, original_value, corrected_value,
+            status, raw_text, feedback_text, before_form, after_form,
+            contribution_note, created_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          recordId || null,
+          rule.field,
+          rule.originalValue,
+          rule.correctedValue,
+          'confirmed',
+          rawText || '',
+          feedbackText || '',
+          JSON.stringify(beforeValues),
+          JSON.stringify(currentFormValues),
+          contributionNote,
+          req.user.username,
+          new Date().toISOString()
+        )
+      } catch (dbErr) {
+        console.error('[Experience Sync Local DB] Error:', dbErr.message)
       }
     }
 
