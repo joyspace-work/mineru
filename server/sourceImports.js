@@ -3,6 +3,7 @@ import XLSX from 'xlsx'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 import { execSync, execFileSync } from 'node:child_process'
+import { loadPromptFromFeishu, refinePromptWithExperiences } from './promptRefiner.js'
 
 function loadLocalEnvFile() {
   try {
@@ -160,15 +161,15 @@ function getAiProviderConfig() {
     if (typeof process.loadEnvFile === 'function') {
       process.loadEnvFile()
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const provider = (
     process.env.AI_PROVIDER ||
     (process.env.GEMINI_API_KEY
       ? 'gemini'
       : process.env.OPENROUTER_API_KEY
-      ? 'openrouter'
-      : 'openai')
+        ? 'openrouter'
+        : 'openai')
   ).toLowerCase()
 
   let config
@@ -731,13 +732,7 @@ function sanitizeAiCandidate(candidate, index, context) {
     { rules: context.rules },
   )
   const confidence = Math.max(0, Math.min(100, Number(candidate.confidence) || 0))
-  const notes = compactText([
-    candidate.notes,
-    confidence ? `AI置信度 ${confidence}` : 'AI置信度待确认',
-    Array.isArray(candidate.uncertainFields) && candidate.uncertainFields.length > 0
-      ? `待确认字段：${candidate.uncertainFields.join('、')}`
-      : '',
-  ].filter(Boolean).join('；'))
+  const notes = compactText(candidate.notes)
   return {
     ...normalized,
     brand: compactText(candidate.brand) || normalized.brand,
@@ -831,20 +826,109 @@ function sourceImportJsonSchema() {
   }
 }
 
-function sourceImportPrompt({ text, context, mode }) {
-  return [
-    '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
-    '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
-    '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
-    '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
-    '注意价格提取：priceExw 表示出厂价/EXW价格，priceFca 表示FCA价格，priceFob 表示港口价/FOB价格。分别提取并解析出它们的数字值及对应币种（如 CNY、USD 等，对应币种字段为 priceExwCurrency/priceFcaCurrency/priceFobCurrency）。officialPrice 表示官方/国内指导价，可以保留原文如“11.98万”。如果供应商同一种车型同时报了多个条款价格，请同时录入。如果没有提供某项价格，则填 null 或 0。',
-    '如果供应商把多个信息写在同一格或同一句话里，请按业务含义拆字段。',
-    '如果价格口径不确定、车型库可能不匹配、颜色缩写不确定，请保留原文并把字段名写入 uncertainFields。',
-    '不要编造看不到的信息；库存数量不明确时填 0；价格不明确时填 0。',
-    `供应商：${context.supplierName}`,
-    `解析模式：${mode}`,
-    text ? `原始文本：\n${text.slice(0, 18000)}` : '',
-  ].filter(Boolean).join('\n\n')
+async function sourceImportPrompt({ text, context, mode }) {
+  let template = ''
+  try {
+    template = await loadPromptFromFeishu()
+  } catch (e) {
+    console.error('[Prompt Load Error] Fallback to hardcoded prompt:', e.message)
+  }
+
+  if (!template) {
+    return [
+      '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
+      '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
+      '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
+      '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
+      '注意价格提取：priceExw 表示出厂价/EXW价格，priceFca 表示FCA价格，priceFob 表示港口价/FOB价格。分别提取并解析出它们的数字值及对应币种（如 CNY、USD 等，对应币种字段为 priceExwCurrency/priceFcaCurrency/priceFobCurrency）。officialPrice 表示官方/国内指导价，可以保留原文如“11.98万”。如果供应商同一种车型同时报了多个条款价格，请同时录入。如果没有提供某项价格，则填 null 或 0。',
+      '如果供应商把多个信息写在同一格或同一句话里，请按业务含义拆字段。',
+      '如果价格口径不确定、车型库可能不匹配、颜色缩写不确定，请保留原文并把字段名写入 uncertainFields。',
+      '不要编造看不到的信息；库存数量不明确时填 0；价格不明确时填 0。',
+      `供应商：${context.supplierName}`,
+      `解析模式：${mode}`,
+      text ? `原始文本：\n${text.slice(0, 18000)}` : '',
+    ].filter(Boolean).join('\n\n')
+  }
+
+  // Dynamically inject confirmed experiences as few-shot examples
+  let experiencesBlock = ''
+  try {
+    const result = execFileSync('lark-cli', [
+      'base', '+record-list', '--base-token', 'Xvdfbpk7cadLrnsVCFFcHbhOnCb',
+      '--table-id', 'tblwWEYbWbV3WGlH',
+      '--as', 'user', '--limit', '50', '--format', 'json',
+    ], { encoding: 'utf8', timeout: 15000 })
+    const parsed = JSON.parse(result)
+    if (parsed.ok && parsed.data?.data?.length) {
+      const fields = parsed.data.fields || []
+      const records = parsed.data.data || []
+      const examples = []
+      for (let i = 0; i < records.length; i++) {
+        const vals = {}
+        if (Array.isArray(records[i])) fields.forEach((name, j) => { vals[name] = records[i][j] })
+        const status = Array.isArray(vals['Status'] || vals['状态'] || '') ? (vals['Status'] || vals['状态'] || '')[0] : (vals['Status'] || vals['状态'] || '')
+        if (status !== 'confirmed' && status !== '已确认') continue
+        const field = vals['Field'] || vals['字段'] || ''
+        const original = vals['Original Value'] || vals['原始值'] || ''
+        const corrected = vals['Corrected Value'] || vals['修正值'] || ''
+        const feedback = vals['用户反馈'] || vals['User Feedback'] || ''
+        const rawText = vals['原始识别内容'] || vals['Original Raw Text'] || ''
+        const beforeForm = vals['解析前表单'] || vals['Before Form'] || ''
+        const afterForm = vals['解析后表单'] || vals['After Form'] || ''
+        if (!field) continue
+        // Build a rich experience entry with full context
+        const lines = [`- 【字段 ${field}】`]
+        if (original || corrected) {
+          lines.push(`  原始提取值: "${original}" → 修正值: "${corrected}"`)
+        }
+        if (feedback) {
+          lines.push(`  用户纠错原因: ${feedback}`)
+        }
+        if (rawText) {
+          lines.push(`  原始数据源文本: "${rawText.slice(0, 300)}"`)
+        }
+        if (beforeForm && afterForm) {
+          try {
+            const before = JSON.parse(beforeForm)
+            const after = JSON.parse(afterForm)
+            // Only show business-relevant field changes, skip system/internal fields
+            const businessKeys = ['brand','modelName','year','trimName','exteriorColor','interiorColor',
+              'stockQuantity','priceExw','priceExwCurrency','priceFca','priceFcaCurrency','priceFob',
+              'priceFobCurrency','officialPrice','location','deliveryTime','tradeTerm',
+              'preorderMinDays','preorderMaxDays','canPreorder','notes','supplierPrice','currency']
+            const changes = []
+            for (const key of businessKeys) {
+              const bv = before[key] !== undefined ? JSON.stringify(before[key]) : ''
+              const av = after[key] !== undefined ? JSON.stringify(after[key]) : ''
+              if (bv !== av && (bv || av)) {
+                changes.push(`    ${key}: ${bv || '(空)'} → ${av || '(空)'}`)
+              }
+            }
+            if (changes.length > 0) {
+              lines.push(`  表单变更对比（仅业务字段）:`)
+              lines.push(...changes.slice(0, 8))
+            }
+          } catch (_) { /* skip if not valid JSON */ }
+        }
+        examples.push(lines.join('\n'))
+        if (examples.length >= 15) break
+      }
+      if (examples.length > 0) {
+        experiencesBlock = '\n\n【⚠️ 经验参考 —— 以下是历史纠错记录，解析时必须严格遵守这些经验规则】\n' + examples.join('\n\n') + '\n'
+      }
+    }
+  } catch (e) {
+    console.error('[Source Import Prompt] Error loading experiences:', e.message)
+  }
+
+  console.log('[Source Import Prompt] experiencesBlock length:', experiencesBlock.length, experiencesBlock ? experiencesBlock.slice(0, 200) : '(empty)')
+  let rendered = template
+    .replace('{{experiences}}', experiencesBlock)
+    .replace('{{supplierName}}', context.supplierName || '')
+    .replace('{{mode}}', mode || '')
+    .replace('{{rawText}}', text ? `原始文本：\n${text.slice(0, 18000)}` : '')
+
+  return rendered
 }
 
 function buildImageDataUrl(filePath, file, extension) {
@@ -855,7 +939,7 @@ function buildImageDataUrl(filePath, file, extension) {
 
 async function callOpenRouterSourceImportAi({ filePath, file, text, context, mode, config }) {
   const extension = extname(file.originalname).toLowerCase()
-  const content = [{ type: 'text', text: sourceImportPrompt({ text, context, mode }) }]
+  const content = [{ type: 'text', text: await sourceImportPrompt({ text, context, mode }) }]
   if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
     content.push({
       type: 'image_url',
@@ -906,7 +990,7 @@ async function callOpenRouterSourceImportAi({ filePath, file, text, context, mod
 
 async function callOpenAiSourceImportAi({ filePath, file, text, context, mode, config }) {
   const extension = extname(file.originalname).toLowerCase()
-  const content = [{ type: 'text', text: sourceImportPrompt({ text, context, mode }) }]
+  const content = [{ type: 'text', text: await sourceImportPrompt({ text, context, mode }) }]
   if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
     content.push({
       type: 'image_url',
@@ -957,8 +1041,8 @@ async function callOpenAiSourceImportAi({ filePath, file, text, context, mode, c
 
 async function callGeminiSourceImportAi({ filePath, file, text, context, mode, config }) {
   const extension = extname(file.originalname).toLowerCase()
-  const parts = [{ text: sourceImportPrompt({ text, context, mode }) }]
-  
+  const parts = [{ text: await sourceImportPrompt({ text, context, mode }) }]
+
   if (AI_SUPPORTED_IMAGE_EXTENSIONS.has(extension)) {
     const base64Data = readFileSync(filePath).toString('base64')
     const mimeType = file.mimetype || (extension === '.png' ? 'image/png' : 'image/jpeg')
@@ -969,14 +1053,14 @@ async function callGeminiSourceImportAi({ filePath, file, text, context, mode, c
       },
     })
   }
-  
+
   const requestBody = {
     contents: [{ parts }],
     generationConfig: {
       responseMimeType: 'application/json',
     },
   }
-  
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 180000)
@@ -1014,7 +1098,7 @@ async function callGeminiSourceImportAi({ filePath, file, text, context, mode, c
 async function callSourceImportAi({ filePath, file, text, context, mode }) {
   const config = getAiProviderConfig()
   if (!config.enabled) throw new Error(`未配置 ${config.provider} API Key，无法启用 AI 解析`)
-  
+
   let rawJson
   if (config.provider === 'gemini') {
     rawJson = await callGeminiSourceImportAi({ filePath, file, text, context, mode, config })
@@ -1023,7 +1107,7 @@ async function callSourceImportAi({ filePath, file, text, context, mode }) {
   } else {
     rawJson = await callOpenAiSourceImportAi({ filePath, file, text, context, mode, config })
   }
-  
+
   const json = normalizeAiParseEnvelope(rawJson)
   if (!json || !Array.isArray(json.candidates)) {
     throw new Error('AI 返回格式无效，未得到候选车源数组')
@@ -1387,7 +1471,7 @@ function inferSnapshotRange(files, candidates) {
       label,
       score: patterns.reduce((sum, pattern) =>
         text.toLowerCase().includes(String(pattern).toLowerCase()) ? sum + 1 : sum,
-      0),
+        0),
     }))
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -1657,7 +1741,7 @@ function splitCandidateByColor(candidate) {
   const ext = String(candidate.exteriorColor || '').trim()
   const intr = String(candidate.interiorColor || '').trim()
   const qty = Math.max(0, Math.floor(Number(candidate.stockQuantity) || 0))
-  
+
   // Try to parse quantity-prefixed color combos like "20白/灰+10灰/灰"
   const parsed = parseColorPairsWithQty(ext, intr)
   if (parsed.length <= 1) {
@@ -2027,51 +2111,6 @@ function createRule(db, input) {
   return Number(result.lastInsertRowid)
 }
 
-function saveCorrectionRules(db, oldRow, updated, scope, actor) {
-  if (scope === 'none') return []
-  const batch = db.prepare('SELECT supplier_name FROM vehicle_source_import_batches WHERE id = ?').get(oldRow.batch_id)
-  const supplierName = scope === 'supplier' ? batch?.supplier_name ?? '' : ''
-  const created = []
-  const fields = [
-    ['modelName', 'model_name', 'modelName'],
-    ['trimName', 'trim_name', 'trimName'],
-    ['location', 'location', 'location'],
-    ['tradeTerm', 'trade_term', 'tradeTerm'],
-    ['exteriorColor', 'exterior_color', 'exteriorColor'],
-    ['interiorColor', 'interior_color', 'interiorColor'],
-  ]
-  for (const [apiField, column, targetField] of fields) {
-    const before = oldRow[column]
-    const after = updated[apiField]
-    if (!before || !after || normalizeText(before) === normalizeText(after)) continue
-    created.push(createRule(db, {
-      ruleType: 'value_alias',
-      scope,
-      supplierName,
-      sourceValue: before,
-      targetField,
-      targetValue: after,
-      createdBy: actor,
-    }))
-  }
-  if (oldRow.model_name && updated.profileId && db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_profiles'").get()) {
-    const profile = db.prepare('SELECT id, brand, model, year, trim FROM vehicle_profiles WHERE id = ?').get(updated.profileId)
-    if (profile) {
-      created.push(createRule(db, {
-        ruleType: 'profile_alias',
-        scope,
-        supplierName,
-        sourceValue: oldRow.model_name,
-        targetField: 'profileId',
-        targetValue: `${profile.brand} ${profile.model} ${profile.year} ${profile.trim}`,
-        metadata: { profileId: Number(profile.id) },
-        createdBy: actor,
-      }))
-    }
-  }
-  return created
-}
-
 const FIELD_CHANGE_FIELDS = [
   ['brand', 'brand', '品牌'],
   ['modelName', 'model_name', '车型'],
@@ -2316,16 +2355,27 @@ function audit(db, entityType, entityId, action, actor, beforeValue, afterValue)
 export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, dataDir }) {
   initSourceImportTables(db)
 
-  // Startup sync for unsynced approved candidates (async, non-blocking)
-  setTimeout(() => {
+  // Startup sync (async, non-blocking)
+  setTimeout(async () => {
+    // 1. 同步飞书供应商到本地数据库
+    try {
+      console.log('[Startup Sync] Syncing suppliers from Feishu...')
+      await syncSuppliersFromFeishu(db)
+      console.log('[Startup Sync] Suppliers sync complete.')
+    } catch (e) {
+      console.error('[Startup Sync] Error syncing suppliers from Feishu:', e.message)
+    }
+
+    // 2. 同步已审核候选人到飞书
     try {
       const approvedCandidates = db.prepare("SELECT id FROM vehicle_source_candidates WHERE review_status = 'approved' AND feishu_record_id IS NULL").all()
-      if (approvedCandidates.length === 0) return
-      console.log(`[Startup Sync] Found ${approvedCandidates.length} unsynced approved candidates...`)
-      for (const candidate of approvedCandidates) {
-        syncCandidateToFeishuBase(db, candidate.id, 'system')
+      if (approvedCandidates.length > 0) {
+        console.log(`[Startup Sync] Found ${approvedCandidates.length} unsynced approved candidates...`)
+        for (const candidate of approvedCandidates) {
+          syncCandidateToFeishuBase(db, candidate.id, 'system')
+        }
+        console.log('[Startup Sync] Successfully synced all approved candidates to Feishu Base.')
       }
-      console.log('[Startup Sync] Successfully synced all approved candidates to Feishu Base.')
     } catch (e) {
       console.error('[Startup Sync] Error during approved candidates sync:', e)
     }
@@ -2681,16 +2731,16 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
       db.prepare('DELETE FROM vehicle_source_duplicate_links WHERE matched_candidate_id IN (SELECT id FROM vehicle_source_candidates WHERE batch_id = ?)').run(batchId)
       db.prepare('DELETE FROM vehicle_source_field_changes WHERE batch_id = ?').run(batchId)
-      
+
       // Delete candidates
       db.prepare('DELETE FROM vehicle_source_candidates WHERE batch_id = ?').run(batchId)
-      
+
       // Delete files
       db.prepare('DELETE FROM vehicle_source_import_files WHERE batch_id = ?').run(batchId)
-      
+
       // Delete snapshots
       db.prepare('DELETE FROM vehicle_source_snapshots WHERE batch_id = ?').run(batchId)
-      
+
       // Delete batch
       db.prepare('DELETE FROM vehicle_source_import_batches WHERE id = ?').run(batchId)
 
@@ -2840,8 +2890,14 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     `).run(needsReviewCount > 0 || duplicateCount > 0 ? SOURCE_IMPORT_STATUSES.needsReview : SOURCE_IMPORT_STATUSES.reviewed, new Date().toISOString(), batchId)
     audit(db, 'batch', batchId, 'create_import_batch', req.user.username, null, { candidateCount, duplicateCount })
 
-     const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
+    const batch = db.prepare('SELECT * FROM vehicle_source_import_batches WHERE id = ?').get(batchId)
     res.status(201).json({ batch: serializeBatch(batch, db) })
+  })
+
+  app.get('/api/source-imports/candidates/:candidateId', requireAuth, (req, res) => {
+    const row = db.prepare('SELECT * FROM vehicle_source_candidates WHERE id = ?').get(req.params.candidateId)
+    if (!row) return res.status(404).json({ error: '候选车源不存在' })
+    res.json({ candidate: serializeCandidate(row) })
   })
 
   app.patch('/api/source-imports/candidates/:candidateId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -2933,9 +2989,6 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         new Date().toISOString(),
         existing.id,
       )
-      if (input.saveRuleScope && input.saveRuleScope !== 'none') {
-        saveCorrectionRules(db, existing, updated, input.saveRuleScope, req.user.username)
-      }
       recordFieldChanges(db, existing, updated, req.user.username)
       audit(db, 'candidate', existing.id, 'update_candidate', req.user.username, serializeCandidate(existing), updated)
       db.exec('COMMIT')
@@ -2949,6 +3002,187 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       try { syncSnapshotToFeishuBase(db, saved.id, req.user.username) } catch (e) { console.error('[Snapshot Sync] Error:', e.message) }
     }
     res.json({ candidate: serializeCandidate(saved) })
+  })
+
+  app.post('/api/source-imports/candidates/:candidateId/refine-experience', requireAuth, requireRole('admin', 'sales'), async (req, res) => {
+    const candidateId = Number(req.params.candidateId)
+    const { feedbackText, currentFormValues } = req.body
+    if (!feedbackText) return res.status(400).json({ error: '请填写反馈内容' })
+
+    const candidate = db.prepare('SELECT * FROM vehicle_source_candidates WHERE id = ?').get(candidateId)
+    if (!candidate) return res.status(404).json({ error: '找不到对应的候选车源' })
+
+    const beforeValues = {
+      brand: candidate.brand,
+      modelName: candidate.model_name,
+      year: candidate.year,
+      trimName: candidate.trim_name,
+      exteriorColor: candidate.exterior_color,
+      interiorColor: candidate.interior_color,
+      stockQuantity: candidate.stock_quantity,
+      priceExw: candidate.price_exw,
+      priceFca: candidate.price_fca,
+      priceFob: candidate.price_fob,
+      officialPrice: candidate.official_price,
+      location: candidate.location,
+      deliveryTime: candidate.delivery_time,
+      notes: candidate.notes
+    }
+
+    const rawText = candidate.raw_text
+
+    // Save the user's manual corrections to the database so they don't get lost
+    if (currentFormValues && typeof currentFormValues === 'object') {
+      const now = new Date().toISOString()
+      db.prepare(`
+        UPDATE vehicle_source_candidates
+        SET brand = ?, model_name = ?, year = ?, trim_name = ?,
+            exterior_color = ?, interior_color = ?, stock_quantity = ?,
+            price_exw = ?, price_fca = ?, price_fob = ?, official_price = ?,
+            location = ?, delivery_time = ?, notes = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        currentFormValues.brand ?? candidate.brand,
+        currentFormValues.modelName ?? candidate.model_name,
+        currentFormValues.year ?? candidate.year,
+        currentFormValues.trimName ?? candidate.trim_name,
+        currentFormValues.exteriorColor ?? candidate.exterior_color,
+        currentFormValues.interiorColor ?? candidate.interior_color,
+        currentFormValues.stockQuantity ?? candidate.stock_quantity,
+        currentFormValues.priceExw ?? candidate.price_exw,
+        currentFormValues.priceFca ?? candidate.price_fca,
+        currentFormValues.priceFob ?? candidate.price_fob,
+        currentFormValues.officialPrice ?? candidate.official_price,
+        currentFormValues.location ?? candidate.location,
+        currentFormValues.deliveryTime ?? candidate.delivery_time,
+        currentFormValues.notes ?? candidate.notes,
+        now,
+        candidateId
+      )
+      console.log(`[Refine Experience] Saving corrections for candidate ${candidateId}:`, {
+        priceExw: currentFormValues.priceExw,
+        notes: currentFormValues.notes,
+        stockQuantity: currentFormValues.stockQuantity,
+      })
+      console.log(`[Refine Experience] Saved manual corrections for candidate ${candidateId}`)
+    }
+
+    // Extract structure rule using AI
+    let rules = []
+    try {
+      const config = getAiProviderConfig()
+      if (!config.enabled) throw new Error('未配置 AI Key，无法运行纠错提取')
+
+      const prompt = `你是一个数据校验规则提取专家。
+请根据以下上下文提取出一条或多条“纠错规则”：
+1. 原始文本：${rawText}
+2. 原始 AI 提取错误结果：${JSON.stringify(beforeValues)}
+3. 人工修改后的正确结果：${JSON.stringify(currentFormValues)}
+4. 用户吐槽的具体错误：${feedbackText}
+
+你的任务是分析用户的吐槽以及修改前后数据的差异，从中提取出结构化的纠错规则。
+每条规则必须包含：
+- field: 发生错误的字段名（必须是 brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceFca, priceFob, officialPrice, location, deliveryTime, notes 之一）
+- originalValue: 导致解析出错的“原始值”或“错误词汇”。它必须在原始文本或原始错误结果中出现过。
+- correctedValue: 用户修正后的“正确值”。它必须代表最终正确的输出。
+
+你必须只返回一个 JSON 数组，格式如下：
+[
+  { "field": "trimName", "originalValue": "钛3", "correctedValue": "502旗舰型" }
+]
+
+不要输出任何 Markdown 格式包裹（严禁使用 \`\`\` 符号），不要输出多余解释文字，直接输出 JSON 数组。`
+
+      let responseText = ''
+      if (config.provider === 'gemini' && !config.baseUrl.includes('openai')) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        })
+        const body = await res.json()
+        responseText = body.candidates?.[0]?.content?.parts?.[0]?.text || ''
+      } else {
+        const url = `${config.baseUrl}/chat/completions`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.apiKey}`
+          },
+          body: JSON.stringify({
+            model: config.model,
+            messages: [{ role: 'user', content: prompt }]
+          })
+        })
+        const body = await res.json()
+        responseText = body.choices?.[0]?.message?.content || ''
+      }
+
+      if (responseText) {
+        let cleanText = responseText.trim()
+        if (cleanText.startsWith('```')) {
+          cleanText = cleanText.replace(/^```[a-zA-Z0-9]*\\n/, '').replace(/\\n```$/, '').trim()
+        }
+        rules = JSON.parse(cleanText)
+      }
+    } catch (err) {
+      console.error('[Experience Extract] AI extraction failed:', err.message)
+      return res.status(500).json({ error: 'AI 经验规则提取失败: ' + err.message })
+    }
+
+    if (!Array.isArray(rules) || rules.length === 0) {
+      return res.status(400).json({ error: 'AI 无法从当前反馈中归纳出结构化规则' })
+    }
+
+    // Append to Feishu Experiences Table — each record gets its own contribution description
+    const syncErrors = []
+    const ruleIndexCounter = { value: 0 }
+    for (const rule of rules) {
+      if (!rule.field || !rule.originalValue || !rule.correctedValue) continue
+      ruleIndexCounter.value++
+
+      // Generate unique contribution description for this rule
+      const contributionLines = [
+        `【经验规则 #${ruleIndexCounter.value}】字段“${rule.field}”的纠错`,
+        `- 错误值：“${rule.originalValue}” → 正确值：“${rule.correctedValue}”`,
+      ]
+      if (feedbackText) {
+        contributionLines.push(`- 纠错原因：${feedbackText}`)
+      }
+      if (rawText) {
+        const snippet = rawText.length > 120 ? rawText.slice(0, 120) + '…' : rawText
+        contributionLines.push(`- 数据源原文：${snippet}`)
+      }
+      const contributionNote = contributionLines.join('\n')
+
+      const fields = ['字段', '原始值', '修正值', '状态', '原始识别内容', '用户反馈', '解析前表单', '解析后表单', '提示词贡献说明']
+      const row = [
+        rule.field,
+        rule.originalValue,
+        rule.correctedValue,
+        'confirmed',
+        rawText,
+        feedbackText,
+        JSON.stringify(beforeValues),
+        JSON.stringify(currentFormValues),
+        contributionNote
+      ]
+      const recordId = feishuAppendRow(FEISHU_EXPERIENCES_TABLE_ID, fields, row)
+      if (!recordId) {
+        syncErrors.push(`字段 ${rule.field} 写入飞书失败`)
+      }
+    }
+
+    if (syncErrors.length > 0) {
+      return res.status(500).json({ error: syncErrors.join('; ') })
+    }
+
+    // Trigger Prompt Refinement (shared prompt only; records already have their own contribution notes)
+    const refineResult = await refinePromptWithExperiences()
+
+    res.json({ success: true, rules, refineResult })
   })
 
   app.patch('/api/source-imports/duplicates/:duplicateId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -3000,7 +3234,92 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
 
 
 
-function syncProfileToFeishuBase(db, profileId) {}
+async function syncSuppliersFromFeishu(db) {
+  try {
+    const args = [
+      'base', '+record-list',
+      '--base-token', FEISHU_BASE_TOKEN,
+      '--table-id', FEISHU_SUPPLIERS_TABLE_ID,
+      '--as', 'user',
+      '--limit', '200',
+      '--format', 'json'
+    ]
+    const result = execFileSync('lark-cli', args, { encoding: 'utf8', timeout: 15000 })
+    const parsed = JSON.parse(result)
+    if (!parsed.ok) {
+      console.error('[Supplier Sync] Feishu response error:', parsed)
+      return
+    }
+    const fields = parsed.data?.fields || []
+    const records = parsed.data?.data || []
+    const recordIds = parsed.data?.record_id_list || []
+
+    const channelTypeMapReverse = { '源头供应商': 'primary_source', '渠道商': 'distributor', '代理商': 'agent', '其他': 'unknown' }
+
+    const localSuppliers = db.prepare('SELECT * FROM vehicle_source_suppliers').all()
+    const localMapByRecordId = new Map(localSuppliers.filter(s => s.feishu_record_id).map(s => [s.feishu_record_id, s]))
+    const localMapByName = new Map(localSuppliers.map(s => [s.supplier_name, s]))
+
+    const feishuRecordIds = new Set(recordIds)
+    const feishuNames = new Set()
+
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i]
+      const recordId = recordIds[i]
+      const vals = {}
+      if (Array.isArray(r)) {
+        fields.forEach((name, j) => { vals[name] = r[j] })
+      }
+
+      const supplierName = vals['Supplier Name'] || vals['供应商名称'] || ''
+      if (!supplierName) continue
+      feishuNames.add(supplierName)
+
+      const contactName = vals['Contact Person'] || vals['联系人'] || ''
+      const phone = vals['Phone'] || vals['电话'] || ''
+      const wechat = vals['WeChat'] || vals['微信'] || ''
+      const location = vals['Region'] || vals['区域'] || ''
+      const channelTypeFeishu = vals['Channel Type'] || vals['渠道类型'] || '其他'
+      const channelType = channelTypeMapReverse[channelTypeFeishu] || 'unknown'
+      const status = vals['Status'] || vals['状态'] || 'Active'
+      const isActive = status === 'Active' ? 1 : 0
+      const notes = vals['Notes'] || vals['备注'] || ''
+      const createdAt = vals['Created At'] || vals['创建时间'] || new Date().toISOString()
+      const updatedAt = new Date().toISOString()
+
+      const existing = localMapByRecordId.get(recordId) || localMapByName.get(supplierName)
+
+      if (existing) {
+        db.prepare(`
+          UPDATE vehicle_source_suppliers SET
+            supplier_name = ?, contact_name = ?, phone = ?, wechat = ?, location = ?,
+            channel_type = ?, notes = ?, is_active = ?, updated_at = ?, feishu_record_id = ?
+          WHERE id = ?
+        `).run(supplierName, contactName, phone, wechat, location, channelType, notes, isActive, updatedAt, recordId, existing.id)
+      } else {
+        db.prepare(`
+          INSERT INTO vehicle_source_suppliers (
+            supplier_name, contact_name, phone, wechat, location,
+            channel_type, notes, is_active, created_by, created_at, updated_at, feishu_record_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(supplierName, contactName, phone, wechat, location, channelType, notes, isActive, 'system', createdAt, updatedAt, recordId)
+      }
+    }
+
+    // Delete local ones no longer in Feishu (both by record_id and orphan names)
+    for (const local of localSuppliers) {
+      const isRecordIdDeleted = local.feishu_record_id && !feishuRecordIds.has(local.feishu_record_id)
+      const isOrphanNameDeleted = !local.feishu_record_id && !feishuNames.has(local.supplier_name)
+      if (isRecordIdDeleted || isOrphanNameDeleted) {
+        db.prepare('DELETE FROM vehicle_source_suppliers WHERE id = ?').run(local.id)
+      }
+    }
+  } catch (err) {
+    console.error('[Supplier Sync] Error syncing suppliers from Feishu:', err.message)
+  }
+}
+
+function syncProfileToFeishuBase(db, profileId) { }
 
 function syncSupplierToFeishuBase(db, supplierId) {
   const s = db.prepare('SELECT * FROM vehicle_source_suppliers WHERE id = ?').get(supplierId)
@@ -3039,6 +3358,7 @@ const FEISHU_VEHICLES_TABLE_ID = 'tblTKcuyW7AuZ9nd'
 const FEISHU_PROFILES_TABLE_ID = 'tblMmmXZfuWXbsmw'
 const FEISHU_SUPPLIERS_TABLE_ID = 'tblRnBLfMzZZQk7Z'
 const FEISHU_SNAPSHOTS_TABLE_ID = 'tblKIte5bOq24B5q'
+const FEISHU_EXPERIENCES_TABLE_ID = 'tblwWEYbWbV3WGlH'
 
 function feishuAppendRow(tableId, fields, row) {
   const payload = JSON.stringify({ fields, rows: [row] })

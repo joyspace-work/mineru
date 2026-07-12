@@ -32,6 +32,7 @@ app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   res.header('Access-Control-Allow-Credentials', 'true')
   if (_req.method === 'OPTIONS') return res.status(204).end()
+  console.log('[Global Request]', _req.method, _req.url)
   next()
 })
 

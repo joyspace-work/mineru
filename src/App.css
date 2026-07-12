@@ -524,10 +524,11 @@
     120px /* FCA价格 */
     120px /* FOB价格 */
     120px /* 指导价 */
+    110px /* 交付时间 */
     110px /* 库存地 */
     160px /* 车型库匹配 */
     minmax(120px, 1.2fr); /* 问题标签 */
-  min-width: 1730px;
+  min-width: 1840px;
   width: 100%;
 }
 
@@ -874,6 +875,137 @@
   background: #fff1f2;
   border: 1px solid #fecdd3;
   color: #be123c;
+}
+
+/* 一目了然的规则建议和已沉淀规则样式优化 */
+.badge-field,
+.rule-badge-field {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  width: fit-content;
+  display: inline-block;
+}
+
+.rule-comparison,
+.suggestion-comparison {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.diff-original {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  color: #991b1b;
+  text-decoration: line-through;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.diff-corrected {
+  background: #f0fdf4;
+  border: 1px solid #dcfce7;
+  color: #166534;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.diff-arrow {
+  color: #64748b;
+}
+
+.rule-meta,
+.suggestion-count {
+  font-size: 11px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rule-context,
+.suggestion-context {
+  display: block;
+  background: #f8fafc;
+  padding: 6px;
+  border-radius: 4px;
+  border-left: 3px solid #cbd5e1;
+  font-size: 10px;
+  color: #475569;
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+.rules-panel div.rule-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 10px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.rules-panel div.rule-item:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-color: #cbd5e1;
+}
+
+.suggestion-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 12px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.suggestion-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-color: #cbd5e1;
+}
+
+.suggestion-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.btn-confirm {
+  background: #16a34a !important;
+  color: #ffffff !important;
+  font-weight: 500;
+  border: none !important;
+}
+
+.btn-confirm:hover {
+  background: #15803d !important;
+}
+
+.btn-ignore {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.btn-ignore:hover {
+  background: #f8fafc !important;
 }
 
 @media (max-width: 1180px) {
@@ -4680,3 +4812,189 @@ td span {
     transform: rotate(360deg);
   }
 }
+
+/* 同源重复车源对比卡片及双列排版优化 */
+.duplicate-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px;
+  padding: 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  transition: all 0.25s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+
+.duplicate-card:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+  border-color: #cbd5e1 !important;
+}
+
+.duplicate-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px dashed #e2e8f0;
+  padding-bottom: 8px;
+}
+
+.duplicate-reason-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c2410c;
+  background: #fff7ed;
+  border: 1px solid #ffedd5;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.duplicate-score-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e3a8a;
+  background: #dbeafe;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.duplicate-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.comparison-col {
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comparison-col.current-candidate {
+  border-left: 3px solid #3b82f6;
+}
+
+.comparison-col.matched-candidate {
+  border-left: 3px solid #64748b;
+}
+
+.col-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.comp-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.comp-row .label {
+  color: #64748b;
+}
+
+.comp-row .val {
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.comp-row strong.val {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.highlight-same {
+  background: #dcfce7 !important;
+  color: #15803d !important;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600 !important;
+  font-size: 11.5px;
+}
+
+.duplicate-status-row {
+  font-size: 11px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+}
+
+.duplicate-status-row .status-badge {
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.duplicate-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.btn-confirm-dup {
+  background: #1e3a8a !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 8px 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-confirm-dup:hover {
+  background: #172554 !important;
+}
+
+.btn-ignore-dup {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 7px 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-ignore-dup:hover {
+  background: #e2e8f0 !important;
+}
+
+.btn-defer-dup {
+  background: #ffffff !important;
+  color: #64748b !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 7px 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-defer-dup:hover {
+  background: #f8fafc !important;
+}
+
+.duplicate-legacy-view {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 640px) {
+  .duplicate-comparison-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

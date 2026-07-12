@@ -295,12 +295,16 @@ const MIGRATIONS = [
     },
   },
   {
-    id: 14,
-    name: 'add nl_text to vehicle_source_rules',
+    id: 15,
+    name: 'vehicle_source_candidates: add delivery_time column',
     up(db) {
-      const existing = db.prepare('PRAGMA table_info(vehicle_source_rules)').all().map((c) => c.name)
-      if (!existing.includes('nl_text')) {
-        db.exec('ALTER TABLE vehicle_source_rules ADD COLUMN nl_text TEXT NOT NULL DEFAULT \'\'')
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return
+      const existing = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+      if (!existing.includes('delivery_time')) {
+        db.exec("ALTER TABLE vehicle_source_candidates ADD COLUMN delivery_time TEXT NOT NULL DEFAULT ''")
       }
     },
   },

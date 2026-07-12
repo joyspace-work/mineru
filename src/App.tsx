@@ -444,47 +444,6 @@ type SourceImportDuplicate = {
   updatedAt: string
 }
 
-type SourceImportRule = {
-  id: number
-  ruleType: string
-  scope: string
-  supplierName: string
-  sourceKey: string
-  sourceValue: string
-  targetField: string
-  targetValue: string
-  nlText: string
-  metadata: Record<string, unknown>
-  confidence: string
-  status: string
-  usageCount: number
-  createdBy: string
-  createdAt: string
-  updatedAt: string
-}
-
-type SourceImportRuleSuggestion = {
-  id: number
-  suggestionKey: string
-  ruleType: string
-  scope: string
-  supplierName: string
-  sourceKey: string
-  sourceValue: string
-  targetField: string
-  targetValue: string
-  changeType: string
-  evidenceCount: number
-  confidenceScore: number
-  status: string
-  metadata: Record<string, unknown>
-  createdBy: string
-  decidedBy: string
-  decidedAt: string | null
-  createdAt: string
-  updatedAt: string
-}
-
 type SourceImportAiStatus = {
   enabled: boolean
   provider: string
@@ -528,8 +487,6 @@ type SourceImportSnapshot = {
 type SourceImportListResponse = {
   batches: SourceImportBatch[]
   suppliers: SourceSupplier[]
-  rules: SourceImportRule[]
-  ruleSuggestions: SourceImportRuleSuggestion[]
   aiStatus: SourceImportAiStatus
   metrics: {
     totalCandidates: number
@@ -684,7 +641,7 @@ const translations: Record<Language, Record<string, string>> = {
     role_partner: 'Partner',
     role_customer: 'Customer',
     vehiclesSubtitle: 'Browse model groups, trims, available stock, preorder lead time, and price validity.',
-    sourceImportsSubtitle: 'Convert supplier files into reviewable stock snapshots and reusable matching rules.',
+    sourceImportsSubtitle: 'Convert supplier files into reviewable stock snapshots.',
     profilesSubtitle: 'Maintain model specifications and compare different model years and trims.',
     quotesSubtitle: 'Review each inquiry and manage quote versions, revisions, and PI actions.',
     ordersSubtitle: 'Orders aggregate quotes, vehicles, payments, and logistics.',
@@ -1251,131 +1208,131 @@ function App() {
 
   return (
     <I18nContext.Provider value={i18n}>
-    <div className={`app-shell ${appSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <aside className={`sidebar ${mobileNavOpen ? 'open' : ''} ${appSidebarCollapsed ? 'collapsed' : ''}`}>
-        <div className="brand">
-          <div className="brand-logo-name" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div className="brand-mark">EV</div>
-            {!appSidebarCollapsed && (
-              <div>
-                <strong>{i18n.t('appName')}</strong>
-                <span>China / Ethiopia</span>
-              </div>
-            )}
+      <div className={`app-shell ${appSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+        <aside className={`sidebar ${mobileNavOpen ? 'open' : ''} ${appSidebarCollapsed ? 'collapsed' : ''}`}>
+          <div className="brand">
+            <div className="brand-logo-name" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div className="brand-mark">EV</div>
+              {!appSidebarCollapsed && (
+                <div>
+                  <strong>{i18n.t('appName')}</strong>
+                  <span>China / Ethiopia</span>
+                </div>
+              )}
+            </div>
+            <button
+              className="app-sidebar-toggle"
+              onClick={() => setAppSidebarCollapsed(!appSidebarCollapsed)}
+              title={appSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+              type="button"
+              style={{
+                background: 'transparent',
+                border: 0,
+                padding: '4px',
+                color: '#9fb0c6',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginLeft: appSidebarCollapsed ? '0' : 'auto',
+                width: 'auto',
+                minHeight: 'auto',
+              }}
+            >
+              {appSidebarCollapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+            </button>
           </div>
-          <button
-            className="app-sidebar-toggle"
-            onClick={() => setAppSidebarCollapsed(!appSidebarCollapsed)}
-            title={appSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-            type="button"
-            style={{
-              background: 'transparent',
-              border: 0,
-              padding: '4px',
-              color: '#9fb0c6',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginLeft: appSidebarCollapsed ? '0' : 'auto',
-              width: 'auto',
-              minHeight: 'auto',
-            }}
-          >
-            {appSidebarCollapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
-          </button>
-        </div>
-        <nav>
-          {visibleNav.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                className={active === item.key ? 'active' : ''}
-                key={item.key}
-                onClick={() => {
-                  setActive(item.key)
-                  setMobileNavOpen(false)
-                }}
-                title={appSidebarCollapsed ? i18n.t(`nav_${item.key}`) : undefined}
-                type="button"
-              >
-                <Icon size={18} />
-                {!appSidebarCollapsed && i18n.t(`nav_${item.key}`)}
-              </button>
-            )
-          })}
-        </nav>
-        <div className="sidebar-user">
-          {!appSidebarCollapsed ? (
-            <>
-              <div>
-                <strong>{data.user.displayName}</strong>
-                <span>{i18n.roleLabel(data.user.role)}</span>
-              </div>
-              <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button">
+          <nav>
+            {visibleNav.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  className={active === item.key ? 'active' : ''}
+                  key={item.key}
+                  onClick={() => {
+                    setActive(item.key)
+                    setMobileNavOpen(false)
+                  }}
+                  title={appSidebarCollapsed ? i18n.t(`nav_${item.key}`) : undefined}
+                  type="button"
+                >
+                  <Icon size={18} />
+                  {!appSidebarCollapsed && i18n.t(`nav_${item.key}`)}
+                </button>
+              )
+            })}
+          </nav>
+          <div className="sidebar-user">
+            {!appSidebarCollapsed ? (
+              <>
+                <div>
+                  <strong>{data.user.displayName}</strong>
+                  <span>{i18n.roleLabel(data.user.role)}</span>
+                </div>
+                <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button">
+                  <LogOut size={17} />
+                </button>
+              </>
+            ) : (
+              <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button" style={{ margin: '0 auto' }}>
                 <LogOut size={17} />
               </button>
-            </>
-          ) : (
-            <button aria-label={i18n.t('logout')} onClick={logout} title={i18n.t('logout')} type="button" style={{ margin: '0 auto' }}>
-              <LogOut size={17} />
+            )}
+          </div>
+        </aside>
+
+        <main className="workspace">
+          <header className="topbar">
+            <button
+              aria-label="打开菜单"
+              className="icon-button mobile-only"
+              onClick={() => setMobileNavOpen((value) => !value)}
+              type="button"
+            >
+              <Menu size={20} />
             </button>
+            <div>
+              <p className="eyebrow">
+                {i18n.roleLabel(data.user.role)} {i18n.t('view')} · {data.user.displayName}
+              </p>
+              <h1>{title}</h1>
+            </div>
+            <div className="topbar-actions">
+              <LanguageToggle />
+            </div>
+          </header>
+
+          {active === 'sourceImports' && (
+            <DataPanel title={i18n.t('nav_sourceImports')} subtitle={i18n.t('sourceImportsSubtitle')}>
+              <SourceImportWorkbench
+                currentUser={data.user}
+                profiles={[]}
+                showToast={showToast}
+                exchangeRate={exchangeRate}
+                setExchangeRate={setExchangeRate}
+                onChanged={loadData}
+              />
+            </DataPanel>
           )}
+          {active === 'vehicles' && (
+            <DataPanel title={i18n.t('nav_vehicles')} subtitle={i18n.t('vehiclesSubtitle')}>
+              <FeishuVehicleTable
+                canSeeCost={data.permissions.canSeeCost}
+              />
+            </DataPanel>
+          )}
+        </main>
+        <div className="toast-container">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`toast-item ${toast.type}`}>
+              {toast.type === 'success' && <CheckCircle2 size={16} />}
+              {toast.type === 'error' && <X size={16} />}
+              {toast.type === 'info' && <Sparkles size={16} />}
+              <span>{toast.text}</span>
+            </div>
+          ))}
         </div>
-      </aside>
-
-      <main className="workspace">
-        <header className="topbar">
-          <button
-            aria-label="打开菜单"
-            className="icon-button mobile-only"
-            onClick={() => setMobileNavOpen((value) => !value)}
-            type="button"
-          >
-            <Menu size={20} />
-          </button>
-          <div>
-            <p className="eyebrow">
-              {i18n.roleLabel(data.user.role)} {i18n.t('view')} · {data.user.displayName}
-            </p>
-            <h1>{title}</h1>
-          </div>
-          <div className="topbar-actions">
-            <LanguageToggle />
-          </div>
-        </header>
-
-                {active === 'sourceImports' && (
-          <DataPanel title={i18n.t('nav_sourceImports')} subtitle={i18n.t('sourceImportsSubtitle')}>
-            <SourceImportWorkbench
-              currentUser={data.user}
-              profiles={[]}
-              showToast={showToast}
-              exchangeRate={exchangeRate}
-              setExchangeRate={setExchangeRate}
-              onChanged={loadData}
-            />
-          </DataPanel>
-        )}
-        {active === 'vehicles' && (
-          <DataPanel title={i18n.t('nav_vehicles')} subtitle={i18n.t('vehiclesSubtitle')}>
-            <FeishuVehicleTable
-              canSeeCost={data.permissions.canSeeCost}
-            />
-          </DataPanel>
-        )}
-      </main>
-      <div className="toast-container">
-        {toasts.map((toast) => (
-          <div key={toast.id} className={`toast-item ${toast.type}`}>
-            {toast.type === 'success' && <CheckCircle2 size={16} />}
-            {toast.type === 'error' && <X size={16} />}
-            {toast.type === 'info' && <Sparkles size={16} />}
-            <span>{toast.text}</span>
-          </div>
-        ))}
       </div>
-    </div>
     </I18nContext.Provider>
   )
 }
@@ -1508,28 +1465,6 @@ function issueLabel(issue: string) {
   return labels[issue] ?? issue
 }
 
-function ruleTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    value_alias: '值别名',
-    profile_alias: '车型匹配',
-    supplier_default: '供应商默认值',
-    supplier_same_origin: '同源判断',
-    field_mapping: '字段映射',
-  }
-  return labels[type] ?? type
-}
-
-function changeTypeLabel(type: string) {
-  const labels: Record<string, string> = {
-    recognition_correction: '识别纠错',
-    human_supplement: '人工补充',
-    profile_match_correction: '车型匹配纠正',
-    human_rejection: '人工驳回',
-    manual_clear: '人工清空',
-  }
-  return labels[type] ?? type
-}
-
 function SourceImportWorkbench({
   currentUser,
   profiles,
@@ -1562,7 +1497,6 @@ function SourceImportWorkbench({
   const [candidateFilter, setCandidateFilter] = useState('all')
   const [collapseSidebar, setCollapseSidebar] = useState(false)
   const [editingBatch, setEditingBatch] = useState<SourceImportBatch | null>(null)
-  const [showRuleManager, setShowRuleManager] = useState(false)
   const [editSnapshotName, setEditSnapshotName] = useState('')
   const [editSnapshotTime, setEditSnapshotTime] = useState('')
   const [editNotes, setEditNotes] = useState('')
@@ -1748,26 +1682,10 @@ function SourceImportWorkbench({
     await loadList()
   }
 
-  async function resolveRuleSuggestion(
-    suggestionId: number,
-    action: 'remember_supplier' | 'remember_global' | 'snooze' | 'ignore',
-  ) {
-    try {
-      await api(`/api/source-imports/rule-suggestions/${suggestionId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ action }),
-      })
-      const actionText: Record<typeof action, string> = {
-        remember_supplier: '已记住为供应商规则',
-        remember_global: '已记住为全局规则',
-        snooze: '已暂不处理',
-        ignore: '已忽略该建议',
-      }
-      showToast(actionText[action], 'success')
-      await loadList()
-    } catch (e: unknown) {
-      showToast(getErrorMessage(e, '规则建议处理失败'), 'error')
-    }
+  async function loadList() {
+    const response = await api<SourceImportListResponse>('/api/source-imports')
+    setList(response)
+    if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
   }
 
   const candidates = detail?.candidates ?? []
@@ -2118,6 +2036,12 @@ function SourceImportWorkbench({
                     candidate={selectedCandidate}
                     key={selectedCandidate?.id ?? 'empty'}
                     onSaved={handleCandidateSaved}
+                    onDataChanged={async () => {
+                      if (!selectedBatchId) return
+                      const response = await api<SourceImportBatchDetail>(`/api/source-imports/batches/${selectedBatchId}`)
+                      setDetail(response)
+                      await loadList()
+                    }}
                     onClose={() => setSelectedCandidateId(null)}
                     profiles={profiles}
                   />
@@ -2150,49 +2074,6 @@ function SourceImportWorkbench({
                       </article>
                     )
                   })}
-                </section>
-                 <section className="rules-panel">
-                   <header>
-                     <strong><Database size={16} /> 已沉淀规则</strong>
-                     <span>{list?.rules.length ?? 0} 条</span>
-                     <button className="compact-button secondary-button" onClick={() => setShowRuleManager(true)} type="button" style={{ marginLeft: 'auto' }}>管理规则</button>
-                   </header>
-                  {list?.rules.slice(0, 10).map((rule) => (
-                    <div key={rule.id}>
-                      <strong>{rule.sourceValue || rule.sourceKey}</strong>
-                      <span>{rule.ruleType} · {rule.scope === 'supplier' ? rule.supplierName : '全局'} → {rule.targetField}: {rule.targetValue}</span>
-                    </div>
-                  ))}
-                  {list?.rules.length === 0 && <p>人工确认和修正后，系统会在这里自动沉淀规则。</p>}
-                </section>
-                <section className="rule-suggestions-panel">
-                  <header>
-                    <strong><Sparkles size={16} /> 规则建议</strong>
-                    <span>{list?.ruleSuggestions.length ?? 0} 条待确认</span>
-                  </header>
-                  {list?.ruleSuggestions.length ? (
-                    list.ruleSuggestions.slice(0, 8).map((suggestion) => (
-                      <article key={suggestion.id}>
-                        <div>
-                          <strong>{suggestion.sourceValue || '空值'} → {suggestion.targetValue}</strong>
-                          <span>
-                            {ruleTypeLabel(suggestion.ruleType)} · {changeTypeLabel(suggestion.changeType)} ·
-                            {suggestion.supplierName ? ` ${suggestion.supplierName}` : ' 全局'} ·
-                            {suggestion.targetField}
-                          </span>
-                          <small>{suggestion.evidenceCount} 次相同修改 · 置信度 {suggestion.confidenceScore}%</small>
-                        </div>
-                        <div className="suggestion-actions">
-                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'remember_supplier')} type="button">记住给供应商</button>
-                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'remember_global')} type="button">记住全局</button>
-                          <button onClick={() => void resolveRuleSuggestion(suggestion.id, 'snooze')} type="button">稍后</button>
-                          <button className="danger-outline" onClick={() => void resolveRuleSuggestion(suggestion.id, 'ignore')} type="button">忽略</button>
-                        </div>
-                      </article>
-                    ))
-                  ) : (
-                    <p>修改记录累计到一定次数后，系统会在这里集中提出可沉淀的规则建议。</p>
-                  )}
                 </section>
               </div>
             </>
@@ -2249,139 +2130,6 @@ function SourceImportWorkbench({
               </button>
             </div>
           </form>
-        </div>
-      )}
-      {showRuleManager && (
-        <section className="panel" style={{ marginTop: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <strong>规则管理</strong>
-            <button className="secondary-button compact-button" onClick={() => setShowRuleManager(false)} type="button">收起规则管理 ×</button>
-          </div>
-          <RuleManager
-            rules={list?.rules ?? []}
-            onChanged={() => { loadList(); onChanged() }}
-          />
-        </section>
-      )}
-    </div>
-  )
-}
-
-function RuleManager({ rules, onChanged }: { rules: SourceImportRule[]; onChanged: () => Promise<void> }) {
-  const [items, setItems] = useState(rules)
-  const [editing, setEditing] = useState<SourceImportRule | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [nlText, setNlText] = useState('')
-  const [nlBusy, setNlBusy] = useState(false)
-  const [nlError, setNlError] = useState('')
-
-  useEffect(() => { setItems(rules) }, [rules])
-
-  async function handleSave() {
-    setNlBusy(true)
-    setNlError('')
-    try {
-      if (editing) {
-        await api(`/api/source-imports/rules/${editing.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ nlText: nlText.trim() }),
-        })
-        setEditing(null)
-      } else {
-        await api('/api/source-imports/rules', {
-          method: 'POST',
-          body: JSON.stringify({ nlText: nlText.trim() }),
-        })
-      }
-      setNlText('')
-      setCreating(false)
-      await onChanged()
-    } catch (err: any) {
-      setNlError(err?.message || '保存失败')
-    } finally {
-      setNlBusy(false)
-    }
-  }
-
-  async function handleDelete(rule: SourceImportRule) {
-    if (!confirm(`确定删除规则？`)) return
-    await api(`/api/source-imports/rules/${rule.id}`, { method: 'DELETE' })
-    await onChanged()
-  }
-
-  function openEdit(rule: SourceImportRule) {
-    setEditing(rule)
-    setCreating(true)
-    setNlText(rule.nlText || `${rule.sourceValue || rule.sourceKey || ''} → ${rule.targetField} = ${rule.targetValue || ''}`)
-  }
-
-  function cancel() {
-    setCreating(false)
-    setEditing(null)
-    setNlText('')
-    setNlError('')
-  }
-
-  return (
-    <div>
-      {creating ? (
-        <div className="panel" style={{ marginBottom: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <strong style={{ fontSize: '15px' }}>{editing ? '编辑规则' : '新增规则'}</strong>
-            <button className="secondary-button compact-button" onClick={cancel} type="button">× 取消</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <label>自然语言描述规则
-              <textarea
-                value={nlText}
-                onChange={(e) => setNlText(e.target.value)}
-                placeholder={'例如：\n当供应商说"白"时，外饰颜色应理解为"白色"\n表中"车型名称"这一列的数据，应填入车型名称字段\n供应商"张三"的默认贸易术语是"FOB"'}
-                rows={5}
-                style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: '14px', padding: '10px', borderRadius: '6px', border: '1px solid #e2e8f0' }}
-              />
-            </label>
-            {nlError && <div className="error" style={{ fontSize: '13px' }}>{nlError}</div>}
-            <div className="form-actions">
-              <button onClick={() => void handleSave()} type="button" disabled={nlBusy || !nlText.trim()}>
-                <Save size={15} /> {nlBusy ? '保存中...' : '保存规则'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <button onClick={() => setCreating(true)} type="button" style={{ marginBottom: '16px' }}>
-          <Plus size={15} /> 新增规则
-        </button>
-      )}
-      {items.length === 0 ? (
-        <div className="empty-state" style={{ marginTop: '24px' }}>暂无可管理规则，新增规则后 AI 解析将自动参考这些规则。</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {items.map((rule) => (
-            <div key={rule.id} style={{
-              display: 'flex', alignItems: 'center', gap: '12px',
-              padding: '10px 14px', background: '#f8fafc', borderRadius: '8px',
-              border: '1px solid #e2e8f0', fontSize: '13px',
-            }}>
-              <span style={{
-                background: rule.ruleType === 'natural_language' ? '#8b5cf6' : '#64748b', color: '#fff',
-                padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600,
-                whiteSpace: 'nowrap', flexShrink: 0,
-              }}>
-                规则 #{rule.id}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ color: '#334155' }}>{rule.nlText || `${rule.sourceValue || rule.sourceKey || ''} → ${rule.targetField} = ${rule.targetValue || ''}`}</span>
-                {rule.usageCount > 0 && (
-                  <span style={{ color: '#94a3b8', fontSize: '11px', marginLeft: '8px' }}>已应用 {rule.usageCount} 次</span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                <button className="compact-button secondary-button" onClick={() => openEdit(rule)} type="button" title="编辑"><Pencil size={13} /></button>
-                <button className="compact-button danger-outline" onClick={() => void handleDelete(rule)} type="button" title="删除"><Trash2 size={13} /></button>
-              </div>
-            </div>
-          ))}
         </div>
       )}
     </div>
@@ -2470,18 +2218,83 @@ function CandidateEditor({
   profiles,
   onSaved,
   onClose,
+  onDataChanged,
 }: {
   candidate: SourceImportCandidate | null
   profiles: VehicleProfile[]
   onSaved: (candidate: SourceImportCandidate) => Promise<void>
   onClose?: () => void
+  onDataChanged?: () => Promise<void>
 }) {
   const { statusLabel } = useI18n()
   const [draft, setDraft] = useState<SourceImportCandidate | null>(candidate)
-  const [saveRuleScope, setSaveRuleScope] = useState<'none' | 'supplier' | 'global'>('none')
   const [busy, setBusy] = useState(false)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [feedback, setFeedback] = useState('')
+  const [refining, setRefining] = useState(false)
+  const [feedbackSuccess, setFeedbackSuccess] = useState('')
+  const [promptRefinePreview, setPromptRefinePreview] = useState('')
+
+  async function handleSendFeedback() {
+    if (!draft || !feedback.trim()) return
+    setRefining(true)
+    setError('')
+    setFeedbackSuccess('')
+    try {
+      // 1. 先用 PATCH 保存表单修正值到数据库（即时完成，不阻塞）
+      await api(`/api/source-imports/candidates/${draft.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(draft),
+      })
+
+      // 2. 立即从 DB 刷新 draft + 父组件 detail，确保切换候选再切回来数据正确
+      try {
+        const refreshed = await api<{ candidate: SourceImportCandidate }>(`/api/source-imports/candidates/${draft.id}`)
+        if (refreshed.candidate) {
+          setDraft(refreshed.candidate)
+        }
+      } catch (_) { /* non-critical */ }
+      if (onDataChanged) {
+        await onDataChanged()
+      }
+
+      // 3. 异步提交纠错经验（不阻塞 UI，后台 AI 优化可能耗时较长）
+      api<{ success: boolean; rules: any[]; refineResult?: { refined: boolean; reason?: string; rulesCount?: number; preview?: string; diffChars?: number } }>(`/api/source-imports/candidates/${draft.id}/refine-experience`, {
+        method: 'POST',
+        body: JSON.stringify({
+          feedbackText: feedback,
+          currentFormValues: draft,
+        }),
+      }).then((result) => {
+        if (result.refineResult?.refined) {
+          const { rulesCount, diffChars, preview } = result.refineResult
+          setFeedbackSuccess(
+            `✅ 经验已提交，提示词已优化！` +
+            `基于 ${rulesCount} 条确认经验，提示词发生变化${diffChars != null && diffChars > 0 ? `（+${diffChars}字符）` : diffChars != null && diffChars < 0 ? `（${diffChars}字符）` : ''}`
+          )
+          setPromptRefinePreview(
+            `基于 ${rulesCount} 条经验完成优化。提示词已更新：${preview || ''}`
+          )
+        } else if (result.refineResult?.reason) {
+          setFeedbackSuccess(`✅ 经验已提交。提示词未更新：${result.refineResult.reason}`)
+        } else {
+          setFeedbackSuccess('✅ 经验已成功提交')
+        }
+        setTimeout(() => setFeedbackSuccess(''), 8000)
+      }).catch((err) => {
+        setError(err instanceof Error ? err.message : '提交纠错经验失败')
+      })
+
+      setFeedback('')
+      setFeedbackSuccess('⏳ 表单已保存，AI 纠错经验后台处理中…')
+      setTimeout(() => setFeedbackSuccess(''), 5000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '提交纠错经验失败')
+    } finally {
+      setRefining(false)
+    }
+  }
 
   if (!draft) {
     return <aside className="candidate-editor empty">选择一条候选车源后进行审核。</aside>
@@ -2504,7 +2317,6 @@ function CandidateEditor({
         body: JSON.stringify({
           ...payload,
           reviewStatus: targetStatus,
-          saveRuleScope,
         }),
       })
       setDraft(response.candidate)
@@ -2635,13 +2447,49 @@ function CandidateEditor({
       <div className="candidate-editor-footer">
         <div className="footer-left">
           <label className="candidate-notes">备注<textarea onChange={(event) => update('notes', event.target.value)} value={draft.notes} /></label>
-          <div className="rule-save-mode">
-            <span>立即沉淀为正式规则</span>
-            <select onChange={(event) => setSaveRuleScope(event.target.value as 'none' | 'supplier' | 'global')} value={saveRuleScope}>
-              <option value="none">不立即沉淀，进入经验池</option>
-              <option value="supplier">直接保存为该供应商规则</option>
-              <option value="global">直接保存为全局规则</option>
-            </select>
+          <div className="ai-feedback-section" style={{ marginTop: '16px', borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontWeight: 'bold', fontSize: '13px', color: '#1e293b' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Sparkles size={14} style={{ color: '#6366f1' }} />
+                <span>纠错并沉淀 AI 经验</span>
+              </span>
+              <textarea
+                placeholder="在此向 AI 反馈具体错处（例如：钛3是配置版本，不是颜色；不要把赠送充电桩写进备注...），点击提交即可瞬间沉淀飞书规则并异步训练提示词！"
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                style={{ minHeight: '60px', fontSize: '12px', padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                disabled={refining}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={refining || !feedback.trim()}
+              onClick={handleSendFeedback}
+              style={{
+                marginTop: '8px',
+                background: refining || !feedback.trim() ? '#94a3b8' : '#6366f1',
+                color: '#fff',
+                border: 'none',
+                padding: '6px 12px',
+                borderRadius: '4px',
+                cursor: refining || !feedback.trim() ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontWeight: 500
+              }}
+            >
+              {refining && <Loader2 size={12} className="animate-spin" />}
+              {refining ? '智能翻译并提炼提示词中...' : '提交 AI 纠错经验'}
+            </button>
+            {feedbackSuccess && <p style={{ color: '#10b981', fontSize: '12px', marginTop: '6px', fontWeight: 500 }}>{feedbackSuccess}</p>}
+            {promptRefinePreview && (
+              <details style={{ marginTop: '8px', fontSize: '11px', color: '#6b7280' }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 500 }}>查看最新优化结果</summary>
+                <pre style={{ marginTop: '4px', padding: '6px', background: '#f3f4f6', borderRadius: '4px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '11px', lineHeight: '1.4' }}>{promptRefinePreview}</pre>
+              </details>
+            )}
           </div>
         </div>
         <div className="footer-right">
