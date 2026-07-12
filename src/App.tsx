@@ -442,6 +442,14 @@ type SourceImportDuplicate = {
   confirmedBy: string
   createdAt: string
   updatedAt: string
+  candidateModel?: string
+  candidatePrice?: number
+  candidateCurrency?: string
+  candidateSupplier?: string
+  matchedModel?: string
+  matchedPrice?: number
+  matchedCurrency?: string
+  matchedSupplier?: string
 }
 
 type SourceImportAiStatus = {
@@ -2062,7 +2070,11 @@ function SourceImportWorkbench({
                         <div>
                           <strong>{candidate?.modelName || `候选 #${duplicate.candidateId}`}</strong>
                           <span>{duplicate.reason}</span>
-                          <small>匹配历史候选 #{duplicate.matchedCandidateId} · {statusLabel(duplicate.status)} {duplicate.resolution && `· ${duplicate.resolution}`}</small>
+                          <small>
+                            匹配历史车源：{duplicate.matchedSupplier || '未知渠道'} 的 {duplicate.matchedModel || '未知车型'}
+                            {duplicate.matchedPrice != null && ` (${duplicate.matchedCurrency || 'USD'} ${duplicate.matchedPrice})`} 
+                            · {statusLabel(duplicate.status)} {duplicate.resolution && `· ${duplicate.resolution}`}
+                          </small>
                         </div>
                         {duplicate.status !== 'resolved' && (
                           <div>
@@ -2241,13 +2253,14 @@ function CandidateEditor({
     setRefining(true)
     setError('')
     setFeedbackSuccess('')
+    setPromptRefinePreview('')
     try {
       // 1. 先用 PATCH 保存表单修正值到数据库（即时完成，不阻塞）
       await api(`/api/source-imports/candidates/${draft.id}`, {
         method: 'PATCH',
         body: JSON.stringify(draft),
       })
-
+ 
       // 2. 立即从 DB 刷新 draft + 父组件 detail，确保切换候选再切回来数据正确
       try {
         const refreshed = await api<{ candidate: SourceImportCandidate }>(`/api/source-imports/candidates/${draft.id}`)
@@ -2258,37 +2271,32 @@ function CandidateEditor({
       if (onDataChanged) {
         await onDataChanged()
       }
-
-      // 3. 异步提交纠错经验（不阻塞 UI，后台 AI 优化可能耗时较长）
-      api<{ success: boolean; rules: any[]; refineResult?: { refined: boolean; reason?: string; rulesCount?: number; preview?: string; diffChars?: number } }>(`/api/source-imports/candidates/${draft.id}/refine-experience`, {
+ 
+      // 3. 同步提交并等待 AI 优化提炼完全结束（阻塞 UI，提供完整状态反馈）
+      const result = await api<{ success: boolean; rules: any[]; refineResult?: { refined: boolean; reason?: string; rulesCount?: number; preview?: string; diffChars?: number } }>(`/api/source-imports/candidates/${draft.id}/refine-experience`, {
         method: 'POST',
         body: JSON.stringify({
           feedbackText: feedback,
           currentFormValues: draft,
         }),
-      }).then((result) => {
-        if (result.refineResult?.refined) {
-          const { rulesCount, diffChars, preview } = result.refineResult
-          setFeedbackSuccess(
-            `✅ 经验已提交，提示词已优化！` +
-            `基于 ${rulesCount} 条确认经验，提示词发生变化${diffChars != null && diffChars > 0 ? `（+${diffChars}字符）` : diffChars != null && diffChars < 0 ? `（${diffChars}字符）` : ''}`
-          )
-          setPromptRefinePreview(
-            `基于 ${rulesCount} 条经验完成优化。提示词已更新：${preview || ''}`
-          )
-        } else if (result.refineResult?.reason) {
-          setFeedbackSuccess(`✅ 经验已提交。提示词未更新：${result.refineResult.reason}`)
-        } else {
-          setFeedbackSuccess('✅ 经验已成功提交')
-        }
-        setTimeout(() => setFeedbackSuccess(''), 8000)
-      }).catch((err) => {
-        setError(err instanceof Error ? err.message : '提交纠错经验失败')
       })
-
+      
+      if (result.refineResult?.refined) {
+        const { rulesCount, diffChars, preview } = result.refineResult
+        setFeedbackSuccess(
+          `✅ 纠错同步完成，提示词已成功优化！` +
+          `基于 ${rulesCount} 条确认经验，提示词发生变化${diffChars != null && diffChars > 0 ? `（+${diffChars}字符）` : diffChars != null && diffChars < 0 ? `（${diffChars}字符）` : ''}`
+        )
+        setPromptRefinePreview(
+          `基于 ${rulesCount} 条经验完成优化。提示词已更新：${preview || ''}`
+        )
+      } else if (result.refineResult?.reason) {
+        setFeedbackSuccess(`✅ 纠错已提交，但本次未优化提示词：${result.refineResult.reason}`)
+      } else {
+        setFeedbackSuccess('✅ 纠错经验已成功保存并同步！')
+      }
+      setTimeout(() => setFeedbackSuccess(''), 8000)
       setFeedback('')
-      setFeedbackSuccess('⏳ 表单已保存，AI 纠错经验后台处理中…')
-      setTimeout(() => setFeedbackSuccess(''), 5000)
     } catch (err) {
       setError(err instanceof Error ? err.message : '提交纠错经验失败')
     } finally {

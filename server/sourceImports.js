@@ -1334,6 +1334,15 @@ function serializeDuplicate(row) {
     confirmedBy: row.confirmed_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // Human-readable extended fields (resolved via JOIN on list query)
+    candidateModel: row.candidate_model || null,
+    candidatePrice: row.candidate_price != null ? Number(row.candidate_price) : null,
+    candidateCurrency: row.candidate_currency || null,
+    candidateSupplier: row.candidate_supplier || null,
+    matchedModel: row.matched_model || null,
+    matchedPrice: row.matched_price != null ? Number(row.matched_price) : null,
+    matchedCurrency: row.matched_currency || null,
+    matchedSupplier: row.matched_supplier || null,
   }
 }
 
@@ -2673,7 +2682,18 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     if (!batch) return res.status(404).json({ error: '导入批次不存在' })
     const files = db.prepare('SELECT * FROM vehicle_source_import_files WHERE batch_id = ? ORDER BY id').all(batch.id).map(serializeFile)
     const candidates = db.prepare('SELECT * FROM vehicle_source_candidates WHERE batch_id = ? ORDER BY id').all(batch.id).map(serializeCandidate)
-    const duplicates = db.prepare('SELECT * FROM vehicle_source_duplicate_links WHERE batch_id = ? ORDER BY score DESC, id').all(batch.id).map(serializeDuplicate)
+    const duplicates = db.prepare(`
+      SELECT d.*, 
+             c1.model_name as candidate_model, c1.supplier_price as candidate_price, c1.currency as candidate_currency, b1.supplier_name as candidate_supplier,
+             c2.model_name as matched_model, c2.supplier_price as matched_price, c2.currency as matched_currency, b2.supplier_name as matched_supplier
+      FROM vehicle_source_duplicate_links d
+      LEFT JOIN vehicle_source_candidates c1 ON c1.id = d.candidate_id
+      LEFT JOIN vehicle_source_import_batches b1 ON b1.id = c1.batch_id
+      LEFT JOIN vehicle_source_candidates c2 ON c2.id = d.matched_candidate_id
+      LEFT JOIN vehicle_source_import_batches b2 ON b2.id = c2.batch_id
+      WHERE d.batch_id = ?
+      ORDER BY d.score DESC, d.id
+    `).all(batch.id).map(serializeDuplicate)
     const snapshots = db.prepare('SELECT * FROM vehicle_source_snapshots WHERE batch_id = ? ORDER BY id').all(batch.id).map((snapshot) => ({
       id: Number(snapshot.id),
       batchId: Number(snapshot.batch_id),
@@ -3227,7 +3247,17 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       db.exec('ROLLBACK')
       throw error
     }
-    const updated = db.prepare('SELECT * FROM vehicle_source_duplicate_links WHERE id = ?').get(duplicate.id)
+    const updated = db.prepare(`
+      SELECT d.*, 
+             c1.model_name as candidate_model, c1.supplier_price as candidate_price, c1.currency as candidate_currency, b1.supplier_name as candidate_supplier,
+             c2.model_name as matched_model, c2.supplier_price as matched_price, c2.currency as matched_currency, b2.supplier_name as matched_supplier
+      FROM vehicle_source_duplicate_links d
+      LEFT JOIN vehicle_source_candidates c1 ON c1.id = d.candidate_id
+      LEFT JOIN vehicle_source_import_batches b1 ON b1.id = c1.batch_id
+      LEFT JOIN vehicle_source_candidates c2 ON c2.id = d.matched_candidate_id
+      LEFT JOIN vehicle_source_import_batches b2 ON b2.id = c2.batch_id
+      WHERE d.id = ?
+    `).get(duplicate.id)
     res.json({ duplicate: serializeDuplicate(updated) })
   })
 }
@@ -3414,6 +3444,54 @@ function syncCandidateToFeishuBase(db, candidateId, username) {
   let batteryKwh = null
   let rangeKm = null
 
+  // 1. 查询相关的 confirmed/same_origin 同源关系，用来拼装 Public Notes 里的同源比价信息
+  let parentNotes = ''
+  let childNotes = ''
+  try {
+    const links = db.prepare(`
+      SELECT d.*, 
+             c1.model_name as candidate_model, c1.supplier_price as candidate_price, c1.currency as candidate_currency, b1.supplier_name as candidate_supplier, c1.feishu_record_id as candidate_feishu_id,
+             c2.model_name as matched_model, c2.supplier_price as matched_price, c2.currency as matched_currency, b2.supplier_name as matched_supplier, c2.feishu_record_id as matched_feishu_id
+      FROM vehicle_source_duplicate_links d
+      LEFT JOIN vehicle_source_candidates c1 ON c1.id = d.candidate_id
+      LEFT JOIN vehicle_source_import_batches b1 ON b1.id = c1.batch_id
+      LEFT JOIN vehicle_source_candidates c2 ON c2.id = d.matched_candidate_id
+      LEFT JOIN vehicle_source_import_batches b2 ON b2.id = c2.batch_id
+      WHERE (d.candidate_id = ? OR d.matched_candidate_id = ?) AND d.resolution = 'same_origin'
+    `).all(candidateId, candidateId)
+
+    // 如果当前 candidate 是同源冗余车源：拼接它指向的那个主渠道
+    if (candidate.canonical_action === 'same_origin_channel') {
+      const parentLinks = links.filter(l => l.candidate_id === candidateId)
+      if (parentLinks.length > 0) {
+        const p = parentLinks[0]
+        const matchedIdStr = p.matched_feishu_id ? `飞书 ID: ${p.matched_feishu_id}` : `本地车源 ID: ${p.matched_candidate_id}`
+        parentNotes = `【同源冗余车源】主渠道指向：${p.matched_supplier || '未知渠道'} 的 ${p.matched_model || '未知车型'} (价格: ${p.matched_currency || 'USD'} ${p.matched_price || 0})，[关联 ${matchedIdStr}]。本记录不计入物理库存。`
+      }
+    } else {
+      // 如果当前是正常入库的主车源：拼接它在底盘备份的所有同源低价/参考备选渠道
+      const childLinks = links.filter(l => l.matched_candidate_id === candidateId)
+      if (childLinks.length > 0) {
+        const channelLines = childLinks.map(c => `${c.candidate_supplier || '未知供应商'}(${c.candidate_currency || 'USD'} ${c.candidate_price || 0})`)
+        childNotes = `【同源备选渠道】${channelLines.join('；')}`
+      }
+    }
+  } catch (e) {
+    console.error('[Feishu Sync] Error resolving duplicate links metadata:', e.message)
+  }
+
+  // 拼装最终的 Notes 备注
+  let publicNotes = candidate.notes || ''
+  if (parentNotes) {
+    publicNotes = publicNotes ? `${publicNotes}\n${parentNotes}` : parentNotes
+  }
+  if (childNotes) {
+    publicNotes = publicNotes ? `${publicNotes}\n${childNotes}` : childNotes
+  }
+
+  // 如果是 same_origin_channel 冗余渠道，我们将 Is Listed 设为 false，防止在终端前台混淆上架
+  const isListed = candidate.canonical_action !== 'same_origin_channel'
+
   const vehicleId = `EV-${Date.now().toString(36).toUpperCase()}-${candidateId}`
   const leadTime = candidate.preorder_min_days > 0
     ? `${candidate.preorder_min_days}-${candidate.preorder_max_days} days`
@@ -3437,7 +3515,7 @@ function syncCandidateToFeishuBase(db, candidateId, username) {
     candidate.trade_term || 'EXW',
     energyType, batteryKwh, rangeKm,
     candidate.location || '', supplierName, leadTime, status,
-    username || '', candidate.notes || '', true,
+    username || '', publicNotes, isListed,
   ]
 
   const existingRecordId = candidate.feishu_record_id
