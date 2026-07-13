@@ -7,7 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { setupSourceImportWorkbench } from './sourceImports.js'
+import { setupSourceImportWorkbench, initSourceImportTables } from './sourceImports.js'
 import { runMigrations } from './migrations.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -19,8 +19,8 @@ const app = express()
 const port = Number(process.env.API_PORT || 3001)
 const jwtSecret = process.env.JWT_SECRET || 'local-development-secret-change-before-deploying'
 
-const FEISHU_BASE_TOKEN = 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
-const FEISHU_VEHICLES_TABLE_ID = 'tblTKcuyW7AuZ9nd'
+const FEISHU_BASE_TOKEN = process.env.FEISHU_BASE_TOKEN || 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
+const FEISHU_VEHICLES_TABLE_ID = process.env.FEISHU_VEHICLES_TABLE_ID || 'tblTKcuyW7AuZ9nd'
 
 app.use(express.json())
 app.use(cookieParser())
@@ -54,6 +54,7 @@ db.exec(`
   );
 `)
 
+initSourceImportTables(db)
 runMigrations(db)
 
 const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count

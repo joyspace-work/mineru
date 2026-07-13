@@ -1715,11 +1715,6 @@ function SourceImportWorkbench({
     await loadList()
   }
 
-  async function loadList() {
-    const response = await api<SourceImportListResponse>('/api/source-imports')
-    setList(response)
-    if (!selectedBatchId && response.batches[0]) setSelectedBatchId(response.batches[0].id)
-  }
 
   const candidates = detail?.candidates ?? []
   const filteredCandidates =
@@ -1759,7 +1754,7 @@ function SourceImportWorkbench({
                 <Plus size={15} />
                 新增
               </button>
-              {list?.suppliers.length > 0 && (
+              {(list?.suppliers?.length ?? 0) > 0 && (
                 <button className="supplier-add-button danger-outline" onClick={async () => {
                   const s = list?.suppliers.find((s) => s.supplierName === supplierName)
                   if (s && confirm(`确定删除供应商「${s.supplierName}」？`)) {
@@ -2315,22 +2310,8 @@ function CandidateEditor({
     setFeedbackSuccess('')
     setPromptRefinePreview('')
     try {
-      // 1. 先用 PATCH 保存表单修正值到数据库（即时完成，不阻塞）
-      await api(`/api/source-imports/candidates/${draft.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(draft),
-      })
- 
-      // 2. 立即从 DB 刷新 draft + 父组件 detail，确保切换候选再切回来数据正确
-      try {
-        const refreshed = await api<{ candidate: SourceImportCandidate }>(`/api/source-imports/candidates/${draft.id}`)
-        if (refreshed.candidate) {
-          setDraft(refreshed.candidate)
-        }
-      } catch (_) { /* non-critical */ }
-      if (onDataChanged) {
-        await onDataChanged()
-      }
+      // 1. 同步提交并等待 AI 优化提炼完全结束（阻塞 UI，提供完整状态反馈）
+      // 注意：这里不能提前发送 PATCH，否则后端拿不到修改前的原始数据进行差异对比
  
       // 3. 同步提交并等待 AI 优化提炼完全结束（阻塞 UI，提供完整状态反馈）
       const result = await api<{ success: boolean; rules: any[]; refineResult?: { refined: boolean; reason?: string; rulesCount?: number; preview?: string; diffChars?: number } }>(`/api/source-imports/candidates/${draft.id}/refine-experience`, {
@@ -2355,6 +2336,18 @@ function CandidateEditor({
       } else {
         setFeedbackSuccess('✅ 纠错经验已成功保存并同步！')
       }
+
+      // 4. 提交完毕后，从 DB 刷新本条数据和父组件列表，确保页面状态同步
+      try {
+        const refreshed = await api<{ candidate: SourceImportCandidate }>(`/api/source-imports/candidates/${draft.id}`)
+        if (refreshed.candidate) {
+          setDraft(refreshed.candidate)
+        }
+      } catch (_) { /* non-critical */ }
+      if (onDataChanged) {
+        await onDataChanged()
+      }
+
       setTimeout(() => setFeedbackSuccess(''), 8000)
       setFeedback('')
     } catch (err) {

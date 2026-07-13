@@ -308,6 +308,31 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    id: 16,
+    name: 'vehicle_source_candidates: add missing review and matching columns',
+    up(db) {
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return
+      const existing = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+      const newCols = [
+        ['review_status', "TEXT NOT NULL DEFAULT 'pending_review'"],
+        ['issue_tags', "TEXT NOT NULL DEFAULT '[]'"],
+        ['change_status', "TEXT NOT NULL DEFAULT 'new'"],
+        ['duplicate_score', "INTEGER NOT NULL DEFAULT 0"],
+        ['canonical_action', "TEXT NOT NULL DEFAULT 'count_inventory'"],
+        ['reviewed_by', "TEXT NOT NULL DEFAULT ''"],
+        ['reviewed_at', "TEXT"],
+      ]
+      for (const [name, def] of newCols) {
+        if (!existing.includes(name)) {
+          db.exec(`ALTER TABLE vehicle_source_candidates ADD COLUMN ${name} ${def}`)
+        }
+      }
+    },
+  },
 ]
 
 // ─── Migration runner ─────────────────────────────────────────────────────────

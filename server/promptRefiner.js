@@ -3,8 +3,8 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
-const FEISHU_BASE_TOKEN = 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
-const FEISHU_EXPERIENCES_TABLE_ID = 'tblwWEYbWbV3WGlH'
+const FEISHU_BASE_TOKEN = process.env.FEISHU_BASE_TOKEN || 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
+const FEISHU_EXPERIENCES_TABLE_ID = process.env.FEISHU_EXPERIENCES_TABLE_ID || 'tblwWEYbWbV3WGlH'
 
 function getAiProviderConfig() {
   const provider = (
@@ -33,12 +33,14 @@ function getAiProviderConfig() {
       baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     }
   } else {
+    const defaultApiKey = 'sk-ws-H.EMEEEIE.JfXq.MEUCIAVb7I3OycLDjvOXW1JfEY6A-H9QyHNl0Denq5aosG9_AiEAyUh-BGVGxBggz-qJwqRM91Gyyd6wXEIhqvmacWQBpMQ'
+    const defaultBaseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
     return {
       provider: 'openai',
-      enabled: Boolean(process.env.OPENAI_API_KEY),
-      apiKey: process.env.OPENAI_API_KEY || '',
+      enabled: Boolean(process.env.OPENAI_API_KEY || defaultApiKey),
+      apiKey: process.env.OPENAI_API_KEY || defaultApiKey,
       model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'qwen3-vl-flash',
-      baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
+      baseUrl: (process.env.OPENAI_BASE_URL || defaultBaseUrl).replace(/\/+$/, ''),
     }
   }
 }
@@ -202,7 +204,7 @@ export async function savePromptToFeishu(promptText) {
   }
 }
 
-export async function refinePromptWithExperiences() {
+export async function refinePromptWithExperiences(db) {
   const config = getAiProviderConfig()
   if (!config.enabled) return { refined: false, reason: 'AI 未配置，无法优化提示词' }
 
@@ -213,9 +215,9 @@ export async function refinePromptWithExperiences() {
   const confirmedRules = []
   try {
     const dbPath = resolve(process.cwd(), 'data/ev-export.db')
-    if (existsSync(dbPath)) {
-      const localDb = new DatabaseSync(dbPath)
-      const rows = localDb.prepare("SELECT * FROM vehicle_source_experiences WHERE status = 'confirmed'").all()
+    const activeDb = db || (existsSync(dbPath) ? new DatabaseSync(dbPath) : null)
+    if (activeDb) {
+      const rows = activeDb.prepare("SELECT * FROM vehicle_source_experiences WHERE status = 'confirmed'").all()
       for (const row of rows) {
         confirmedRules.push({
           field: row.field || '',

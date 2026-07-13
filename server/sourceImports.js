@@ -191,12 +191,14 @@ function getAiProviderConfig() {
       baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     }
   } else {
+    const defaultApiKey = 'sk-ws-H.EMEEEIE.JfXq.MEUCIAVb7I3OycLDjvOXW1JfEY6A-H9QyHNl0Denq5aosG9_AiEAyUh-BGVGxBggz-qJwqRM91Gyyd6wXEIhqvmacWQBpMQ'
+    const defaultBaseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
     config = {
       provider: 'openai',
-      enabled: Boolean(process.env.OPENAI_API_KEY),
-      apiKey: process.env.OPENAI_API_KEY || '',
-      model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'gpt-4.1-mini',
-      baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
+      enabled: Boolean(process.env.OPENAI_API_KEY || defaultApiKey),
+      apiKey: process.env.OPENAI_API_KEY || defaultApiKey,
+      model: process.env.OPENAI_SOURCE_IMPORT_MODEL || process.env.AI_SOURCE_IMPORT_MODEL || 'qwen3-vl-flash',
+      baseUrl: (process.env.OPENAI_BASE_URL || defaultBaseUrl).replace(/\/+$/, ''),
     }
   }
 
@@ -218,7 +220,7 @@ function getAiImportStatus() {
   }
 }
 
-function initSourceImportTables(db) {
+export function initSourceImportTables(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS vehicle_source_import_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3299,7 +3301,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     }
 
     // Trigger Prompt Refinement (shared prompt only; records already have their own contribution notes)
-    const refineResult = await refinePromptWithExperiences()
+    const refineResult = await refinePromptWithExperiences(db)
 
     res.json({ success: true, rules, refineResult })
   })
@@ -3481,13 +3483,12 @@ function syncSnapshotToFeishuBase(db, candidateId, username) {
   const row = [`SNAP-${candidate.batch_id}-${candidate.id}-${Date.now()}`, `BATCH-${candidate.batch_id}`, candidate.supplier_name, snapshot.snapshot_time, snapshot.version_no, candidate.brand || '', candidate.model_name || '', candidate.year || '', candidate.trim_name || '', candidate.exterior_color || '', candidate.interior_color || '', candidate.stock_quantity || 0, candidate.price_exw || 0, candidate.price_fca || 0, candidate.price_fob || 0, candidate.trade_term || '', candidate.location || '', leadTime, candidate.change_status || 'new', username || '', new Date().toISOString()]
   feishuAppendRow(FEISHU_SNAPSHOTS_TABLE_ID, fields, row)
 }
-
-const FEISHU_BASE_TOKEN = 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
-const FEISHU_VEHICLES_TABLE_ID = 'tblTKcuyW7AuZ9nd'
-const FEISHU_PROFILES_TABLE_ID = 'tblMmmXZfuWXbsmw'
-const FEISHU_SUPPLIERS_TABLE_ID = 'tblRnBLfMzZZQk7Z'
-const FEISHU_SNAPSHOTS_TABLE_ID = 'tblKIte5bOq24B5q'
-const FEISHU_EXPERIENCES_TABLE_ID = 'tblwWEYbWbV3WGlH'
+const FEISHU_BASE_TOKEN = process.env.FEISHU_BASE_TOKEN || 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
+const FEISHU_VEHICLES_TABLE_ID = process.env.FEISHU_VEHICLES_TABLE_ID || 'tblTKcuyW7AuZ9nd'
+const FEISHU_PROFILES_TABLE_ID = process.env.FEISHU_PROFILES_TABLE_ID || 'tblMmmXZfuWXbsmw'
+const FEISHU_SUPPLIERS_TABLE_ID = process.env.FEISHU_SUPPLIERS_TABLE_ID || 'tblRnBLfMzZZQk7Z'
+const FEISHU_SNAPSHOTS_TABLE_ID = process.env.FEISHU_SNAPSHOTS_TABLE_ID || 'tblKIte5bOq24B5q'
+const FEISHU_EXPERIENCES_TABLE_ID = process.env.FEISHU_EXPERIENCES_TABLE_ID || 'tblwWEYbWbV3WGlH'
 
 function feishuAppendRow(tableId, fields, row) {
   const payload = JSON.stringify({ fields, rows: [row] })
