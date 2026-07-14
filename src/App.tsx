@@ -84,12 +84,11 @@ type Vehicle = {
   supplierSources?: SupplierSource[]
   priceHistory?: PriceHistoryEntry[]
   vin: string
-  cost?: number
-  costExw?: number | null
+  costExw?: number | string | null
   costExwCurrency?: string
-  costFca?: number | null
+  costFca?: number | string | null
   costFcaCurrency?: string
-  costFob?: number | null
+  costFob?: number | string | null
   costFobCurrency?: string
   canSeePrice: boolean
   visiblePrice: number
@@ -157,11 +156,11 @@ type SupplierSource = {
   preorderMaxDays: number
   canPreorder: boolean
   supplierPrice: number
-  priceExw?: number | null
+  priceExw?: number | string | null
   priceExwCurrency?: string
-  priceFca?: number | null
+  priceFca?: number | string | null
   priceFcaCurrency?: string
-  priceFob?: number | null
+  priceFob?: number | string | null
   priceFobCurrency?: string
   createdBy: string
   updatedBy: string
@@ -402,11 +401,11 @@ type SourceImportCandidate = {
   supplierPrice: number
   currency: string
   tradeTerm: string
-  priceExw: number | null
+  priceExw: number | string | null
   priceExwCurrency?: string
-  priceFca: number | null
+  priceFca: number | string | null
   priceFcaCurrency?: string
-  priceFob: number | null
+  priceFob: number | string | null
   priceFobCurrency?: string
   officialPrice: string
   location: string
@@ -425,6 +424,7 @@ type SourceImportCandidate = {
   reviewedBy: string
   reviewedAt: string | null
   feishuRecordId: string | null
+  vehicleStatus?: string
   createdAt: string
   updatedAt: string
 }
@@ -1047,6 +1047,19 @@ const formatUsd = (value: number) =>
     currency: 'USD',
     maximumFractionDigits: 0,
   }).format(value)
+
+const formatUsdFlexible = (value: number | string | null | undefined) => {
+  if (value === null || value === undefined || value === '') return '-'
+  const num = Number(value)
+  if (!isNaN(num)) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(num)
+  }
+  return String(value)
+}
 
 const formatPrice = (value: number | null | undefined, currency?: string) => {
   if (value === null || value === undefined || value === 0) return '-'
@@ -2005,7 +2018,14 @@ function SourceImportWorkbench({
                     >
                       <span><Badge label={candidate.reviewStatus} /><small>{statusLabel(candidate.changeStatus)}</small></span>
                       <span>{candidate.brand || '-'}</span>
-                      <span><strong>{candidate.modelName || '未识别车型'}</strong></span>
+                      <span>
+                        <strong>{candidate.modelName || '未识别车型'}</strong>
+                        {candidate.vehicleStatus && (
+                          <span style={{ display: 'block', color: '#6366f1', fontSize: '10px', marginTop: '2px', fontWeight: '500' }}>
+                            {candidate.vehicleStatus}
+                          </span>
+                        )}
+                      </span>
                       <span>{candidate.year || '-'}</span>
                       <span>{candidate.trimName || '-'}</span>
                       <span>{candidate.exteriorColor || '-'}</span>
@@ -2014,36 +2034,54 @@ function SourceImportWorkbench({
                       <span>
                         {candidate.priceExw ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: '1.2' }}>
-                            <strong>{candidate.priceExwCurrency === 'CNY' ? '¥' : '$'}{candidate.priceExw.toLocaleString()}</strong>
-                            <small style={{ color: '#64748b', fontSize: '10px' }}>
-                              {candidate.priceExwCurrency === 'CNY'
-                                ? `$${(candidate.priceExw / exchangeRate).toFixed(0)}`
-                                : `¥${(candidate.priceExw * exchangeRate).toFixed(0)}`}
-                            </small>
+                            <strong>
+                              {!isNaN(Number(candidate.priceExw)) 
+                                ? `${candidate.priceExwCurrency === 'CNY' ? '¥' : '$'}${Number(candidate.priceExw).toLocaleString()}` 
+                                : String(candidate.priceExw)}
+                            </strong>
+                            {!isNaN(Number(candidate.priceExw)) && (
+                              <small style={{ color: '#64748b', fontSize: '10px' }}>
+                                {candidate.priceExwCurrency === 'CNY'
+                                  ? `$${(Number(candidate.priceExw) / exchangeRate).toFixed(0)}`
+                                  : `¥${(Number(candidate.priceExw) * exchangeRate).toFixed(0)}`}
+                              </small>
+                            )}
                           </div>
                         ) : '-'}
                       </span>
                       <span>
                         {candidate.priceFca ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: '1.2' }}>
-                            <strong>{candidate.priceFcaCurrency === 'CNY' ? '¥' : '$'}{candidate.priceFca.toLocaleString()}</strong>
-                            <small style={{ color: '#64748b', fontSize: '10px' }}>
-                              {candidate.priceFcaCurrency === 'CNY'
-                                ? `$${(candidate.priceFca / exchangeRate).toFixed(0)}`
-                                : `¥${(candidate.priceFca * exchangeRate).toFixed(0)}`}
-                            </small>
+                            <strong>
+                              {!isNaN(Number(candidate.priceFca)) 
+                                ? `${candidate.priceFcaCurrency === 'CNY' ? '¥' : '$'}${Number(candidate.priceFca).toLocaleString()}` 
+                                : String(candidate.priceFca)}
+                            </strong>
+                            {!isNaN(Number(candidate.priceFca)) && (
+                              <small style={{ color: '#64748b', fontSize: '10px' }}>
+                                {candidate.priceFcaCurrency === 'CNY'
+                                  ? `$${(Number(candidate.priceFca) / exchangeRate).toFixed(0)}`
+                                  : `¥${(Number(candidate.priceFca) * exchangeRate).toFixed(0)}`}
+                              </small>
+                            )}
                           </div>
                         ) : '-'}
                       </span>
                       <span>
                         {candidate.priceFob ? (
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: '1.2' }}>
-                            <strong>{candidate.priceFobCurrency === 'CNY' ? '¥' : '$'}{candidate.priceFob.toLocaleString()}</strong>
-                            <small style={{ color: '#64748b', fontSize: '10px' }}>
-                              {candidate.priceFobCurrency === 'CNY'
-                                ? `$${(candidate.priceFob / exchangeRate).toFixed(0)}`
-                                : `¥${(candidate.priceFob * exchangeRate).toFixed(0)}`}
-                            </small>
+                            <strong>
+                              {!isNaN(Number(candidate.priceFob)) 
+                                ? `${candidate.priceFobCurrency === 'CNY' ? '¥' : '$'}${Number(candidate.priceFob).toLocaleString()}` 
+                                : String(candidate.priceFob)}
+                            </strong>
+                            {!isNaN(Number(candidate.priceFob)) && (
+                              <small style={{ color: '#64748b', fontSize: '10px' }}>
+                                {candidate.priceFobCurrency === 'CNY'
+                                  ? `$${(Number(candidate.priceFob) / exchangeRate).toFixed(0)}`
+                                  : `¥${(Number(candidate.priceFob) * exchangeRate).toFixed(0)}`}
+                              </small>
+                            )}
                           </div>
                         ) : '-'}
                       </span>
@@ -2426,9 +2464,8 @@ function CandidateEditor({
           EXW 价格
           <div style={{ display: 'flex', gap: '4px' }}>
             <input
-              min="0"
-              onChange={(event) => update('priceExw', event.target.value === '' ? null : Number(event.target.value))}
-              type="number"
+              onChange={(event) => update('priceExw', event.target.value === '' ? null : event.target.value)}
+              type="text"
               value={draft.priceExw ?? ''}
               style={{ flex: 1 }}
               placeholder="未填写"
@@ -2447,9 +2484,8 @@ function CandidateEditor({
           FCA 价格
           <div style={{ display: 'flex', gap: '4px' }}>
             <input
-              min="0"
-              onChange={(event) => update('priceFca', event.target.value === '' ? null : Number(event.target.value))}
-              type="number"
+              onChange={(event) => update('priceFca', event.target.value === '' ? null : event.target.value)}
+              type="text"
               value={draft.priceFca ?? ''}
               style={{ flex: 1 }}
               placeholder="未填写"
@@ -2468,9 +2504,8 @@ function CandidateEditor({
           FOB 价格
           <div style={{ display: 'flex', gap: '4px' }}>
             <input
-              min="0"
-              onChange={(event) => update('priceFob', event.target.value === '' ? null : Number(event.target.value))}
-              type="number"
+              onChange={(event) => update('priceFob', event.target.value === '' ? null : event.target.value)}
+              type="text"
               value={draft.priceFob ?? ''}
               style={{ flex: 1 }}
               placeholder="未填写"
@@ -2498,6 +2533,7 @@ function CandidateEditor({
           <option value="same_origin_channel">{statusLabel('same_origin_channel')}</option>
           <option value="do_not_count">{statusLabel('do_not_count')}</option>
         </select></label>
+        <label>车辆状态<input onChange={(event) => update('vehicleStatus', event.target.value)} placeholder="如：在途、现车、6月交付" value={draft.vehicleStatus || ''} /></label>
         <label>审核状态<select onChange={(event) => update('reviewStatus', event.target.value)} value={draft.reviewStatus}>
           <option value="pending_review">{statusLabel('pending_review')}</option>
           <option value="needs_review">{statusLabel('needs_review')}</option>
@@ -2556,8 +2592,16 @@ function CandidateEditor({
         <div className="footer-right">
           <details className="raw-fields">
             <summary>查看原始识别内容</summary>
-            <pre>{JSON.stringify(draft.rawFields, null, 2)}</pre>
-            <p>{draft.rawText}</p>
+            {draft.rawFields?._parser !== 'ai' ? (
+              <>
+                <pre>{JSON.stringify(draft.rawFields, null, 2)}</pre>
+                <p>{draft.rawText}</p>
+              </>
+            ) : (
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px', lineHeight: '1.6', background: '#f8fafc', padding: '12px', border: '1px solid #e2e8f0', borderRadius: '6px', color: '#1e293b', marginTop: '6px' }}>
+                {draft.rawText || '无原始识别文本'}
+              </pre>
+            )}
           </details>
           {error && <p className="form-error">{error}</p>}
           <div className="candidate-actions">
@@ -2705,13 +2749,13 @@ function FeishuVehicleTable({ canSeeCost }: { canSeeCost: boolean }) {
                 <th>{language === 'zh' ? '版本' : 'Trim'}</th>
                 <th>{language === 'zh' ? '年份' : 'Year'}</th>
                 <th>{language === 'zh' ? '外饰色' : 'Ext. Color'}</th>
+                <th>{language === 'zh' ? '内饰色' : 'Int. Color'}</th>
                 <th>{language === 'zh' ? '库存' : 'Stock'}</th>
                 {canSeeCost && <th>{language === 'zh' ? '成本(EXW/FOB/FCA)' : 'Cost (E/F/F)'}</th>}
-                <th>{language === 'zh' ? '能源' : 'Energy'}</th>
-                <th>{language === 'zh' ? '续航' : 'Range'}</th>
                 <th>{language === 'zh' ? '所在地' : 'Location'}</th>
                 <th>{language === 'zh' ? '供应商' : 'Supplier'}</th>
                 <th>{language === 'zh' ? '交期' : 'Lead Time'}</th>
+                <th>{language === 'zh' ? '备注' : 'Remarks'}</th>
                 <th>{language === 'zh' ? '状态' : 'Status'}</th>
               </tr>
             </thead>
@@ -2724,17 +2768,21 @@ function FeishuVehicleTable({ canSeeCost }: { canSeeCost: boolean }) {
                   <td>{v.trim}</td>
                   <td>{v.year}</td>
                   <td>{v.exteriorColor}</td>
+                  <td>{v.interiorColor || '-'}</td>
                   <td>{v.stockQuantity}</td>
                   {canSeeCost && (
                     <td className="cost-cell">
-                      {v.costExw ? `${formatUsd(v.costExw)}/${v.costFob ? formatUsd(v.costFob) : '-'}/${v.costFca ? formatUsd(v.costFca) : '-'}` : '-'}
+                      {(!v.costExw && !v.costFob && !v.costFca) 
+                        ? '-' 
+                        : `${formatUsdFlexible(v.costExw)}/${formatUsdFlexible(v.costFob)}/${formatUsdFlexible(v.costFca)}`}
                     </td>
                   )}
-                  <td>{v.energyType || '-'}</td>
-                  <td>{v.rangeKm ? `${v.rangeKm}km` : '-'}</td>
                   <td>{v.location}</td>
                   <td>{v.supplier}</td>
                   <td>{v.leadTime}</td>
+                  <td style={{ maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.publicNotes}>
+                    {v.publicNotes || '-'}
+                  </td>
                   <td><Badge label={v.status} /></td>
                 </tr>
               ))}

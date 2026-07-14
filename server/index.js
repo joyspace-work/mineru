@@ -4,11 +4,11 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
-import { execSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setupSourceImportWorkbench, initSourceImportTables } from './sourceImports.js'
 import { runMigrations } from './migrations.js'
+import { ensureLarkCliConfig, runLarkCliSync } from './larkCliHelper.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const dataDir = resolve(__dirname, '../data')
@@ -54,6 +54,7 @@ db.exec(`
   );
 `)
 
+ensureLarkCliConfig()
 initSourceImportTables(db)
 runMigrations(db)
 
@@ -128,7 +129,7 @@ app.post('/api/settings/exchange-rate', requireAuth, requireRole('admin', 'sales
 
 app.get('/api/feishu-vehicles', requireAuth, async (req, res) => {
   try {
-    const result = execSync(
+    const result = runLarkCliSync(
       `lark-cli base +record-list --base-token ${FEISHU_BASE_TOKEN} --table-id ${FEISHU_VEHICLES_TABLE_ID} --as user --limit 200 --format json`,
       { encoding: 'utf8', timeout: 30000 },
     )

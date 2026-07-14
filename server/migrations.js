@@ -333,6 +333,20 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    id: 17,
+    name: 'vehicle_source_candidates: add vehicle_status column',
+    up(db) {
+      const tableExists = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_source_candidates'",
+      ).get()
+      if (!tableExists) return
+      const existing = db.prepare('PRAGMA table_info(vehicle_source_candidates)').all().map((c) => c.name)
+      if (!existing.includes('vehicle_status')) {
+        db.exec("ALTER TABLE vehicle_source_candidates ADD COLUMN vehicle_status TEXT NOT NULL DEFAULT ''")
+      }
+    },
+  },
 ]
 
 // ─── Migration runner ─────────────────────────────────────────────────────────

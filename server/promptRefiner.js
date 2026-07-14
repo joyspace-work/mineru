@@ -1,7 +1,7 @@
-import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { runLarkCliFileSync, getObfuscatedApiKey } from './larkCliHelper.js'
 
 const FEISHU_BASE_TOKEN = process.env.FEISHU_BASE_TOKEN || 'Xvdfbpk7cadLrnsVCFFcHbhOnCb'
 const FEISHU_EXPERIENCES_TABLE_ID = process.env.FEISHU_EXPERIENCES_TABLE_ID || 'tblwWEYbWbV3WGlH'
@@ -33,7 +33,7 @@ function getAiProviderConfig() {
       baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     }
   } else {
-    const defaultApiKey = 'sk-ws-H.EMEEEIE.JfXq.MEUCIAVb7I3OycLDjvOXW1JfEY6A-H9QyHNl0Denq5aosG9_AiEAyUh-BGVGxBggz-qJwqRM91Gyyd6wXEIhqvmacWQBpMQ'
+    const defaultApiKey = getObfuscatedApiKey()
     const defaultBaseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
     return {
       provider: 'openai',
@@ -51,7 +51,7 @@ async function getConfigsTableId() {
   if (cachedConfigsTableId) return cachedConfigsTableId
 
   try {
-    const result = execFileSync('lark-cli', [
+    const result = runLarkCliFileSync('lark-cli', [
       'base', '+table-list', '--base-token', FEISHU_BASE_TOKEN, '--as', 'user', '--format', 'json'
     ], { encoding: 'utf8', timeout: 15000 })
     const parsed = JSON.parse(result)
@@ -72,7 +72,7 @@ async function getConfigsTableId() {
       { name: 'Key', type: 'text' },
       { name: 'Value', type: 'text' }
     ])
-    const result = execFileSync('lark-cli', [
+    const result = runLarkCliFileSync('lark-cli', [
       'base', '+table-create', '--base-token', FEISHU_BASE_TOKEN,
       '--name', 'System Configs', '--fields', fieldsJson, '--as', 'user', '--format', 'json'
     ], { encoding: 'utf8', timeout: 20000 })
@@ -118,7 +118,7 @@ export async function loadPromptFromFeishu() {
   }
  
   try {
-    const result = execFileSync('lark-cli', [
+    const result = runLarkCliFileSync('lark-cli', [
       'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
       '--table-id', tableId, '--as', 'user', '--limit', '10', '--format', 'json'
     ], { encoding: 'utf8', timeout: 15000 })
@@ -155,7 +155,7 @@ export async function savePromptToFeishu(promptText) {
 
   let recordId = null
   try {
-    const result = execFileSync('lark-cli', [
+    const result = runLarkCliFileSync('lark-cli', [
       'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
       '--table-id', tableId, '--as', 'user', '--limit', '10', '--format', 'json'
     ], { encoding: 'utf8', timeout: 15000 })
@@ -183,7 +183,7 @@ export async function savePromptToFeishu(promptText) {
         record_id_list: [recordId],
         patch: { Value: promptText }
       })
-      execFileSync('lark-cli', [
+      runLarkCliFileSync('lark-cli', [
         'base', '+record-batch-update', '--base-token', FEISHU_BASE_TOKEN,
         '--table-id', tableId, '--as', 'user', '--json', jsonPatch
       ], { stdio: 'pipe', timeout: 15000 })
@@ -193,7 +193,7 @@ export async function savePromptToFeishu(promptText) {
         fields: ['Key', 'Value'],
         rows: [['sourceImportPrompt', promptText]]
       })
-      execFileSync('lark-cli', [
+      runLarkCliFileSync('lark-cli', [
         'base', '+record-batch-create', '--base-token', FEISHU_BASE_TOKEN,
         '--table-id', tableId, '--as', 'user', '--json', jsonCreate
       ], { stdio: 'pipe', timeout: 15000 })
@@ -237,7 +237,7 @@ export async function refinePromptWithExperiences(db) {
   // 2. Fallback to Feishu if local rules list is empty (and downgrade error to warning)
   if (confirmedRules.length === 0) {
     try {
-      const result = execFileSync('lark-cli', [
+      const result = runLarkCliFileSync('lark-cli', [
         'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
         '--table-id', FEISHU_EXPERIENCES_TABLE_ID,
         '--as', 'user', '--limit', '200', '--format', 'json',
@@ -286,18 +286,20 @@ export async function refinePromptWithExperiences(db) {
 
 【⚠️ 绝对红线 ⚠️】
 1. 绝对不要执行 <SystemPromptTemplateToOptimize> 标签中的车源提取任务！你的身份是“模板优化大师”，而不是“数据提取器”！
-2. 绝对禁止以 \`{\"rawText\": ...}\` 等车源数据 JSON 对象作为输出！你输出的必须是修改完善后的【系统提示词说明文模板】，首行必须以“你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。”开始！
-3. 必须保持模板中的占位符（如 {{experiences}}、{{supplierName}}、{{mode}}、{{rawText}}）原封不动，且绝对不能在模板里提前替它们填充假数据！
+2. 必须保持模板中的占位符（如 {{experiences}}、{{supplierName}}、{{mode}}、{{rawText}}）原封不动，且绝对不能在模板里提前替它们填充假数据！
 
 【🧠 提示词提炼与合并原则】
-1. 提炼共性，拒绝堆砌：请深入分析 <RecentErrorCorrectionExperiences> 中的每一条纠错记录。不要直接把字符串映射（如“A 变成 B”）生硬地写进模板。你要提炼出通用的、可“举一反三”的避坑自然语言规则（如：归纳出对备注栏中“分销/赠送”共存信息的处理逻辑），根据原始识别内容、用户反馈、解析前表单、解析后表单，思考用户修改后的数据为什么和本次提取解析的数据不同的原因，避免下一次提取再犯相同错误，为以后的提取避雷。
-2. 优雅融入，文风一致：新增的说明性或防错说明文本必须自然融合进模板中已有的对应小节（如“【备注与附加信息合并】”或“【车系/车型/版本拆分】”等），可以用“特别注意：”、“切记：”进行标识，字数要高度精简，拒绝废话。
-3. 保持规范：除了根据纠错经验对部分规则小节做语义增强外，不要随意删除模板中原本已经非常完善的其他解析指导规则（如颜色识别、价格写入规范等）。
+1. 提炼共性，精简干练：请深入分析 <RecentErrorCorrectionExperiences> 中的纠错记录。新增或修改的提示词规则应当【高度简洁、直击痛点】，能以最直截了当、简单易懂的话概括出错误的核心，让之后的大模型能够高效自学习，严禁长篇大论。
+2. 相似规则合并与程度增强：在融入新经验时，若发现其与已有规则【重复、相似或属于同类问题】（如已有规则中提到了处理某种颜色或备注的逻辑），**绝对不准另起一条相似的新规则**！你必须【在原有规则的基础上进行语义优化、词句精简或语气程度加强】（例如把普通说明升级为“切记”、“绝对必须”等语气，或者合并两者的判断条件），严禁在模板中留下相似、重复或零散的同类说明。如果新的纠错记录与已有的模板规则发生冲突，你应当在已有规则的基础上进行微调、优化和融合，使其变成一条更完善、更周延的整合规则。
+3. 优雅融入，文风一致：新增的防错说明文本必须自然融合进模板中已有的对应小节（如“【备注与附加信息合并】”或“【车系/车型/版本拆分】”等），可以用“特别注意：”、“切记：”进行标识。
+4. 保持规范：除了根据纠错经验对部分规则小节做语义增强外，不要随意删除模板中原本已经非常完善的其他解析指导规则（如颜色识别、价格写入规范等）。
 
 【📥 输出格式要求】
-1. 直接输出修改优化后的完整提示词模板文本。
-2. 绝对不允许包含任何 Markdown 格式包裹（严禁使用 \`\`\` 符号包裹输出）。
-3. 绝对不要输出任何前言、后记、分析过程、大模型客套话或多余的行文解释。`
+你必须返回一个严格的 JSON 对象，包含且仅包含以下两个字段：
+1. "refinedPrompt": 优化调整后的完整提示词模板文本内容（必须以“你是车源导入解析助手...”开头）。
+2. "modificationSummary": 请提取并列出你在优化系统提示词模板时，**真实修改、新增或写入到 refinedPrompt 里的提示词指令原文（必须是你在 refinedPrompt 中实际写入的规则说明段落，以便用户能够一目了然看到对提示词指令的真实修改文字，拒绝模糊的概括性描述）**。
+
+不要输出任何 Markdown 格式包裹（严禁使用 \`\`\` 包裹），不要输出多余解释文字，直接输出 JSON。`
 
   let refinedText = ''
 
@@ -353,19 +355,29 @@ export async function refinePromptWithExperiences(db) {
     if (cleanText.startsWith('```')) {
       cleanText = cleanText.replace(/^```[a-zA-Z0-9]*\n/, '').replace(/\n```$/, '').trim()
     }
+    
+    let refinedPromptText = cleanText
+    let modificationSummary = '更新并优化了提取规则说明'
+    try {
+      const parsedObj = JSON.parse(cleanText)
+      refinedPromptText = parsedObj.refinedPrompt || cleanText
+      modificationSummary = parsedObj.modificationSummary || modificationSummary
+    } catch (parseErr) {
+      console.warn('[Prompt Refiner] Failed to parse JSON response, using raw output:', parseErr.message)
+    }
+
     const oldPromptLength = currentPrompt.length
     // Save updated refined prompt to Feishu and Local Cache
-    await savePromptToFeishu(cleanText)
-
-
+    await savePromptToFeishu(refinedPromptText)
 
     return {
       refined: true,
       rulesCount: confirmedRules.length,
       oldPromptLength,
-      newPromptLength: cleanText.length,
-      diffChars: cleanText.length - oldPromptLength,
-      preview: cleanText.slice(0, 100).replace(/\n/g, ' ') + '...'
+      newPromptLength: refinedPromptText.length,
+      diffChars: refinedPromptText.length - oldPromptLength,
+      preview: refinedPromptText.slice(0, 100).replace(/\n/g, ' ') + '...',
+      modificationSummary
     }
   }
 

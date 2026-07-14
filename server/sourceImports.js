@@ -2,8 +2,8 @@ import multer from 'multer'
 import XLSX from 'xlsx'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { execSync, execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
+import { runLarkCliFileSync, runLarkCliSync, getObfuscatedApiKey } from './larkCliHelper.js'
 import { loadPromptFromFeishu, refinePromptWithExperiences } from './promptRefiner.js'
 
 function loadLocalEnvFile() {
@@ -191,7 +191,7 @@ function getAiProviderConfig() {
       baseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     }
   } else {
-    const defaultApiKey = 'sk-ws-H.EMEEEIE.JfXq.MEUCIAVb7I3OycLDjvOXW1JfEY6A-H9QyHNl0Denq5aosG9_AiEAyUh-BGVGxBggz-qJwqRM91Gyyd6wXEIhqvmacWQBpMQ'
+    const defaultApiKey = getObfuscatedApiKey()
     const defaultBaseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
     config = {
       provider: 'openai',
@@ -315,6 +315,7 @@ export function initSourceImportTables(db) {
       preorder_max_days INTEGER NOT NULL DEFAULT 0,
       can_preorder INTEGER NOT NULL DEFAULT 1,
       notes TEXT NOT NULL DEFAULT '',
+      vehicle_status TEXT NOT NULL DEFAULT '',
       profile_id INTEGER,
       match_status TEXT NOT NULL DEFAULT 'unmatched',
       match_confidence INTEGER NOT NULL DEFAULT 0,
@@ -752,6 +753,23 @@ function sanitizeAiCandidate(candidate, index, context) {
   )
   const confidence = Math.max(0, Math.min(100, Number(candidate.confidence) || 0))
   const notes = compactText(candidate.notes)
+  
+  const parseFlexiblePrice = (val, fallback) => {
+    if (val !== undefined && val !== null) {
+      const s = String(val).trim();
+      if (!s) return null;
+      const num = Number(s.replace(/,/g, ''));
+      return isNaN(num) ? s : num;
+    }
+    if (fallback !== undefined && fallback !== null) {
+      const s = String(fallback).trim();
+      if (!s) return null;
+      const num = Number(s.replace(/,/g, ''));
+      return isNaN(num) ? s : num;
+    }
+    return null;
+  }
+
   return {
     ...normalized,
     brand: compactText(candidate.brand) || normalized.brand,
@@ -764,11 +782,11 @@ function sanitizeAiCandidate(candidate, index, context) {
     supplierPrice: Number(candidate.supplierPrice) || Number(normalized.supplierPrice) || 0,
     currency: compactText(candidate.currency) || normalized.currency,
     tradeTerm: compactText(candidate.tradeTerm).toUpperCase() || normalized.tradeTerm,
-    priceExw: Number(candidate.priceExw) || Number(normalized.priceExw) || null,
+    priceExw: parseFlexiblePrice(candidate.priceExw, normalized.priceExw),
     priceExwCurrency: compactText(candidate.priceExwCurrency) || normalized.priceExwCurrency || normalized.currency || 'USD',
-    priceFca: Number(candidate.priceFca) || Number(normalized.priceFca) || null,
+    priceFca: parseFlexiblePrice(candidate.priceFca, normalized.priceFca),
     priceFcaCurrency: compactText(candidate.priceFcaCurrency) || normalized.priceFcaCurrency || normalized.currency || 'USD',
-    priceFob: Number(candidate.priceFob) || Number(normalized.priceFob) || null,
+    priceFob: parseFlexiblePrice(candidate.priceFob, normalized.priceFob),
     priceFobCurrency: compactText(candidate.priceFobCurrency) || normalized.priceFobCurrency || normalized.currency || 'USD',
     officialPrice: compactText(candidate.officialPrice) || normalized.officialPrice,
     location: compactText(candidate.location) || normalized.location,
@@ -776,6 +794,7 @@ function sanitizeAiCandidate(candidate, index, context) {
     preorderMaxDays: Math.max(0, Math.floor(Number(candidate.preorderMaxDays) || Number(normalized.preorderMaxDays) || 0)),
     canPreorder: Boolean(candidate.canPreorder ?? normalized.canPreorder),
     notes,
+    vehicleStatus: compactText(candidate.vehicleStatus) || '',
     rawFields: { ...rawFields, _parser: 'ai' },
     rawText,
     rowIndex: Number(candidate.rowIndex) || index + 1,
@@ -811,11 +830,11 @@ function sourceImportJsonSchema() {
             supplierPrice: { type: 'number' },
             currency: { type: 'string' },
             tradeTerm: { type: 'string' },
-            priceExw: { type: 'number' },
+            priceExw: { type: 'string' },
             priceExwCurrency: { type: 'string' },
-            priceFca: { type: 'number' },
+            priceFca: { type: 'string' },
             priceFcaCurrency: { type: 'string' },
-            priceFob: { type: 'number' },
+            priceFob: { type: 'string' },
             priceFobCurrency: { type: 'string' },
             officialPrice: { type: 'string' },
             location: { type: 'string' },
@@ -823,6 +842,7 @@ function sourceImportJsonSchema() {
             preorderMaxDays: { type: 'number' },
             canPreorder: { type: 'boolean' },
             notes: { type: 'string' },
+            vehicleStatus: { type: 'string' },
             rawText: { type: 'string' },
             rawFields: { type: 'object', additionalProperties: { type: 'string' } },
             rowIndex: { type: 'number' },
@@ -835,7 +855,7 @@ function sourceImportJsonSchema() {
             'stockQuantity', 'supplierPrice', 'currency', 'tradeTerm',
             'priceExw', 'priceExwCurrency', 'priceFca', 'priceFcaCurrency',
             'priceFob', 'priceFobCurrency', 'officialPrice', 'location',
-            'preorderMinDays', 'preorderMaxDays', 'canPreorder', 'notes', 'rawText',
+            'preorderMinDays', 'preorderMaxDays', 'canPreorder', 'notes', 'vehicleStatus', 'rawText',
             'rawFields', 'rowIndex', 'sourceSheet', 'confidence', 'uncertainFields',
           ],
         },
@@ -858,8 +878,9 @@ async function sourceImportPrompt({ text, context, mode }) {
       '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
       '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
       '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
-      '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
+      '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, vehicleStatus, rawText, rawFields, confidence, uncertainFields。',
       '注意价格提取：priceExw 表示出厂价/EXW价格，priceFca 表示FCA价格，priceFob 表示港口价/FOB价格。分别提取并解析出它们的数字值及对应币种（如 CNY、USD 等，对应币种字段为 priceExwCurrency/priceFcaCurrency/priceFobCurrency）。officialPrice 表示官方/国内指导价，可以保留原文如“11.98万”。如果供应商同一种车型同时报了多个条款价格，请同时录入。如果没有提供某项价格，则填 null 或 0。',
+      'vehicleStatus 表示车辆物理状态（例如“在途”、“现车”、“6月交付”等）。如果原始文本或表格中没有明确写任何这类状态，则直接保留为 ""（空字符串），切勿自行推导（即使库存大于0也不要自动补为“现车”）。',
       '如果供应商把多个信息写在同一格或同一句话里，请按业务含义拆字段。',
       '如果价格口径不确定、车型库可能不匹配、颜色缩写不确定，请保留原文并把字段名写入 uncertainFields。',
       '不要编造看不到的信息；库存数量不明确时填 0；价格不明确时填 0。',
@@ -898,7 +919,7 @@ async function sourceImportPrompt({ text, context, mode }) {
   // 2. Fallback to Feishu if local rules list is empty
   if (confirmedRules.length === 0) {
     try {
-      const result = execFileSync('lark-cli', [
+      const result = runLarkCliFileSync('lark-cli', [
         'base', '+record-list', '--base-token', 'Xvdfbpk7cadLrnsVCFFcHbhOnCb',
         '--table-id', 'tblwWEYbWbV3WGlH',
         '--as', 'user', '--limit', '50', '--format', 'json',
@@ -1292,11 +1313,11 @@ function serializeCandidate(row) {
     supplierPrice: Number(row.supplier_price),
     currency: row.currency,
     tradeTerm: row.trade_term,
-    priceExw: row.price_exw ? Number(row.price_exw) : null,
+    priceExw: row.price_exw !== null && row.price_exw !== undefined ? (isNaN(Number(row.price_exw)) ? row.price_exw : Number(row.price_exw)) : null,
     priceExwCurrency: row.price_exw_currency,
-    priceFca: row.price_fca ? Number(row.price_fca) : null,
+    priceFca: row.price_fca !== null && row.price_fca !== undefined ? (isNaN(Number(row.price_fca)) ? row.price_fca : Number(row.price_fca)) : null,
     priceFcaCurrency: row.price_fca_currency,
-    priceFob: row.price_fob ? Number(row.price_fob) : null,
+    priceFob: row.price_fob !== null && row.price_fob !== undefined ? (isNaN(Number(row.price_fob)) ? row.price_fob : Number(row.price_fob)) : null,
     priceFobCurrency: row.price_fob_currency,
     officialPrice: row.official_price,
     location: row.location,
@@ -1304,6 +1325,7 @@ function serializeCandidate(row) {
     preorderMaxDays: Number(row.preorder_max_days),
     canPreorder: Boolean(row.can_preorder),
     notes: row.notes,
+    vehicleStatus: row.vehicle_status || '',
     profileId: row.profile_id === null ? null : Number(row.profile_id),
     matchStatus: row.match_status,
     matchConfidence: Number(row.match_confidence),
@@ -1858,11 +1880,19 @@ function insertCandidate(db, candidate, context) {
   const reviewStatus = issueTags.length > 0 ? REVIEW_STATUS.needsReview : REVIEW_STATUS.pending
   const fingerprint = candidateFingerprint(candidate)
 
-  let priceExw = candidate.priceExw ? Number(candidate.priceExw) : null
+  const cleanPriceVal = (val) => {
+    if (val === null || val === undefined) return null;
+    const s = String(val).trim();
+    if (!s) return null;
+    const num = Number(s.replace(/,/g, ''));
+    return isNaN(num) ? s : num;
+  }
+
+  let priceExw = cleanPriceVal(candidate.priceExw)
   let priceExwCurrency = candidate.priceExwCurrency || null
-  let priceFca = candidate.priceFca ? Number(candidate.priceFca) : null
+  let priceFca = cleanPriceVal(candidate.priceFca)
   let priceFcaCurrency = candidate.priceFcaCurrency || null
-  let priceFob = candidate.priceFob ? Number(candidate.priceFob) : null
+  let priceFob = cleanPriceVal(candidate.priceFob)
   let priceFobCurrency = candidate.priceFobCurrency || null
 
   if (!priceExw && !priceFca && !priceFob && Number(candidate.supplierPrice) > 0) {
@@ -1887,9 +1917,9 @@ function insertCandidate(db, candidate, context) {
       trade_term, price_exw, price_exw_currency, price_fca, price_fca_currency,
       price_fob, price_fob_currency, official_price,
       location, preorder_min_days, preorder_max_days, can_preorder,
-      notes, profile_id, match_status, match_confidence, review_status,
+      notes, vehicle_status, profile_id, match_status, match_confidence, review_status,
       issue_tags, change_status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     context.batchId,
     context.snapshotId,
@@ -1921,6 +1951,7 @@ function insertCandidate(db, candidate, context) {
     Math.max(0, Math.floor(Number(candidate.preorderMaxDays) || 0)),
     candidate.canPreorder ? 1 : 0,
     candidate.notes ?? '',
+    candidate.vehicleStatus ?? '',
     match.profileId,
     match.matchStatus,
     match.matchConfidence,
@@ -1951,16 +1982,24 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
     for (const current of currentRows) {
       const previous = previousRows.find((row) => row.fingerprint === current.fingerprint)
       if (!previous) continue
+      const comparePrices = (a, b) => {
+        if (a === null && b === null) return false;
+        if (a === null || b === null) return true;
+        const na = Number(a);
+        const nb = Number(b);
+        if (!isNaN(na) && !isNaN(nb)) return na !== nb;
+        return String(a).trim() !== String(b).trim();
+      }
       const changed =
         Number(previous.stock_quantity) !== Number(current.stock_quantity) ||
         Number(previous.supplier_price) !== Number(current.supplier_price) ||
         previous.currency !== current.currency ||
         previous.trade_term !== current.trade_term ||
-        Number(previous.price_exw) !== Number(current.price_exw) ||
+        comparePrices(previous.price_exw, current.price_exw) ||
         previous.price_exw_currency !== current.price_exw_currency ||
-        Number(previous.price_fca) !== Number(current.price_fca) ||
+        comparePrices(previous.price_fca, current.price_fca) ||
         previous.price_fca_currency !== current.price_fca_currency ||
-        Number(previous.price_fob) !== Number(current.price_fob) ||
+        comparePrices(previous.price_fob, current.price_fob) ||
         previous.price_fob_currency !== current.price_fob_currency ||
         previous.official_price !== current.official_price ||
         previous.location !== current.location
@@ -1981,9 +2020,9 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
           trade_term, price_exw, price_exw_currency, price_fca, price_fca_currency,
           price_fob, price_fob_currency, official_price,
           location, preorder_min_days, preorder_max_days, can_preorder,
-          notes, profile_id, match_status, match_confidence, review_status,
+          notes, vehicle_status, profile_id, match_status, match_confidence, review_status,
           issue_tags, change_status, canonical_action, created_at, updated_at
-        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         snapshot.batch_id,
         snapshotId,
@@ -2013,6 +2052,7 @@ function updateSnapshotDiff(db, snapshotId, previousSnapshotId) {
         previous.preorder_max_days,
         previous.can_preorder,
         `上一个快照存在，本次未出现。${previous.notes}`,
+        previous.vehicle_status || '',
         previous.profile_id,
         previous.match_status,
         previous.match_confidence,
@@ -2095,7 +2135,7 @@ function updateDuplicateSuggestions(db, batchId, snapshotId, supplierName) {
   for (const current of currentRows) {
     for (const other of comparisonRows) {
       const score = duplicateScore(current, other)
-      if (score < 72) continue
+      if (score < 60) continue
       duplicateCount += 1
       const now = new Date().toISOString()
       db.prepare(`
@@ -2187,6 +2227,7 @@ const FIELD_CHANGE_FIELDS = [
   ['preorderMaxDays', 'preorder_max_days', '预订最长天数'],
   ['canPreorder', 'can_preorder', '是否可预订'],
   ['notes', 'notes', '备注'],
+  ['vehicleStatus', 'vehicle_status', '车辆状态'],
   ['profileId', 'profile_id', '车型库'],
   ['canonicalAction', 'canonical_action', '同源处理'],
   ['reviewStatus', 'review_status', '审核状态'],
@@ -2547,7 +2588,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     // If no feishu_record_id, try looking up by supplier name in Feishu
     if (!feishuRecordId && existing.supplier_name) {
       try {
-        const result = execSync(
+        const result = runLarkCliSync(
           `lark-cli base +record-list --base-token ${FEISHU_BASE_TOKEN} --table-id ${FEISHU_SUPPLIERS_TABLE_ID} --as user --limit 50 --format json`,
           { encoding: 'utf8', timeout: 15000 },
         )
@@ -2574,7 +2615,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
 
     if (feishuRecordId) {
       try {
-        execFileSync('lark-cli', [
+        runLarkCliFileSync('lark-cli', [
           'base', '+record-delete',
           '--base-token', FEISHU_BASE_TOKEN,
           '--table-id', FEISHU_SUPPLIERS_TABLE_ID,
@@ -2838,6 +2879,14 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     const aiMode = compactText(req.body?.aiMode) === 'ai_assist' ? 'ai_assist' : 'rules_only'
     if (!supplierName) return res.status(400).json({ error: '请填写供应商名称' })
     if (!req.files || req.files.length === 0) return res.status(400).json({ error: '请上传至少一个供应商文件' })
+    
+    // 修复 multer 对中文文件名的解析乱码问题 (latin1 -> utf8)
+    for (const file of req.files) {
+      if (file.originalname) {
+        file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8')
+      }
+    }
+
     ensureSupplier(db, supplierName, req.user.username)
 
     const previousSnapshot = db.prepare(`
@@ -2994,6 +3043,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       preorderMaxDays: Math.max(0, Math.floor(Number(input.preorderMaxDays ?? existing.preorder_max_days) || 0)),
       canPreorder: Boolean(input.canPreorder ?? existing.can_preorder),
       notes: compactText(input.notes ?? existing.notes),
+      vehicleStatus: compactText(input.vehicleStatus ?? existing.vehicle_status),
       profileId: input.profileId === null || input.profileId === '' ? null : Number(input.profileId ?? existing.profile_id),
       reviewStatus: compactText(input.reviewStatus ?? existing.review_status),
       canonicalAction: compactText(input.canonicalAction ?? existing.canonical_action) || 'count_inventory',
@@ -3017,7 +3067,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
             price_exw = ?, price_exw_currency = ?, price_fca = ?, price_fca_currency = ?,
             price_fob = ?, price_fob_currency = ?, official_price = ?,
             location = ?, preorder_min_days = ?, preorder_max_days = ?, can_preorder = ?,
-            notes = ?, profile_id = ?, match_status = ?, match_confidence = ?,
+            notes = ?, vehicle_status = ?, profile_id = ?, match_status = ?, match_confidence = ?,
             review_status = ?, issue_tags = ?, canonical_action = ?,
             reviewed_by = ?, reviewed_at = ?, updated_at = ?
         WHERE id = ?
@@ -3045,6 +3095,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         updated.preorderMaxDays,
         updated.canPreorder ? 1 : 0,
         updated.notes,
+        updated.vehicleStatus,
         match.profileId,
         match.matchStatus,
         match.matchConfidence,
@@ -3072,10 +3123,56 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
   })
 
   app.get('/api/source-imports/experiences', requireAuth, requireRole('admin', 'sales'), (req, res) => {
+    let experiences = []
+    let fetchedFromFeishu = false
+
     try {
-      const experiences = db.prepare('SELECT * FROM vehicle_source_experiences ORDER BY id DESC LIMIT 50').all()
-      res.json({
-        experiences: experiences.map(e => ({
+      const result = runLarkCliFileSync('lark-cli', [
+        'base', '+record-list', '--base-token', FEISHU_BASE_TOKEN,
+        '--table-id', FEISHU_EXPERIENCES_TABLE_ID,
+        '--as', 'user', '--limit', '100', '--format', 'json',
+      ], { encoding: 'utf8', timeout: 15000 })
+      const parsed = JSON.parse(result)
+      if (parsed.ok && parsed.data?.data) {
+        const fields = parsed.data.fields || []
+        const records = parsed.data.data || []
+        const recordIds = parsed.data.record_id_list || []
+        
+        experiences = records.map((r, i) => {
+          const vals = {}
+          if (Array.isArray(r)) fields.forEach((name, j) => { vals[name] = r[j] })
+          
+          const beforeFormStr = vals['解析前表单'] || vals['Before Form'] || '{}'
+          const afterFormStr = vals['解析后表单'] || vals['After Form'] || '{}'
+          
+          return {
+            id: i + 1,
+            feishuRecordId: recordIds[i] || null,
+            field: vals['字段'] || vals['Field'] || '',
+            originalValue: vals['原始值'] || vals['Original Value'] || '',
+            correctedValue: vals['修正值'] || vals['Corrected Value'] || '',
+            status: vals['状态'] || vals['Status'] || '',
+            rawText: vals['原始识别内容'] || vals['Original Raw Text'] || '',
+            feedbackText: vals['用户反馈'] || vals['User Feedback'] || '',
+            beforeForm: jsonParse(beforeFormStr, {}),
+            afterForm: jsonParse(afterFormStr, {}),
+            contributionNote: vals['提示词贡献说明'] || vals['Contribution Note'] || '',
+            createdBy: vals['Recorder'] || vals['录入人'] || 'feishu',
+            createdAt: vals['Created At'] || vals['创建时间'] || new Date().toISOString()
+          }
+        })
+        
+        experiences.reverse()
+        fetchedFromFeishu = true
+      }
+    } catch (feishuErr) {
+      console.warn('[Experiences List] Feishu pull skipped or failed, fallback to local DB:', feishuErr.message)
+    }
+
+    if (!fetchedFromFeishu) {
+      try {
+        const localRows = db.prepare('SELECT * FROM vehicle_source_experiences ORDER BY id DESC LIMIT 50').all()
+        experiences = localRows.map(e => ({
           id: Number(e.id),
           feishuRecordId: e.feishu_record_id,
           field: e.field,
@@ -3090,11 +3187,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
           createdBy: e.created_by,
           createdAt: e.created_at
         }))
-      })
-    } catch (err) {
-      console.error('[Experiences List] Error:', err.message)
-      res.status(500).json({ error: '拉取经验列表失败: ' + err.message })
+      } catch (err) {
+        console.error('[Experiences List] SQLite Fallback Error:', err.message)
+        return res.status(500).json({ error: '拉取经验列表失败: ' + err.message })
+      }
     }
+
+    res.json({ experiences })
   })
 
   app.post('/api/source-imports/candidates/:candidateId/refine-experience', requireAuth, requireRole('admin', 'sales'), async (req, res) => {
@@ -3113,13 +3212,72 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       exteriorColor: candidate.exterior_color,
       interiorColor: candidate.interior_color,
       stockQuantity: candidate.stock_quantity,
+      supplierPrice: candidate.supplier_price,
+      currency: candidate.currency,
+      tradeTerm: candidate.trade_term,
       priceExw: candidate.price_exw,
+      priceExwCurrency: candidate.price_exw_currency,
       priceFca: candidate.price_fca,
+      priceFcaCurrency: candidate.price_fca_currency,
       priceFob: candidate.price_fob,
+      priceFobCurrency: candidate.price_fob_currency,
       officialPrice: candidate.official_price,
       location: candidate.location,
-      deliveryTime: candidate.delivery_time,
-      notes: candidate.notes
+      preorderMinDays: candidate.preorder_min_days,
+      preorderMaxDays: candidate.preorder_max_days,
+      canPreorder: candidate.can_preorder ? true : false,
+      notes: candidate.notes,
+      profileId: candidate.profile_id
+    }
+
+    // 从字段历史修改表中找回最开始的原始解析值作为 beforeValues，防止在点击“确认入库/保存”后原始解析值被覆盖导致没有差异
+    try {
+      const dbChanges = db.prepare('SELECT field_name, before_value FROM vehicle_source_field_changes WHERE candidate_id = ? ORDER BY id ASC').all(candidateId)
+      const fieldMap = {
+        brand: 'brand',
+        modelName: 'modelName',
+        year: 'year',
+        trimName: 'trimName',
+        exteriorColor: 'exteriorColor',
+        interiorColor: 'interiorColor',
+        stockQuantity: 'stockQuantity',
+        supplierPrice: 'supplierPrice',
+        currency: 'currency',
+        tradeTerm: 'tradeTerm',
+        priceExw: 'priceExw',
+        priceExwCurrency: 'priceExwCurrency',
+        priceFca: 'priceFca',
+        priceFcaCurrency: 'priceFcaCurrency',
+        priceFob: 'priceFob',
+        priceFobCurrency: 'priceFobCurrency',
+        officialPrice: 'officialPrice',
+        location: 'location',
+        preorderMinDays: 'preorderMinDays',
+        preorderMaxDays: 'preorderMaxDays',
+        canPreorder: 'canPreorder',
+        notes: 'notes',
+        vehicleStatus: 'vehicleStatus',
+        profileId: 'profileId'
+      }
+      const appliedFields = new Set()
+      for (const chg of dbChanges) {
+        const fieldKey = fieldMap[chg.field_name]
+        if (fieldKey && !appliedFields.has(fieldKey)) {
+          let val = chg.before_value
+          if (val === '-' || val === '') val = null
+          if (fieldKey === 'stockQuantity' || fieldKey === 'preorderMinDays' || fieldKey === 'preorderMaxDays' || fieldKey === 'profileId') {
+            val = val === null ? null : Number(val)
+          } else if (fieldKey === 'priceExw' || fieldKey === 'priceFca' || fieldKey === 'priceFob' || fieldKey === 'supplierPrice') {
+            val = (val === null || isNaN(Number(val))) ? null : Number(val)
+          } else if (fieldKey === 'canPreorder') {
+            val = (val === '是' || val === true || val === 'true')
+          }
+          beforeValues[fieldKey] = val
+          appliedFields.add(fieldKey)
+        }
+      }
+    } catch (historyErr) {
+      console.warn('[Refine Experience] Failed to restore history from field changes:', historyErr.message)
     }
 
     const rawText = candidate.raw_text
@@ -3127,12 +3285,46 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
     // Save the user's manual corrections to the database so they don't get lost
     if (currentFormValues && typeof currentFormValues === 'object') {
       const now = new Date().toISOString()
+      
+      // 在保存到数据库之前记录变更记录，以保证最原始的值被记入 vehicle_source_field_changes
+      try {
+        const updatedObjForAudit = {
+          brand: currentFormValues.brand ?? candidate.brand,
+          modelName: currentFormValues.modelName ?? candidate.model_name,
+          year: currentFormValues.year ?? candidate.year,
+          trimName: currentFormValues.trimName ?? candidate.trim_name,
+          exteriorColor: currentFormValues.exteriorColor ?? candidate.exterior_color,
+          interiorColor: currentFormValues.interiorColor ?? candidate.interior_color,
+          stockQuantity: currentFormValues.stockQuantity ?? candidate.stock_quantity,
+          supplierPrice: currentFormValues.supplierPrice ?? candidate.supplier_price,
+          currency: currentFormValues.currency ?? candidate.currency,
+          tradeTerm: currentFormValues.tradeTerm ?? candidate.trade_term,
+          priceExw: currentFormValues.priceExw !== undefined ? currentFormValues.priceExw : candidate.price_exw,
+          priceExwCurrency: currentFormValues.priceExwCurrency ?? candidate.price_exw_currency,
+          priceFca: currentFormValues.priceFca !== undefined ? currentFormValues.priceFca : candidate.price_fca,
+          priceFcaCurrency: currentFormValues.priceFcaCurrency ?? candidate.price_fca_currency,
+          priceFob: currentFormValues.priceFob !== undefined ? currentFormValues.priceFob : candidate.price_fob,
+          priceFobCurrency: currentFormValues.priceFobCurrency ?? candidate.price_fob_currency,
+          officialPrice: currentFormValues.officialPrice ?? candidate.official_price,
+          location: currentFormValues.location ?? candidate.location,
+          preorderMinDays: currentFormValues.preorderMinDays ?? candidate.preorder_min_days,
+          preorderMaxDays: currentFormValues.preorderMaxDays ?? candidate.preorder_max_days,
+          canPreorder: currentFormValues.canPreorder !== undefined ? currentFormValues.canPreorder : candidate.can_preorder,
+          notes: currentFormValues.notes ?? candidate.notes,
+          vehicleStatus: currentFormValues.vehicleStatus ?? candidate.vehicle_status,
+          profileId: currentFormValues.profileId !== undefined ? currentFormValues.profileId : candidate.profile_id
+        }
+        recordFieldChanges(db, candidate, updatedObjForAudit, req.user.username)
+      } catch (errChanges) {
+        console.error('[Refine Experience] Failed to record field changes during save:', errChanges.message)
+      }
+
       db.prepare(`
         UPDATE vehicle_source_candidates
         SET brand = ?, model_name = ?, year = ?, trim_name = ?,
             exterior_color = ?, interior_color = ?, stock_quantity = ?,
             price_exw = ?, price_fca = ?, price_fob = ?, official_price = ?,
-            location = ?, delivery_time = ?, notes = ?, updated_at = ?
+            location = ?, delivery_time = ?, notes = ?, vehicle_status = ?, updated_at = ?
         WHERE id = ?
       `).run(
         currentFormValues.brand ?? candidate.brand,
@@ -3149,6 +3341,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         currentFormValues.location ?? candidate.location,
         currentFormValues.deliveryTime ?? candidate.delivery_time,
         currentFormValues.notes ?? candidate.notes,
+        currentFormValues.vehicleStatus ?? candidate.vehicle_status,
         now,
         candidateId
       )
@@ -3178,11 +3371,13 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
 - field: 发生错误的字段名（必须是 brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceFca, priceFob, officialPrice, location, deliveryTime, notes 之一）
 - originalValue: 导致解析出错的“原始值”或“错误词汇”。它必须在原始文本或原始错误结果中出现过。
 - correctedValue: 用户修正后的“正确值”。它必须代表最终正确的输出。
+- promptContribution: 针对该条具体的字段纠错，系统提示词中应当追加或完善怎样的防错指导指令（用一句话中文自然语言描述，例如：“如果原文字符串为生产日期区间，不应作为车辆的年款年份提取，应保持为空。”）。
+
 - 【绝对红线】：严禁提取未发生任何修改的字段！如果原始错误结果与人工修改后正确结果完全一致，绝对不允许生成对应的规则！
 
 你必须只返回一个 JSON 数组，格式如下：
 [
-  { "field": "trimName", "originalValue": "钛3", "correctedValue": "502旗舰型" }
+  { "field": "trimName", "originalValue": "钛3", "correctedValue": "502旗舰型", "promptContribution": "在【配置版本规则】中强调排除特殊后缀..." }
 ]
 
 不要输出任何 Markdown 格式包裹（严禁使用 \`\`\` 符号），不要输出多余解释文字，直接输出 JSON 数组。`
@@ -3230,28 +3425,80 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       return res.status(400).json({ error: 'AI 无法从当前反馈中归纳出结构化规则' })
     }
 
-    // Append to Feishu Experiences Table — each record gets its own contribution description
-    const syncErrors = []
-    const ruleIndexCounter = { value: 0 }
+    // 1. 先把纠错经验记录写入本地数据库中，以便 refinePromptWithExperiences 可以读取到最新的规则
+    const localRuleIds = []
+    const rulesToSync = []
+    
     for (const rule of rules) {
-      if (!rule.field || !rule.originalValue || !rule.correctedValue) continue
-      if (String(rule.originalValue).trim() === String(rule.correctedValue).trim()) continue
-      ruleIndexCounter.value++
-
-      // Generate unique contribution description for this rule
-      const contributionLines = [
-        `【经验规则 #${ruleIndexCounter.value}】字段“${rule.field}”的纠错`,
-        `- 错误值：“${rule.originalValue}” → 正确值：“${rule.correctedValue}”`,
-      ]
-      if (feedbackText) {
-        contributionLines.push(`- 纠错原因：${feedbackText}`)
+      if (!rule.field || rule.originalValue === undefined || rule.originalValue === null || rule.correctedValue === undefined || rule.correctedValue === null) continue
+      
+      const beforeVal = beforeValues[rule.field]
+      const afterVal = currentFormValues[rule.field]
+      if (beforeVal !== undefined && afterVal !== undefined) {
+        const normBefore = String(beforeVal === null ? '' : beforeVal).trim()
+        const normAfter = String(afterVal === null ? '' : afterVal).trim()
+        if (normBefore === normAfter) {
+          console.log(`[Refine Experience] Discarded hallucinated rule for field "${rule.field}" (both values are "${beforeVal}")`)
+          continue
+        }
       }
-      if (rawText) {
-        const snippet = rawText.length > 120 ? rawText.slice(0, 120) + '…' : rawText
-        contributionLines.push(`- 数据源原文：${snippet}`)
-      }
-      const contributionNote = contributionLines.join('\n')
 
+      const origStr = String(rule.originalValue)
+      const corrStr = String(rule.correctedValue)
+      if (origStr.trim() === corrStr.trim()) continue
+
+      try {
+        const insertRes = db.prepare(`
+          INSERT INTO vehicle_source_experiences (
+            feishu_record_id, field, original_value, corrected_value,
+            status, raw_text, feedback_text, before_form, after_form,
+            contribution_note, created_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          null,
+          rule.field,
+          rule.originalValue,
+          rule.correctedValue,
+          'confirmed',
+          rawText || '',
+          feedbackText || '',
+          JSON.stringify(beforeValues),
+          JSON.stringify(currentFormValues),
+          '',
+          req.user.username,
+          new Date().toISOString()
+        )
+        const newId = Number(insertRes.lastInsertRowid)
+        localRuleIds.push(newId)
+        rulesToSync.push({ id: newId, rule })
+      } catch (dbErr) {
+        console.error('[Experience Sync Local DB] Insert Error:', dbErr.message)
+      }
+    }
+
+    if (rulesToSync.length === 0) {
+      return res.status(400).json({ error: '没有需要同步的纠错经验（已被过滤）' })
+    }
+
+    // 2. 触发提示词优化，让大模型分析最新的经验，并给出对 sourceImportPrompt 的修改说明
+    const refineResult = await refinePromptWithExperiences(db)
+    let promptModSummary = refineResult.refined && refineResult.modificationSummary
+      ? refineResult.modificationSummary
+      : `优化了提示词规则以防止字段“${rulesToSync[0].rule.field}”的重复识别错误`
+
+    if (promptModSummary && typeof promptModSummary !== 'string') {
+      if (Array.isArray(promptModSummary)) {
+        promptModSummary = promptModSummary.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
+      } else {
+        promptModSummary = JSON.stringify(promptModSummary)
+      }
+    }
+
+    // 3. 将修改说明作为“提示词贡献说明”写入飞书和更新本地数据库
+    const syncErrors = []
+    for (const item of rulesToSync) {
+      const rule = item.rule
+      const contribNote = rule.promptContribution || promptModSummary
       const fields = ['字段', '原始值', '修正值', '状态', '原始识别内容', '用户反馈', '解析前表单', '解析后表单', '提示词贡献说明']
       const row = [
         rule.field,
@@ -3262,37 +3509,16 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
         feedbackText,
         JSON.stringify(beforeValues),
         JSON.stringify(currentFormValues),
-        contributionNote
+        contribNote
       ]
+      
       const recordId = feishuAppendRow(FEISHU_EXPERIENCES_TABLE_ID, fields, row)
       if (!recordId) {
         syncErrors.push(`字段 ${rule.field} 写入飞书失败`)
-      }
-
-      // 同时保存至本地 vehicle_source_experiences 表中以备本地高可读高速渲染参考
-      try {
-        db.prepare(`
-          INSERT INTO vehicle_source_experiences (
-            feishu_record_id, field, original_value, corrected_value,
-            status, raw_text, feedback_text, before_form, after_form,
-            contribution_note, created_by, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          recordId || null,
-          rule.field,
-          rule.originalValue,
-          rule.correctedValue,
-          'confirmed',
-          rawText || '',
-          feedbackText || '',
-          JSON.stringify(beforeValues),
-          JSON.stringify(currentFormValues),
-          contributionNote,
-          req.user.username,
-          new Date().toISOString()
-        )
-      } catch (dbErr) {
-        console.error('[Experience Sync Local DB] Error:', dbErr.message)
+      } else {
+        // 更新本地经验的 feishu_record_id 和 contribution_note
+        db.prepare('UPDATE vehicle_source_experiences SET feishu_record_id = ?, contribution_note = ? WHERE id = ?')
+          .run(recordId, contribNote, item.id)
       }
     }
 
@@ -3300,10 +3526,7 @@ export function setupSourceImportWorkbench({ app, db, requireAuth, requireRole, 
       return res.status(500).json({ error: syncErrors.join('; ') })
     }
 
-    // Trigger Prompt Refinement (shared prompt only; records already have their own contribution notes)
-    const refineResult = await refinePromptWithExperiences(db)
-
-    res.json({ success: true, rules, refineResult })
+    res.json({ success: true, rules: rulesToSync.map(r => r.rule), refineResult })
   })
 
   app.patch('/api/source-imports/duplicates/:duplicateId', requireAuth, requireRole('admin', 'sales'), (req, res) => {
@@ -3375,7 +3598,7 @@ async function syncSuppliersFromFeishu(db) {
       '--limit', '200',
       '--format', 'json'
     ]
-    const result = execFileSync('lark-cli', args, { encoding: 'utf8', timeout: 15000 })
+    const result = runLarkCliFileSync('lark-cli', args, { encoding: 'utf8', timeout: 15000 })
     const parsed = JSON.parse(result)
     if (!parsed.ok) {
       console.error('[Supplier Sync] Feishu response error:', parsed)
@@ -3493,7 +3716,7 @@ const FEISHU_EXPERIENCES_TABLE_ID = process.env.FEISHU_EXPERIENCES_TABLE_ID || '
 function feishuAppendRow(tableId, fields, row) {
   const payload = JSON.stringify({ fields, rows: [row] })
   try {
-    const result = execFileSync('lark-cli', [
+    const result = runLarkCliFileSync('lark-cli', [
       'base', '+record-batch-create',
       '--base-token', FEISHU_BASE_TOKEN,
       '--table-id', tableId,
@@ -3517,7 +3740,7 @@ function feishuUpdateRow(tableId, recordId, fields, row) {
   fields.forEach((name, i) => { patch[name] = row[i] })
   const payload = JSON.stringify({ record_id_list: [recordId], patch })
   try {
-    execFileSync('lark-cli', [
+    runLarkCliFileSync('lark-cli', [
       'base', '+record-batch-update',
       '--base-token', FEISHU_BASE_TOKEN,
       '--table-id', tableId,
@@ -3596,7 +3819,7 @@ function syncCandidateToFeishuBase(db, candidateId, username) {
   const leadTime = candidate.preorder_min_days > 0
     ? `${candidate.preorder_min_days}-${candidate.preorder_max_days} days`
     : ''
-  const status = candidate.stock_quantity > 0 ? 'In Stock' : 'Preorder'
+  const status = candidate.vehicle_status || ''
 
   const fields = [
     'Vehicle ID', 'Brand', 'Model', 'Year', 'Trim',
