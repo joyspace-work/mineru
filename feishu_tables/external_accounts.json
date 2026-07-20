@@ -1,0 +1,196 @@
+{
+  "table_id": "tbllOsQSvNTcKGYZ",
+  "table_name": "external_accounts",
+  "fields_definition": [
+    {
+      "field_id": "fldi0MJ0F1",
+      "field_name": "record_id",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldTHxbxQ8",
+      "field_name": "account_id",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldUxRFrMv",
+      "field_name": "company",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldxqZDrW6",
+      "field_name": "contact",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldEjjO9SO",
+      "field_name": "email",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldsZfJ8MW",
+      "field_name": "access_code",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldfG3KGtH",
+      "field_name": "role",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 8,
+            "id": "optDkSO1eE",
+            "name": "partner"
+          },
+          {
+            "color": 2,
+            "id": "optYG1W1Bu",
+            "name": "customer"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldV9AU8VJ",
+      "field_name": "price_tier",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 8,
+            "id": "optZjiJSyt",
+            "name": "hidden"
+          },
+          {
+            "color": 8,
+            "id": "optJsdsxCD",
+            "name": "partner"
+          },
+          {
+            "color": 4,
+            "id": "opt9UGYBJ8",
+            "name": "vip"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fld3uiCba5",
+      "field_name": "status",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 0,
+            "id": "optfJPXLej",
+            "name": "Active"
+          },
+          {
+            "color": 8,
+            "id": "optL4LVABY",
+            "name": "Disabled"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fld6eAsSdw",
+      "field_name": "country",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldlk6V1a3",
+      "field_name": "owner",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    }
+  ],
+  "records": [
+    {
+      "record_id": "recvnPgbDeI8ab",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "access_code": "partner-demo-2026",
+      "account_id": "CUS-001",
+      "company": "Addis Fleet Trading",
+      "contact": "Demo Partner",
+      "country": "Ethiopia",
+      "email": "partner@example.com",
+      "owner": "Sales",
+      "price_tier": "partner",
+      "role": "partner",
+      "status": "Active"
+    },
+    {
+      "record_id": "recvnPgbDejeNo",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "access_code": "customer-demo-2026",
+      "account_id": "CUS-002",
+      "company": "Green Ride Addis",
+      "contact": "Demo Customer",
+      "country": "Ethiopia",
+      "email": "customer@example.com",
+      "owner": "Sales",
+      "price_tier": "hidden",
+      "role": "customer",
+      "status": "Active"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+bun.lock
+
+# Environment
+.env
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Classified input files (generated, not tracked)
+input/classified/
+
+# n8n local data
+.n8n/
+
+# Output files (generated)
+output/
+
+# Bun init artifacts
+index.ts
+tsconfig.json
+CLAUDE.md
+
+# Database files
+*.db
+*.sqlite
+local_source.db
+feishu.db
+
+# Learning data (keep corrections & rules in git for portability)
+# data/corrections.json — tracked
+# data/rules.json — tracked
+# data/rules_pending.json — tracked

@@ -1,0 +1,130 @@
+{
+  "table_id": "tblsI0F8zdnjeJC6",
+  "table_name": "supplier",
+  "fields_definition": [
+    {
+      "field_id": "fldkldQXOF",
+      "field_name": "record_id",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldQppnfni",
+      "field_name": "supplier_name",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldwxBKaIb",
+      "field_name": "contact_person",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldZIPGn2Y",
+      "field_name": "phone",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldqLGqNzR",
+      "field_name": "wechat",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldpHEkZGw",
+      "field_name": "region",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldxUjLOW2",
+      "field_name": "channel_type",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldEow6iz9",
+      "field_name": "notes",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldgul3Vsr",
+      "field_name": "create_time",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "date_formatter": "yyyy-MM-dd HH:mm"
+      },
+      "type": 1001,
+      "ui_type": "CreatedTime"
+    }
+  ],
+  "records": [
+    {
+      "record_id": "recvoWVbUMiACV",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "channel_type": "源头供应商",
+      "contact_person": "王经理",
+      "create_time": 1784238696000,
+      "notes": null,
+      "phone": "18888888888",
+      "region": "上海",
+      "supplier_name": "joyspace",
+      "wechat": "111wechat"
+    },
+    {
+      "record_id": "recvoX2hYYtWJ4",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "channel_type": "其他",
+      "contact_person": "111",
+      "create_time": 1784238696000,
+      "notes": null,
+      "phone": "11111111111",
+      "region": "北京",
+      "supplier_name": "test",
+      "wechat": "111"
+    }
+  ]
+}

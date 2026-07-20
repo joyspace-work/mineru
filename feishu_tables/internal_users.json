@@ -1,0 +1,296 @@
+{
+  "table_id": "tblzuCupuStUvBwM",
+  "table_name": "internal_users",
+  "fields_definition": [
+    {
+      "field_id": "fldy41e068",
+      "field_name": "record_id",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fld03v8hmU",
+      "field_name": "user_id",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "flddXdvdKH",
+      "field_name": "name",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldcHa5lAu",
+      "field_name": "email",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldJuu8mxI",
+      "field_name": "access_code",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldBIsKF5l",
+      "field_name": "role",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 10,
+            "id": "optTOkdAco",
+            "name": "admin"
+          },
+          {
+            "color": 2,
+            "id": "optxizEQIQ",
+            "name": "sales"
+          },
+          {
+            "color": 9,
+            "id": "optUl4W5bC",
+            "name": "sourcing"
+          },
+          {
+            "color": 6,
+            "id": "opt9u2uqYk",
+            "name": "finance"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldQrxdnQy",
+      "field_name": "status",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 0,
+            "id": "optE8D29kU",
+            "name": "Active"
+          },
+          {
+            "color": 8,
+            "id": "optrA66onK",
+            "name": "Disabled"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldrykIXdA",
+      "field_name": "department",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldp7HDzLr",
+      "field_name": "DISABLE-can_edit_vehicles",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldwtZtvij",
+      "field_name": "DISABLE-can_see_cost",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fld0NzsPpP",
+      "field_name": "DISABLE-can_see_supplier",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldFxWDgyZ",
+      "field_name": "sourcing_commission_rate",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0.00"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "field_id": "fld50nXH84",
+      "field_name": "sales_commission_rate",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0.00"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "field_id": "fldQiAVNJd",
+      "field_name": "can_edit_vehicles",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 7,
+      "ui_type": "Checkbox"
+    },
+    {
+      "field_id": "fldhdqJQn3",
+      "field_name": "can_see_cost",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 7,
+      "ui_type": "Checkbox"
+    },
+    {
+      "field_id": "fldNRCY9y6",
+      "field_name": "can_see_supplier",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 7,
+      "ui_type": "Checkbox"
+    }
+  ],
+  "records": [
+    {
+      "record_id": "recvnPgbnumnBd",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "DISABLE-can_edit_vehicles": "True",
+      "DISABLE-can_see_cost": "True",
+      "DISABLE-can_see_supplier": "True",
+      "access_code": "admin-demo-2026",
+      "can_edit_vehicles": true,
+      "can_see_cost": true,
+      "can_see_supplier": true,
+      "department": "Management",
+      "email": "admin@local.test",
+      "name": "Admin User",
+      "role": "admin",
+      "sales_commission_rate": "0",
+      "sourcing_commission_rate": "0",
+      "status": "Active",
+      "user_id": "USR-ADMIN"
+    },
+    {
+      "record_id": "recvnPgbnu3Wj8",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "DISABLE-can_edit_vehicles": "True",
+      "DISABLE-can_see_cost": "True",
+      "DISABLE-can_see_supplier": "True",
+      "access_code": "sales-demo-2026",
+      "can_edit_vehicles": true,
+      "can_see_cost": true,
+      "can_see_supplier": true,
+      "department": "Sales",
+      "email": "sales@local.test",
+      "name": "Sales User",
+      "role": "sales",
+      "sales_commission_rate": "0.03",
+      "sourcing_commission_rate": "0",
+      "status": "Active",
+      "user_id": "USR-SALES"
+    },
+    {
+      "record_id": "recvnPgbnulm5T",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "DISABLE-can_edit_vehicles": "True",
+      "DISABLE-can_see_cost": "True",
+      "DISABLE-can_see_supplier": "True",
+      "access_code": "sourcing-demo-2026",
+      "can_edit_vehicles": true,
+      "can_see_cost": true,
+      "can_see_supplier": true,
+      "department": "Sourcing",
+      "email": "sourcing@local.test",
+      "name": "Sourcing User",
+      "role": "sourcing",
+      "sales_commission_rate": "0",
+      "sourcing_commission_rate": "0.02",
+      "status": "Active",
+      "user_id": "USR-SOURCING"
+    },
+    {
+      "record_id": "recvo1geyZB3eJ",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "DISABLE-can_edit_vehicles": null,
+      "DISABLE-can_see_cost": null,
+      "DISABLE-can_see_supplier": null,
+      "access_code": null,
+      "can_edit_vehicles": null,
+      "can_see_cost": null,
+      "can_see_supplier": null,
+      "department": null,
+      "email": null,
+      "name": null,
+      "role": null,
+      "sales_commission_rate": null,
+      "sourcing_commission_rate": null,
+      "status": null,
+      "user_id": null
+    }
+  ]
+}

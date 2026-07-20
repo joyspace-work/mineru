@@ -1,0 +1,97 @@
+[
+  {
+    "name": "internal_users",
+    "revision": 21,
+    "table_id": "tblzuCupuStUvBwM"
+  },
+  {
+    "name": "external_accounts",
+    "revision": 4,
+    "table_id": "tbllOsQSvNTcKGYZ"
+  },
+  {
+    "name": "inquiries",
+    "revision": 5,
+    "table_id": "tblEL6AHiMiWhkVj"
+  },
+  {
+    "name": "quotes",
+    "revision": 7,
+    "table_id": "tblIY4WdBVqvkZf0"
+  },
+  {
+    "name": "negotiations",
+    "revision": 4,
+    "table_id": "tblRytSu0oKOmmol"
+  },
+  {
+    "name": "orders",
+    "revision": 6,
+    "table_id": "tblFxuRqSt2oAu0H"
+  },
+  {
+    "name": "articles",
+    "revision": 36,
+    "table_id": "tblYIGaUMC5yX5sj"
+  },
+  {
+    "name": "academy_lessons",
+    "revision": 18,
+    "table_id": "tbl4wwtdHP8sLUsO"
+  },
+  {
+    "name": "academy_vault",
+    "revision": 2,
+    "table_id": "tblnMopstEUqjMhu"
+  },
+  {
+    "name": "i18n_locale",
+    "revision": 430,
+    "table_id": "tblv6UYxgYKSd8y5"
+  },
+  {
+    "name": "i18n_lark_translation",
+    "revision": 5,
+    "table_id": "tblrLa82G7AkqBO6"
+  },
+  {
+    "name": "supplier",
+    "revision": 2,
+    "table_id": "tblsI0F8zdnjeJC6"
+  },
+  {
+    "name": "vehicle_models",
+    "revision": 389,
+    "table_id": "tblxVNjP9dnJ7b3o"
+  },
+  {
+    "name": "vehicle_variants",
+    "revision": 674,
+    "table_id": "tbl8YzkZkMxvHRoT"
+  },
+  {
+    "name": "vehicles",
+    "revision": 448,
+    "table_id": "tblAfMQdjhSV4Wd4"
+  },
+  {
+    "name": "全国供应商",
+    "revision": 113,
+    "table_id": "tblBUDhX9XidkKL4"
+  },
+  {
+    "name": "按省统计",
+    "revision": 6,
+    "table_id": "tblN333Sx3GqWZ6F"
+  },
+  {
+    "name": "销售渠道",
+    "revision": 17,
+    "table_id": "tbl6M0U5tbHvuaAW"
+  },
+  {
+    "name": "客户公司列表",
+    "revision": 17,
+    "table_id": "tblMLxT3mZDT2gLH"
+  }
+]
