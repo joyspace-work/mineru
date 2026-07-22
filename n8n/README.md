@@ -19,8 +19,8 @@ Manual Trigger
 | **Read Classified Images** | 读取 `input/classified/images/` 下所有图片 |
 | **Read Classified Excels** | 读取 `input/classified/excels/` 下所有 Excel 表格 |
 | **Read Classified PDFs** | 读取 `input/classified/pdfs/` 下所有 PDF 文件 |
-| **Gemini Image Recognition** | 使用 gemini-2.5-flash 识别图片中的车型信息 |
-| **Gemini PDF Recognition** | 使用 gemini-2.5-flash 解析 PDF 中的车型信息 |
+| **Gemini Image Recognition** | 使用 gemini-3.5-flash 识别图片中的车型信息 |
+| **Gemini PDF Recognition** | 使用 gemini-3.5-flash 解析 PDF 中的车型信息 |
 | **Parse Spreadsheet** | 解析 Excel 表格数据 |
 | **Unified Data Mapper** | 统一映射所有来源的数据为飞书 Bitable 字段格式 |
 | **Get Feishu Token** | 获取飞书 tenant_access_token |

@@ -3,6 +3,14 @@ const { Database } = require('bun:sqlite');
 const crypto = require('crypto');
 const fs = require('fs');
 
+function removeIfPossible(filePath) {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (err) {
+    if (err?.code !== 'EBUSY' && err?.code !== 'ENOENT') throw err;
+  }
+}
+
 test('SHA-256 hash generation', () => {
   const text = 'test content';
   const hash = crypto.createHash('sha256').update(text).digest('hex');
@@ -11,8 +19,8 @@ test('SHA-256 hash generation', () => {
 });
 
 test('processed_files table and duplicate check', () => {
-  const dbPath = 'processed_files_test.db';
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  const dbPath = `processed_files_test_${process.pid}.db`;
+  removeIfPossible(dbPath);
   const db = new Database(dbPath);
 
   // Create table
@@ -56,5 +64,5 @@ test('processed_files table and duplicate check', () => {
   expect(hasHash(hash2)).toBe(true);
 
   db.close();
-  fs.unlinkSync(dbPath);
+  removeIfPossible(dbPath);
 });

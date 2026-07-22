@@ -1,24 +1,105 @@
 #!/usr/bin/env node
 /**
- * 全流水线编排器 — 支持本地 OCR + 多模态 Vision 双通道
+ * 全流水线编排器 — MinerU 专业识别 + 文本结构化抽取
  * 
  * 流程：
  *   1. XLSX 库解析 Excel → 结构化 JSON
- *   2. 本地 OCR (ocr_process.py) 处理图片+PDF → Markdown → Gemini 纯文本提取
- *   3. ⚠️ 如果本地 OCR 失败：自动切换至多模态 Vision Fallback 直传 Gemini
+ *   2. MinerU (ocr_process.py) 处理图片/PDF/文档 → Markdown → Gemini 纯文本提取
+ *   3. 专业识别失败时记录错误，并询问是否启用视觉大模型兜底
  *   4. 读取纯文本文件 → Gemini 提取
  *   5. 合并并经过自学习规则修正 → 上传飞书 / 本地保存
  */
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const { Database } = require('bun:sqlite');
 const crypto = require('crypto');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const CLASSIFIED_DIR = process.env.CLASSIFIED_DIR || path.join(PROJECT_ROOT, 'input/classified');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(PROJECT_ROOT, 'output');
+const RECOGNIZED_DIR = path.join(OUTPUT_DIR, 'recognized', 'mineru');
+
+function loadEnv() {
+  const envPath = path.join(PROJECT_ROOT, '.env');
+  if (!fs.existsSync(envPath)) return;
+  const envText = fs.readFileSync(envPath, 'utf-8');
+  for (const line of envText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const value = trimmed.slice(idx + 1).trim().replace(/^['"]|['"]$/g, '');
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
+loadEnv();
+
+function validateAiConfig() {
+  const provider = String(process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
+  if (provider === 'openrouter') {
+    if (!process.env.OPENROUTER_API_KEY) {
+      return {
+        ok: false,
+        message: 'AI 结构化抽取不可继续：AI_PROVIDER=openrouter，但未配置 OPENROUTER_API_KEY。',
+      };
+    }
+    return { ok: true };
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    return {
+      ok: false,
+      message: 'AI 结构化抽取不可继续：未配置 GEMINI_API_KEY。若使用 OpenRouter，请设置 AI_PROVIDER=openrouter 和 OPENROUTER_API_KEY。',
+    };
+  }
+  return { ok: true };
+}
+
+function normalizeDateValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    if (value > 100000000000) return new Date(value).toISOString().slice(0, 10);
+    if (value > 100000000) return new Date(value * 1000).toISOString().slice(0, 10);
+    return null;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const ymd = raw.match(/(20\d{2})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})/);
+  if (ymd) {
+    const [, year, month, day] = ymd;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  const ym = raw.match(/(20\d{2})\D{0,3}(\d{1,2})/);
+  if (ym) {
+    const [, year, month] = ym;
+    return `${year}-${month.padStart(2, '0')}-01`;
+  }
+
+  return null;
+}
+
+function getManufactureDate(row) {
+  return normalizeDateValue(
+    row.manufactureDate ??
+    row.manufacture_date ??
+    row.productionDate ??
+    row.production_date ??
+    row.time ??
+    null
+  );
+}
 
 function computeFileHash(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -37,6 +118,7 @@ function getDb(dbPath = path.join(PROJECT_ROOT, 'local_source.db')) {
       brand TEXT,
       model TEXT,
       trim_config TEXT,
+      manufacture_date TEXT,
       exterior_color TEXT,
       interior_color TEXT,
       stock_quantity INTEGER,
@@ -67,6 +149,10 @@ function getDb(dbPath = path.join(PROJECT_ROOT, 'local_source.db')) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  const existingColumns = new Set(db.prepare("PRAGMA table_info(source_candidates)").all().map(c => c.name));
+  if (!existingColumns.has('manufacture_date')) {
+    db.run("ALTER TABLE source_candidates ADD COLUMN manufacture_date TEXT");
+  }
   db.run(`
     CREATE TABLE IF NOT EXISTS processed_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +168,7 @@ function saveCandidatesToDb(db, candidates) {
   const insertStmt = db.prepare(`
     INSERT INTO source_candidates (
       model_id, brand, model, trim_config, exterior_color, interior_color,
-      stock_quantity, min_quantity, max_quantity, lead_time, order_waiting_period,
+      manufacture_date, stock_quantity, min_quantity, max_quantity, lead_time, order_waiting_period,
       order_wait_days, steering_setup, version_type, status_vehicle,
       official_suggested_price_cny, official_suggested_price_usd,
       cost_exw_cny, cost_exw_usd, cost_fob_cny, cost_fob_usd,
@@ -90,7 +176,7 @@ function saveCandidatesToDb(db, candidates) {
       location, supplier, notes, status, source_file, content_hash
     ) VALUES (
       $model_id, $brand, $model, $trim_config, $exterior_color, $interior_color,
-      $stock_quantity, $min_quantity, $max_quantity, $lead_time, $order_waiting_period,
+      $manufacture_date, $stock_quantity, $min_quantity, $max_quantity, $lead_time, $order_waiting_period,
       $order_wait_days, $steering_setup, $version_type, $status_vehicle,
       $official_suggested_price_cny, $official_suggested_price_usd,
       $cost_exw_cny, $cost_exw_usd, $cost_fob_cny, $cost_fob_usd,
@@ -100,12 +186,14 @@ function saveCandidatesToDb(db, candidates) {
   `);
 
   const insertTransaction = db.transaction((rows) => {
+    const insertedIds = [];
     for (const row of rows) {
-      insertStmt.run({
+      const result = insertStmt.run({
         $model_id: row.model_id ?? null,
         $brand: row.brand ?? null,
         $model: row.model ?? null,
         $trim_config: row.trim_config ?? null,
+        $manufacture_date: row.manufacture_date ?? null,
         $exterior_color: row.exterior_color ?? null,
         $interior_color: row.interior_color ?? null,
         $stock_quantity: row.stock_quantity ?? null,
@@ -134,30 +222,108 @@ function saveCandidatesToDb(db, candidates) {
         $source_file: row.source_file ?? null,
         $content_hash: row.content_hash ?? null
       });
+      insertedIds.push(Number(result.lastInsertRowid));
     }
+    return insertedIds;
   });
 
-  insertTransaction(candidates);
+  const insertedIds = insertTransaction(candidates);
   console.log(`   💾 Staged ${candidates.length} candidates into local_source.db (status = 'pending')`);
+  return insertedIds;
+}
+
+function markCandidatesSynced(db, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  const updateStmt = db.prepare('UPDATE source_candidates SET status = ? WHERE id = ?');
+  const updateTransaction = db.transaction((idList) => {
+    for (const recordId of idList) {
+      updateStmt.run('synced', recordId);
+    }
+  });
+  updateTransaction(ids);
+  console.log(`✅ Marked ${ids.length} records as 'synced' in local_source.db.`);
 }
 
 
 
 // ──────────────────────────────────────────────
-// Step 1: 尝试本地 OCR (调用 python ocr_process.py)
+// Step 0: 输入文件分类
+// ──────────────────────────────────────────────
+function runClassification() {
+  console.log('\n═══════════════════════════════════════');
+  console.log('📂 Step 0: 输入文件分类');
+  console.log('═══════════════════════════════════════\n');
+
+  execFileSync(process.execPath, [path.join(__dirname, 'classify_inputs.js')], {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit',
+  });
+}
+
+// ──────────────────────────────────────────────
+// Step 1: MinerU 专业识别 (调用 python ocr_process.py)
 // ──────────────────────────────────────────────
 function runOcr(options = {}) {
   console.log('\n═══════════════════════════════════════');
-  console.log('📸 Step 1: OCR 处理 (MinerU/PaddleOCR)');
+  console.log('📸 Step 1: MinerU 专业识别');
   console.log('═══════════════════════════════════════\n');
 
   try {
-    const cmd = `python3 ${path.join(__dirname, 'ocr_process.py')}${options.force ? ' --force' : ''}`;
+    const forceArg = options.force ? ' --force' : '';
+    const pythonCmd = process.env.PYTHON || 'python';
+    const cmd = `${pythonCmd} ${path.join(__dirname, 'ocr_process.py')} --engine mineru${forceArg}`;
     execSync(cmd, { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 600000 });
     return true;
   } catch (err) {
-    console.log('⚠️  本地 OCR 引擎不可用，将自动 Fallback 至 Gemini 多模态直传模式。');
+    console.log('⚠️  MinerU 专业识别未完成。请查看 output/recognized/mineru/errors.json。');
     return false;
+  }
+}
+
+function readRecognitionManifest() {
+  const manifestPath = path.join(RECOGNIZED_DIR, 'manifest.json');
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function hasRecognizedFiles() {
+  const manifest = readRecognitionManifest();
+  return Array.isArray(manifest?.files) && manifest.files.length > 0;
+}
+
+function hasRecognitionErrors() {
+  const errorsPath = path.join(RECOGNIZED_DIR, 'errors.json');
+  try {
+    const data = JSON.parse(fs.readFileSync(errorsPath, 'utf-8'));
+    return Array.isArray(data?.errors) && data.errors.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function promptForVisionFallback(args = []) {
+  if (args.includes('--vision-fallback')) return true;
+  if (args.includes('--no-vision-fallback')) return false;
+
+  const envValue = String(process.env.ALLOW_LLM_VISION_FALLBACK || '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'always'].includes(envValue)) return true;
+  if (['0', 'false', 'no', 'n', 'never'].includes(envValue)) return false;
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log('   非交互环境，默认不启用视觉大模型兜底。');
+    return false;
+  }
+
+  const readline = require('readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question('MinerU 识别失败。是否通过视觉大模型兜底识别图片/PDF？输入 y 启用，其余跳过: ');
+    return ['y', 'yes'].includes(String(answer).trim().toLowerCase());
+  } finally {
+    rl.close();
   }
 }
 
@@ -240,14 +406,14 @@ function runExcelParsing(db, dryRun) {
 }
 
 // ──────────────────────────────────────────────
-// Step 3: 提取非结构化车源 (OCR 结果 / 多模态 / 文本)
+// Step 3: 提取非结构化车源 (MinerU 识别结果 / 文本)
 // ──────────────────────────────────────────────
-async function runExtraction(ocrSuccess, db, dryRun) {
+async function runExtraction(ocrSuccess, db, dryRun, options = {}) {
   console.log('\n═══════════════════════════════════════');
   console.log('🤖 Step 3: AI 结构化提取');
   console.log('═══════════════════════════════════════\n');
 
-  const { processOcrOutput, processMultimodalFile, processTextFile, getApiConfig } = require('./gemini_extract');
+  const { processOcrOutput, processTextFile, processVisionFallbackFile, getApiConfig } = require('./gemini_extract');
   const config = getApiConfig();
   console.log(`   Provider: ${config.provider}, Model: ${config.model}`);
   if (!config.apiKey) {
@@ -257,15 +423,14 @@ async function runExtraction(ocrSuccess, db, dryRun) {
 
   const allCandidates = [];
 
-  // 判断是否走本地 OCR 文本提取
-  const ocrDir = path.join(OUTPUT_DIR, 'ocr');
-  const manifestPath = path.join(ocrDir, 'manifest.json');
-  const hasLocalOcr = ocrSuccess && fs.existsSync(manifestPath);
+  // 判断是否走 MinerU 文本提取
+  const manifestPath = path.join(RECOGNIZED_DIR, 'manifest.json');
+  const hasLocalOcr = ocrSuccess && hasRecognizedFiles();
 
   if (hasLocalOcr) {
-    // 3a. 本地 OCR 通道 (Text Mode)
-    console.log('   🟢 本地 OCR 可用，正在读取 OCR Markdown 结果...');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    // 3a. MinerU 识别通道 (Text Mode)
+    console.log('   🟢 MinerU 识别结果可用，正在读取 Markdown 结果...');
+    const manifest = readRecognitionManifest();
     for (const file of manifest.files || []) {
       const targetPath = fs.existsSync(file.source) ? file.source : (fs.existsSync(file.output_path) ? file.output_path : null);
       if (!targetPath) continue;
@@ -302,87 +467,52 @@ async function runExtraction(ocrSuccess, db, dryRun) {
       }
     }
   } else {
-    // 3b. 多模态 Vision 直传通道
-    console.log('   ⚠️  本地 OCR 未运行或报错，正在启用 [Gemini 多模态直传 Vision 模式]...');
-    
-    // 扫描图片
-    const imagesDir = path.join(CLASSIFIED_DIR, 'images');
-    if (fs.existsSync(imagesDir)) {
-      const images = fs.readdirSync(imagesDir).filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f));
-      console.log(`\n   📸 Images: ${images.length}`);
-      for (const img of images) {
-        const filePath = path.join(imagesDir, img);
-        try {
-          const hash = computeFileHash(filePath);
+    console.log('   ⚠️  未找到 MinerU 识别 manifest。');
+    console.log(`   Expected: ${manifestPath}`);
+    if (options.allowVisionFallback) {
+      console.log('   用户已确认启用视觉大模型兜底识别。');
+      const fallbackBuckets = [
+        { name: 'images', pattern: /\.(png|jpg|jpeg|webp|gif)$/i },
+        { name: 'pdfs', pattern: /\.pdf$/i },
+      ];
 
-          // Check if hash exists in processed_files
-          const processed = db.prepare("SELECT 1 FROM processed_files WHERE content_hash = ?").get(hash);
-          if (processed) {
-            console.log(`⏭️  Skipping already processed file: ${img}`);
-            continue;
+      for (const bucket of fallbackBuckets) {
+        const bucketDir = path.join(CLASSIFIED_DIR, bucket.name);
+        if (!fs.existsSync(bucketDir)) continue;
+        const files = fs.readdirSync(bucketDir).filter(f => bucket.pattern.test(f));
+        console.log(`\n   ${bucket.name}: ${files.length}`);
+        for (const file of files) {
+          const filePath = path.join(bucketDir, file);
+          try {
+            const hash = computeFileHash(filePath);
+            const processed = db.prepare("SELECT 1 FROM processed_files WHERE content_hash = ?").get(hash);
+            if (processed) {
+              console.log(`⏭️  Skipping already processed file: ${file}`);
+              continue;
+            }
+
+            console.log(`   🔄 Extracting (Vision fallback, user approved): ${file}`);
+            const candidates = await processVisionFallbackFile(filePath);
+            for (const c of candidates) {
+              c._content_hash = hash;
+              c._source_file = file;
+            }
+
+            allCandidates.push(...candidates);
+            console.log(`      → ${candidates.length} candidates`);
+
+            if (!dryRun) {
+              db.prepare("INSERT INTO processed_files (filename, content_hash) VALUES (?, ?)").run(file, hash);
+            }
+
+            await new Promise(r => setTimeout(r, 1000));
+          } catch (err) {
+            console.error(`   ❌ ${file}: ${err.message}`);
           }
-
-          console.log(`   🔄 Extracting (Vision Mode): ${img}`);
-          const candidates = await processMultimodalFile(filePath);
-          
-          for (const c of candidates) {
-            c._content_hash = hash;
-            c._source_file = img;
-          }
-
-          allCandidates.push(...candidates);
-          console.log(`      → ${candidates.length} candidates`);
-
-          // Insert record into processed_files
-          if (!dryRun) {
-            db.prepare("INSERT INTO processed_files (filename, content_hash) VALUES (?, ?)").run(img, hash);
-          }
-
-          await new Promise(r => setTimeout(r, 1000)); // Vision calls need a bit more time
-        } catch (err) {
-          console.error(`   ❌ ${img}: ${err.message}`);
         }
       }
-    }
-
-    // 扫描 PDF
-    const pdfsDir = path.join(CLASSIFIED_DIR, 'pdfs');
-    if (fs.existsSync(pdfsDir)) {
-      const pdfs = fs.readdirSync(pdfsDir).filter(f => /\.pdf$/i.test(f));
-      console.log(`\n   📄 PDFs: ${pdfs.length}`);
-      for (const pdf of pdfs) {
-        const filePath = path.join(pdfsDir, pdf);
-        try {
-          const hash = computeFileHash(filePath);
-
-          // Check if hash exists in processed_files
-          const processed = db.prepare("SELECT 1 FROM processed_files WHERE content_hash = ?").get(hash);
-          if (processed) {
-            console.log(`⏭️  Skipping already processed file: ${pdf}`);
-            continue;
-          }
-
-          console.log(`   🔄 Extracting (Vision Mode): ${pdf}`);
-          const candidates = await processMultimodalFile(filePath);
-          
-          for (const c of candidates) {
-            c._content_hash = hash;
-            c._source_file = pdf;
-          }
-
-          allCandidates.push(...candidates);
-          console.log(`      → ${candidates.length} candidates`);
-
-          // Insert record into processed_files
-          if (!dryRun) {
-            db.prepare("INSERT INTO processed_files (filename, content_hash) VALUES (?, ?)").run(pdf, hash);
-          }
-
-          await new Promise(r => setTimeout(r, 1000));
-        } catch (err) {
-          console.error(`   ❌ ${pdf}: ${err.message}`);
-        }
-      }
+    } else {
+      console.log('   未启用视觉大模型兜底，跳过图片/PDF。');
     }
   }
 
@@ -706,6 +836,14 @@ function formatCandidatesForFeishu(candidates) {
       return isCNY ? null : num;
     };
 
+    const getCostCny = (priceVal, priceCurrency) => {
+      const num = toNum(priceVal);
+      if (num === null) return null;
+      const currency = String(priceCurrency || '').trim().toUpperCase();
+      const isCNY = currency === 'CNY' || (!priceCurrency && num >= 30000);
+      return isCNY ? num : null;
+    };
+
     let versionType = null;
     if (market) {
       versionType = Array.isArray(market) ? market[0] : market;
@@ -724,6 +862,7 @@ function formatCandidatesForFeishu(candidates) {
       brand: matchedBrand || null,
       model: matchedModel || null,
       trim_config: row.trimName || row.trimConfig || row.trim_config || null,
+      manufacture_date: getManufactureDate(row),
       exterior_color: row.exteriorColor || row.exterior_color || null,
       interior_color: row.interiorColor || row.interior_color || null,
       stock_quantity: toNum(row.stockQuantity || row.stock_quantity),
@@ -737,13 +876,13 @@ function formatCandidatesForFeishu(candidates) {
       status_vehicle: row.statusVehicle || row.status_vehicle || null,
       official_suggested_price_cny: toNum(row.officialPrice || row.officialPriceCny || row.official_suggested_price_cny),
       official_suggested_price_usd: toNum(row.officialPriceUsd || row.official_suggested_price_usd),
-      cost_exw_cny: toNum(row.costExwCny || row.cost_exw_cny),
+      cost_exw_cny: toNum(row.costExwCny || row.cost_exw_cny) ?? getCostCny(row.priceExw, row.priceExwCurrency),
       cost_exw_usd: getCostUsd(row.priceExw || row.costExwUsd || row.cost_exw_usd, row.priceExwCurrency),
-      cost_fob_cny: toNum(row.costFobCny || row.cost_fob_cny),
+      cost_fob_cny: toNum(row.costFobCny || row.cost_fob_cny) ?? getCostCny(row.priceFob, row.priceFobCurrency),
       cost_fob_usd: getCostUsd(row.priceFob || row.costFobUsd || row.cost_fob_usd, row.priceFobCurrency),
-      cost_fca_cny: toNum(row.costFcaCny || row.cost_fca_cny),
+      cost_fca_cny: toNum(row.costFcaCny || row.cost_fca_cny) ?? getCostCny(row.priceFca, row.priceFcaCurrency),
       cost_fca_usd: getCostUsd(row.priceFca || row.costFcaUsd || row.cost_fca_usd, row.priceFcaCurrency),
-      cost_cif_cny: toNum(row.costCifCny || row.cost_cif_cny),
+      cost_cif_cny: toNum(row.costCifCny || row.cost_cif_cny) ?? getCostCny(row.priceCif, row.priceCifCurrency),
       cost_cif_usd: getCostUsd(row.priceCif || row.costCifUsd || row.cost_cif_usd, row.priceCifCurrency),
       location: row.location || null,
       supplier: row.supplierName || row.supplier || null,
@@ -772,10 +911,11 @@ function saveFinalOutput(candidates) {
 
   const csvPath = path.join(finalDir, `candidates_${new Date().toISOString().slice(0, 10)}.csv`);
   const csvFields = [
-    'brand', 'model', 'trim_config', 'exterior_color', 'interior_color',
+    'brand', 'model', 'trim_config', 'manufacture_date', 'exterior_color', 'interior_color',
     'stock_quantity', 'supplier', 'location', 'notes',
-    'official_suggested_price_cny', 'cost_exw_usd', 'cost_fob_usd', 'cost_fca_usd',
-    'cost_cif_usd', 'min_quantity', 'max_quantity',
+    'official_suggested_price_cny', 'cost_exw_cny', 'cost_exw_usd', 'cost_fob_cny',
+    'cost_fob_usd', 'cost_fca_cny', 'cost_fca_usd', 'cost_cif_cny', 'cost_cif_usd',
+    'min_quantity', 'max_quantity',
     'steering_setup', 'market_region', 'order_wait_days'
   ];
   const csvHeader = csvFields.join(',');
@@ -801,7 +941,7 @@ function saveFinalOutput(candidates) {
 function recordToFeishuFields(record) {
   const fields = {};
   const allowedBitableFields = [
-    'model_id', 'brand', 'model', 'trim_config', 'exterior_color', 'interior_color',
+    'model_id', 'brand', 'model', 'trim_config', 'manufacture_date', 'exterior_color', 'interior_color',
     'stock_quantity', 'supplier', 'location', 'notes', 'min_quantity', 'max_quantity',
     'official_suggested_price_cny', 'cost_fca_usd', 'cost_fob_usd', 'cost_exw_usd',
     'cost_cif_usd', 'steering_setup', 'order_wait_days'
@@ -1001,7 +1141,7 @@ async function main() {
   const db = getDb();
 
   if (action === 'list') {
-    const rows = db.prepare("SELECT id, brand, model, trim_config, exterior_color, interior_color, stock_quantity, cost_exw_usd, status_vehicle, status, created_at FROM source_candidates WHERE status = 'pending'").all();
+    const rows = db.prepare("SELECT id, brand, model, trim_config, manufacture_date, exterior_color, interior_color, stock_quantity, cost_exw_usd, status_vehicle, status, created_at FROM source_candidates WHERE status = 'pending'").all();
     if (rows.length === 0) {
       console.log('📋 No pending candidate records found in local_source.db.');
     } else {
@@ -1025,7 +1165,7 @@ async function main() {
 
     const allowedKeys = [
       'model_id', 'brand', 'model', 'trim_config', 'exterior_color', 'interior_color',
-      'stock_quantity', 'min_quantity', 'max_quantity', 'lead_time', 'order_waiting_period',
+      'manufacture_date', 'stock_quantity', 'min_quantity', 'max_quantity', 'lead_time', 'order_waiting_period',
       'order_wait_days', 'steering_setup', 'version_type', 'status_vehicle',
       'official_suggested_price_cny', 'official_suggested_price_usd',
       'cost_exw_cny', 'cost_exw_usd', 'cost_fob_cny', 'cost_fob_usd',
@@ -1078,35 +1218,44 @@ async function main() {
     const success = await syncToFeishu(pendingRecords, dryRun);
     if (success && !dryRun) {
       const ids = pendingRecords.map(r => r.id);
-      const updateStmt = db.prepare('UPDATE source_candidates SET status = ? WHERE id = ?');
-      const updateTransaction = db.transaction((idList) => {
-        for (const recordId of idList) {
-          updateStmt.run('synced', recordId);
-        }
-      });
-      updateTransaction(ids);
-      console.log(`✅ Marked ${ids.length} records as 'synced' in local_source.db.`);
+      markCandidatesSynced(db, ids);
     }
     db.close();
     return;
   }
 
   if (action === 'run') {
+    const skipClassify = args.includes('--skip-classify');
     const skipOcr = args.includes('--skip-ocr');
     const forceOcr = args.includes('--force-ocr');
+    let allowVisionFallback = false;
 
     console.log('╔══════════════════════════════════════════╗');
     console.log('║  EV Export Management — 全流水线        ║');
-    console.log('║  MinerU/PaddleOCR → Gemini → SQLite      ║');
+    console.log('║  MinerU → Gemini Text → SQLite           ║');
     console.log('╚══════════════════════════════════════════╝');
-    console.log(`\n  Skip OCR: ${skipOcr}  |  Dry Run: ${dryRun}  |  Force OCR: ${forceOcr}\n`);
+    console.log(`\n  Skip Classify: ${skipClassify}  |  Skip OCR: ${skipOcr}  |  Dry Run: ${dryRun}  |  Force OCR: ${forceOcr}\n`);
 
     const startTime = Date.now();
+
+    // Step 0: Classify raw input files into input/classified/
+    if (!skipClassify) {
+      try {
+        runClassification();
+      } catch (err) {
+        console.error(`❌ Input classification failed: ${err.message}`);
+        db.close();
+        process.exit(1);
+      }
+    }
 
     // Step 1: OCR
     let ocrSuccess = false;
     if (!skipOcr) {
       ocrSuccess = runOcr({ force: forceOcr });
+      if (!ocrSuccess || hasRecognitionErrors()) {
+        allowVisionFallback = await promptForVisionFallback(args);
+      }
     }
 
         // Step 2: Excel
@@ -1119,17 +1268,23 @@ async function main() {
 
     // Step 3: Extraction
     let aiCandidates = [];
-    try {
-      aiCandidates = await runExtraction(ocrSuccess, db, dryRun);
-    } catch (err) {
-      console.error(`❌ AI extraction failed: ${err.message}`);
+    const aiConfig = validateAiConfig();
+    if (!aiConfig.ok) {
+      console.error(`❌ ${aiConfig.message}`);
+      console.error('   已完成可运行的分类/专业识别步骤；请补齐 .env 后重新运行结构化抽取。');
+    } else {
+      try {
+        aiCandidates = await runExtraction(ocrSuccess, db, dryRun, { allowVisionFallback });
+      } catch (err) {
+        console.error(`❌ AI extraction failed: ${err.message}`);
+      }
     }
 
     // Step 4: Merge
     const allCandidates = mergeAllCandidates(excelResults, aiCandidates);
 
     if (allCandidates.length === 0) {
-      console.log('\n⚠️  No candidates extracted. Check your input files and API configuration.');
+      console.log('\n⚠️  No candidates extracted. Check your input files, MinerU output, and AI API configuration.');
       db.close();
       process.exit(1);
     }
@@ -1143,11 +1298,17 @@ async function main() {
     // Step 7: Save output files
     const output = saveFinalOutput(formatted);
 
-    // Step 8: Save to local SQLite staging DB (status = 'pending')
+    // Step 8: Save to local SQLite staging DB (status = 'pending') and upload to Feishu
     if (dryRun) {
       console.log('\n   ⏭️  Dry run — skipping SQLite write and Feishu upload');
     } else {
-      saveCandidatesToDb(db, formatted);
+      const stagedIds = saveCandidatesToDb(db, formatted);
+      const syncSuccess = await syncToFeishu(formatted, false);
+      if (syncSuccess) {
+        markCandidatesSynced(db, stagedIds);
+      } else {
+        console.log('   ⚠️  Feishu upload failed or was not configured; records remain pending in local_source.db.');
+      }
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -1175,8 +1336,14 @@ if (require.main === module) {
 
 module.exports = {
   formatCandidatesForFeishu,
+  recordToFeishuFields,
+  normalizeDateValue,
+  validateAiConfig,
+  hasRecognizedFiles,
+  hasRecognitionErrors,
   getDb,
   saveCandidatesToDb,
+  markCandidatesSynced,
   syncToFeishu,
   fetchWithRetry
 };

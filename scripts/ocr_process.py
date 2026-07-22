@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MinerU OCR 批处理脚本
-将 input/classified/ 中的图片、PDF、PPT、DOCX 转为结构化 Markdown
+将 input/classified/ 中的图片、PDF、PPT、DOCX、RTF 等转为结构化 Markdown
 
 依赖安装：
   pip install magic-pdf[full]   # MinerU (内置 PaddleOCR)
@@ -18,20 +18,49 @@ import json
 import subprocess
 import argparse
 import hashlib
+import re
 from pathlib import Path
 from datetime import datetime
 
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 INPUT_CLASSIFIED = PROJECT_ROOT / "input" / "classified"
-OUTPUT_OCR = PROJECT_ROOT / "output" / "ocr"
-CACHE_FILE = PROJECT_ROOT / "output" / ".ocr_cache.json"
+OUTPUT_OCR = PROJECT_ROOT / "output" / "recognized" / "mineru"
+CACHE_FILE = PROJECT_ROOT / "output" / "recognized" / ".mineru_cache.json"
+ERRORS_FILE = OUTPUT_OCR / "errors.json"
+
+
+def load_env_file():
+    """Load simple KEY=VALUE entries from .env for direct script runs."""
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text("utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file()
 
 # 需要 OCR 处理的文件桶及其扩展名
 OCR_BUCKETS = {
-    "images":        [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"],
+    "images":        [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"],
     "pdfs":          [".pdf"],
     "presentations": [".pptx", ".ppt"],
-    "documents":     [".docx", ".doc"],
+    "documents":     [".docx", ".doc", ".rtf"],
 }
 
 # 不需要 OCR 的桶（直接解析）
@@ -59,16 +88,59 @@ def save_cache(cache: dict):
     CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False), "utf-8")
 
 
-def check_mineru_installed() -> bool:
-    """Check if MinerU (magic-pdf) is installed."""
+def get_mineru_command() -> str | None:
+    """Return the available MinerU CLI command."""
+    for command in ("magic-pdf", "mineru"):
+        try:
+            result = subprocess.run(
+                [command, "--version"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                return command
+        except FileNotFoundError:
+            continue
+    return None
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int) -> int:
     try:
-        result = subprocess.run(
-            ["magic-pdf", "--version"],
-            capture_output=True, text=True, timeout=10
-        )
-        return result.returncode == 0
-    except FileNotFoundError:
-        return False
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def build_mineru_command(command: str, filepath: Path, output_dir: Path) -> list[str]:
+    """Build MinerU CLI command from MINERU_* configuration."""
+    method = os.environ.get("MINERU_METHOD", "auto").strip().lower() or "auto"
+    if method not in {"ocr", "txt", "auto"}:
+        method = "auto"
+
+    cmd = [command, "--path", str(filepath), "--output-dir", str(output_dir), "--method", method]
+
+    lang = os.environ.get("MINERU_LANG", "").strip()
+    if lang:
+        cmd.extend(["--lang", lang])
+
+    if env_bool("MINERU_DEBUG", False):
+        cmd.extend(["--debug", "true"])
+
+    start_page = os.environ.get("MINERU_START_PAGE", "").strip()
+    if start_page:
+        cmd.extend(["--start", start_page])
+
+    end_page = os.environ.get("MINERU_END_PAGE", "").strip()
+    if end_page:
+        cmd.extend(["--end", end_page])
+
+    return cmd
 
 
 def check_paddleocr_installed() -> bool:
@@ -148,13 +220,35 @@ def convert_docx_to_text(docx_path: Path, output_dir: Path) -> Path:
         return None
 
 
-def process_with_mineru(filepath: Path, output_dir: Path) -> Path | None:
+def convert_rtf_to_text(rtf_path: Path, output_dir: Path) -> Path:
+    """Extract plain text from simple RTF without adding a heavyweight dependency."""
+    raw = rtf_path.read_text("utf-8", errors="ignore")
+    text = raw
+    text = text.replace("\\par", "\n").replace("\\line", "\n").replace("\\tab", "\t")
+    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
+    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", text)
+    text = re.sub(r"[{}]", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = "\n".join(line.strip() for line in text.splitlines()).strip()
+
+    if not text:
+        return None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    md_path = output_dir / (rtf_path.stem + ".md")
+    md_path.write_text(text, "utf-8")
+    return md_path
+
+
+def process_with_mineru(filepath: Path, output_dir: Path, command: str) -> Path | None:
     """Process a single file with MinerU magic-pdf."""
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
+        cmd = build_mineru_command(command, filepath, output_dir)
+        timeout_seconds = env_int("MINERU_TIMEOUT_SECONDS", 300)
         result = subprocess.run(
-            ["magic-pdf", "-p", str(filepath), "-o", str(output_dir), "-m", "auto"],
-            capture_output=True, text=True, timeout=300
+            cmd,
+            capture_output=True, text=True, timeout=timeout_seconds
         )
         if result.returncode == 0:
             # MinerU outputs to: output_dir/<filename>/auto/<filename>.md
@@ -171,22 +265,76 @@ def process_with_mineru(filepath: Path, output_dir: Path) -> Path | None:
     return None
 
 
+def create_paddleocr_reader():
+    """Create a PaddleOCR reader using arguments accepted by current 3.x releases."""
+    from paddleocr import PaddleOCR
+    try:
+        return PaddleOCR(
+            lang="ch",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+        )
+    except Exception:
+        return PaddleOCR(lang="ch")
+
+
+def parse_paddleocr_result(result) -> list[str]:
+    """Normalize PaddleOCR 2.x/3.x result shapes to plain text lines."""
+    lines = []
+
+    def append_text(value, score=None):
+        if value is None:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        if score is None or float(score) >= 0.5:
+            lines.append(text)
+
+    for page in result or []:
+        if isinstance(page, dict):
+            texts = page.get("rec_texts") or page.get("texts") or []
+            scores = page.get("rec_scores") or page.get("scores") or [None] * len(texts)
+            for text, score in zip(texts, scores):
+                append_text(text, score)
+            continue
+
+        if hasattr(page, "json"):
+            try:
+                data = page.json
+                if isinstance(data, dict):
+                    texts = data.get("rec_texts") or data.get("texts") or []
+                    scores = data.get("rec_scores") or data.get("scores") or [None] * len(texts)
+                    for text, score in zip(texts, scores):
+                        append_text(text, score)
+                    continue
+            except Exception:
+                pass
+
+        if isinstance(page, list):
+            for line in page:
+                try:
+                    append_text(line[1][0], line[1][1])
+                except Exception:
+                    continue
+
+    return lines
+
+
 def process_with_paddleocr(filepath: Path, output_dir: Path) -> Path | None:
     """Fallback: process image with PaddleOCR directly."""
     try:
-        from paddleocr import PaddleOCR
-        ocr = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
-        result = ocr.ocr(str(filepath), cls=True)
-        lines = []
-        if result and result[0]:
-            for line in result[0]:
-                text = line[1][0]
-                confidence = line[1][1]
-                lines.append(f"{text}")
+        ocr = create_paddleocr_reader()
+        if hasattr(ocr, "predict"):
+            result = ocr.predict(str(filepath))
+        else:
+            result = ocr.ocr(str(filepath))
+        lines = parse_paddleocr_result(result)
         output_dir.mkdir(parents=True, exist_ok=True)
         md_path = output_dir / (filepath.stem + ".md")
         md_path.write_text("\n".join(lines), "utf-8")
-        return md_path
+        return md_path if lines else None
     except ImportError:
         print(f"  ⚠️  PaddleOCR not installed")
         return None
@@ -195,7 +343,7 @@ def process_with_paddleocr(filepath: Path, output_dir: Path) -> Path | None:
         return None
 
 
-def process_file(filepath: Path, cache: dict, use_mineru: bool) -> dict | None:
+def process_file(filepath: Path, cache: dict, mineru_command: str | None, engine: str) -> tuple[dict | None, dict | None]:
     """Process a single file, return metadata dict or None."""
     fhash = file_hash(filepath)
     rel = str(filepath.relative_to(INPUT_CLASSIFIED))
@@ -206,7 +354,7 @@ def process_file(filepath: Path, cache: dict, use_mineru: bool) -> dict | None:
         cached = cache[cache_key]
         if Path(cached["output_path"]).exists():
             print(f"  ⏭️  Cached: {rel}")
-            return cached
+            return cached, None
 
     ext = filepath.suffix.lower()
     output_subdir = OUTPUT_OCR / filepath.parent.relative_to(INPUT_CLASSIFIED)
@@ -214,37 +362,43 @@ def process_file(filepath: Path, cache: dict, use_mineru: bool) -> dict | None:
 
     result_path = None
 
-    if ext in [".pptx", ".ppt"]:
+    if engine == "mineru" and not mineru_command:
+        return None, {
+            "source": str(filepath),
+            "source_rel": rel,
+            "error": "MinerU CLI is not installed",
+        }
+
+    if engine == "paddleocr":
+        if ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"]:
+            result_path = process_with_paddleocr(filepath, output_subdir)
+    elif ext in [".pptx", ".ppt"]:
         result_path = convert_pptx_to_pdf(filepath, output_subdir)
         # If got PDF, process it further with MinerU
-        if result_path and result_path.suffix == ".pdf" and use_mineru:
-            mineru_result = process_with_mineru(result_path, output_subdir)
+        if result_path and result_path.suffix == ".pdf" and mineru_command:
+            mineru_result = process_with_mineru(result_path, output_subdir, mineru_command)
             if mineru_result:
                 result_path = mineru_result
 
-    elif ext in [".docx", ".doc"]:
+    elif ext == ".docx":
         result_path = convert_docx_to_text(filepath, output_subdir)
 
-    elif ext == ".pdf":
-        if use_mineru:
-            result_path = process_with_mineru(filepath, output_subdir)
-        if not result_path:
-            # Fallback: basic text extraction
-            try:
-                import fitz  # PyMuPDF
-                doc = fitz.open(str(filepath))
-                texts = [page.get_text("text") for page in doc]
-                md_path = output_subdir / (filepath.stem + ".md")
-                md_path.write_text("\n\n---\n\n".join(texts), "utf-8")
-                result_path = md_path
-            except ImportError:
-                print(f"  ⚠️  PyMuPDF not installed, cannot extract PDF text")
+    elif ext == ".rtf":
+        result_path = convert_rtf_to_text(filepath, output_subdir)
+        if not result_path and mineru_command:
+            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
-    elif ext in [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"]:
-        if use_mineru:
-            result_path = process_with_mineru(filepath, output_subdir)
-        if not result_path:
-            result_path = process_with_paddleocr(filepath, output_subdir)
+    elif ext == ".doc":
+        if mineru_command:
+            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
+
+    elif ext == ".pdf":
+        if mineru_command:
+            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
+
+    elif ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"]:
+        if mineru_command:
+            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
     if result_path:
         entry = {
@@ -253,42 +407,53 @@ def process_file(filepath: Path, cache: dict, use_mineru: bool) -> dict | None:
             "output_path": str(result_path),
             "content_hash": fhash,
             "processed_at": datetime.now().isoformat(),
-            "method": "mineru" if use_mineru else "paddleocr",
+            "method": engine,
         }
         cache[cache_key] = entry
-        return entry
-    return None
+        return entry, None
+    return None, {
+        "source": str(filepath),
+        "source_rel": rel,
+        "error": f"No recognized markdown output generated for {filepath.name}",
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description="MinerU/PaddleOCR batch processor")
     parser.add_argument("--bucket", help="Only process one bucket (images/pdfs/etc)")
     parser.add_argument("--file", help="Process single file")
+    parser.add_argument("--engine", choices=["mineru", "paddleocr"], default="mineru", help="Recognition engine")
     parser.add_argument("--force", action="store_true", help="Ignore cache, reprocess all")
     args = parser.parse_args()
 
-    use_mineru = check_mineru_installed()
+    mineru_command = get_mineru_command()
     use_paddle = check_paddleocr_installed()
 
-    print(f"🔧 MinerU installed: {'✅' if use_mineru else '❌'}")
+    print(f"🔧 MinerU installed: {'✅' if mineru_command else '❌'}")
     print(f"🔧 PaddleOCR installed: {'✅' if use_paddle else '❌'}")
 
-    if not use_mineru and not use_paddle:
-        print("\n❌ Neither MinerU nor PaddleOCR is installed!")
+    if args.engine == "mineru" and not mineru_command:
+        print("\n❌ MinerU is not installed. Professional recognition cannot continue.")
         print("   Install MinerU:    pip install magic-pdf[full]")
+        sys.exit(1)
+    if args.engine == "paddleocr" and not use_paddle:
+        print("\n❌ PaddleOCR is not installed.")
         print("   Install PaddleOCR: pip install paddleocr paddlepaddle")
         sys.exit(1)
 
     cache = {} if args.force else load_cache()
     results = []
+    errors = []
 
     if args.file:
         # Single file mode
         fp = Path(args.file).resolve()
         print(f"\n📄 Processing: {fp.name}")
-        entry = process_file(fp, cache, use_mineru)
+        entry, error = process_file(fp, cache, mineru_command, args.engine)
         if entry:
             results.append(entry)
+        if error:
+            errors.append(error)
     else:
         # Batch mode
         buckets_to_process = [args.bucket] if args.bucket else list(OCR_BUCKETS.keys())
@@ -301,9 +466,11 @@ def main():
             for fp in files:
                 if fp.is_file():
                     print(f"  📄 {fp.name}...")
-                    entry = process_file(fp, cache, use_mineru)
+                    entry, error = process_file(fp, cache, mineru_command, args.engine)
                     if entry:
                         results.append(entry)
+                    if error:
+                        errors.append(error)
 
     save_cache(cache)
 
@@ -312,13 +479,22 @@ def main():
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = {
         "processed_at": datetime.now().isoformat(),
+        "engine": args.engine,
         "total_files": len(results),
         "files": results,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), "utf-8")
+    ERRORS_FILE.write_text(json.dumps({
+        "processed_at": datetime.now().isoformat(),
+        "engine": args.engine,
+        "total_errors": len(errors),
+        "errors": errors,
+    }, indent=2, ensure_ascii=False), "utf-8")
 
     print(f"\n✅ OCR complete: {len(results)} files processed")
     print(f"   Manifest: {manifest_path}")
+    if errors:
+        print(f"   Errors: {ERRORS_FILE} ({len(errors)} files)")
 
 
 if __name__ == "__main__":

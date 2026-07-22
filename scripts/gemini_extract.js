@@ -1,9 +1,9 @@
 /**
- * Gemini 结构化提取 — 包含多模态 Fallback
+ * Gemini 结构化提取 — 专业识别后的文本为主，用户确认后才允许视觉兜底
  * 
  * 流程：
- *   1. 优先使用文本模式处理 OCR 后的 Markdown
- *   2. 如果没有本地 OCR，自动 Fallback 到多模态 Vision 模式（直接读取图片/PDF，通过 Base64 发给 Gemini）
+ *   1. 使用文本模式处理 MinerU/Docling/OCR 后的 Markdown
+ *   2. 仅当 MinerU 失败且用户明确确认时，才允许视觉大模型兜底识别图片/PDF
  */
 
 const fs = require('fs');
@@ -95,16 +95,54 @@ function getApiConfig() {
     return {
       provider: 'gemini',
       apiKey: process.env.GEMINI_API_KEY,
-      model: process.env.GEMINI_SOURCE_IMPORT_MODEL || 'gemini-2.5-flash',
+      model: process.env.GEMINI_SOURCE_IMPORT_MODEL || 'gemini-3.5-flash',
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     };
   }
   return {
     provider: 'openrouter',
     apiKey: process.env.OPENROUTER_API_KEY,
-    model: process.env.OPENROUTER_SOURCE_IMPORT_MODEL || 'google/gemini-2.5-flash',
+    model: process.env.OPENROUTER_SOURCE_IMPORT_MODEL || 'google/gemini-3.5-flash',
     baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
   };
+}
+
+function safeErrorMessage(err) {
+  const code = err?.code || err?.cause?.code || err?.name || 'REQUEST_FAILED';
+  const message = err?.message || String(err || 'unknown error');
+  return `${code}: ${message}`
+    .replace(/key=[^&\s"]+/gi, 'key=[REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [REDACTED]');
+}
+
+async function requestJson(endpoint, options, attempts = 2) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000);
+    try {
+      const response = await fetch(endpoint, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = { raw: text };
+      }
+      if (!response.ok) {
+        throw new Error(data?.error?.message || `HTTP ${response.status}`);
+      }
+      return data;
+    } catch (err) {
+      clearTimeout(timeout);
+      lastError = err;
+      const retryable = ['AbortError', 'ECONNRESET', 'UND_ERR_CONNECT_TIMEOUT'].some(token => safeErrorMessage(err).includes(token));
+      if (!retryable || attempt === attempts) break;
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+  throw new Error(`AI request failed: ${safeErrorMessage(lastError)}`);
 }
 
 function buildPrompt(text, supplierName, mode = 'text') {
@@ -138,6 +176,7 @@ function buildPrompt(text, supplierName, mode = 'text') {
 | 方程豹 豹7 / 钛7 / Ti 7 | Fangchengbao | Ti 7 |
 | 方程豹 豹8 / Leopard 8 | Fangchengbao | Leopard 8 |
 | 远程 星享V | Farizon | Xingxiang V |
+| 远程 V6E / V7E / V8E / V 系列 / V系列 | Farizon | V6E / V7E / V8E（按原行车型精确填写） |
 | 广汽埃安 RT | GAC Aion | RT |
 | 广汽埃安 V / Aion V | GAC Aion | V |
 | 广汽埃安 i60 | GAC Aion | i60 |
@@ -170,11 +209,15 @@ function buildPrompt(text, supplierName, mode = 'text') {
 - 阶梯价格拆分：如果含有数量阶梯价格（如 “1台32000，5台31000”），必须拆分为独立的 JSON 记录，各自填写正确的起订量区间（minQuantity, maxQuantity）与单价价格。
 
 🚨 核心原则 4：历史提取与修正经验
+- 远程/Farizon V 系列品牌硬规则：如果文件名、标题、备注或上下文出现“远程”、“Farizon”、“V6E”、“V7E”、“V8E”、“V系列价格表”，且车型是 V6E/V7E/V8E，则 brand 必须写 "Farizon"，modelName 必须分别写 "V6E"、"V7E"、"V8E"。Do not infer Dongfeng for V6E/V7E/V8E, even if announcement model codes begin with DNC/JHC.
+- EXW工厂价格硬规则：表头或单元格出现“EXW工厂”、“EXW 工厂”、“EXW”、“工厂价”时，该列数值是 EXW 成本价，必须输出到 priceExw，并根据原文人民币语境输出 priceExwCurrency: "CNY"。例如“EXW工厂 70700”必须输出 priceExw: 70700, priceExwCurrency: "CNY"。不要把 EXW 工厂价格放进 notes，也不要留空。
 - 数量前缀剥离：如“110白”，提取数量 110，颜色 白。
 - 配置版本与车型切分：将品牌名后的第一个型号作为 modelName，其余修饰描述作为 trimName。如在车型库中无法对应，trimName 直接留空为 null。
 - 地理地名：提货地 location 仅填真实物理地名，必须剔除贸易前缀如“FCA/FOB/EXW/CIF”。必须保留完整地名修饰（如“霍尔果斯基地”不能缩写为“霍尔果斯”，“天津港”不能简写为“天津”）。
 - 清洗非数字价格：如果指导价写着“底盘配置代号”非数字价格，官方指导价填 null，并把代号写到 notes 或 trimName 中。
 - 价格数值清洗：价格必须剔除所有 ¥, $, 逗号（千分位）及空格等，直接转化为纯数字值。
+- 制造/生产日期提取：如果原文出现生产日期、制造日期、出厂日期、time、manufacture_date 等，统一输出 manufactureDate，格式 YYYY-MM-DD。不要把交付日期或下单等待周期误填为 manufactureDate。
+- MinerU table cell drift: OCR markdown may merge or split adjacent table cells. If seat count and battery are stuck together, such as "5/6/7/9座宁德50.2kwh", treat the seat count as seat information and battery as battery information. Preserve both in rawFields/notes, but do not let battery text overwrite modelName, trimName, price, or location.
 - 货期 Lead Time 提取：若有包含交付月份，将其转换为 YYYY-MM-DD 格式（上旬/中旬/无具体日期填当月 15 号，下旬/月底填当月 28 号。下单等待周期如“6-8周”、“30天”等不要填在此处，而是填入 notes 或另外描述）。
 `;
 
@@ -182,7 +225,7 @@ function buildPrompt(text, supplierName, mode = 'text') {
     '你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。',
     '只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。',
     '顶层格式必须是：{"rawText":"","parserNotes":"","candidates":[...]}。',
-    '字段必须使用：brand, modelName, year, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
+    '字段必须使用：brand, modelName, year, manufactureDate, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。',
     mappingRules,
     `供应商：${supplierName || '未知'}`,
     `解析模式：${mode}`,
@@ -191,38 +234,20 @@ function buildPrompt(text, supplierName, mode = 'text') {
 }
 
 /**
- * 核心请求方法，支持多模态附件
+ * 核心文本请求方法。
  */
-async function callGemini(text, supplierName, filePath = null) {
+async function callGemini(text, supplierName) {
   const config = getApiConfig();
   if (!config.apiKey) {
     throw new Error(`❌ 未设置 API Key。请在 .env 中设置 GEMINI_API_KEY 或 OPENROUTER_API_KEY`);
   }
 
-  const mode = filePath ? `multimodal (${path.extname(filePath)})` : 'text';
-  const prompt = buildPrompt(text, supplierName, mode);
-
-  // 1. 读取文件附件（如果存在）
-  let inlineData = null;
-  if (filePath && fs.existsSync(filePath)) {
-    const ext = path.extname(filePath).toLowerCase();
-    let mimeType = 'application/octet-stream';
-    if (ext === '.pdf') mimeType = 'application/pdf';
-    else if (ext === '.png') mimeType = 'image/png';
-    else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-    else if (ext === '.webp') mimeType = 'image/webp';
-
-    const base64 = fs.readFileSync(filePath).toString('base64');
-    inlineData = { mimeType, data: base64 };
-  }
+  const prompt = buildPrompt(text, supplierName, 'text');
 
   if (config.provider === 'gemini') {
     // 官方 Gemini API
     const url = `${config.baseUrl}/models/${config.model}:generateContent?key=${config.apiKey}`;
     const parts = [{ text: prompt }];
-    if (inlineData) {
-      parts.push({ inlineData });
-    }
 
     const body = {
       contents: [{ parts }],
@@ -232,35 +257,17 @@ async function callGemini(text, supplierName, filePath = null) {
       },
     };
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000);
-    try {
-      const resp = await fetch(url, {
+    const data = await requestJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error?.message || `HTTP ${resp.status}`);
-      const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      return extractJsonObject(responseText);
-    } catch (err) {
-      clearTimeout(timeout);
-      throw err;
-    }
+    });
+    const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return extractJsonObject(responseText);
   } else {
-    // OpenRouter (多模态只支持图片)
+    // OpenRouter text-only request.
     const url = `${config.baseUrl}/chat/completions`;
     const content = [{ type: 'text', text: prompt }];
-
-    if (inlineData && inlineData.mimeType.startsWith('image/')) {
-      content.push({
-        type: 'image_url',
-        image_url: { url: `data:${inlineData.mimeType};base64,${inlineData.data}` },
-      });
-    }
 
     const body = {
       model: config.model,
@@ -269,28 +276,98 @@ async function callGemini(text, supplierName, filePath = null) {
       response_format: { type: 'json_object' },
     };
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000);
-    try {
-      const resp = await fetch(url, {
+    const data = await requestJson(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${config.apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error?.message || `HTTP ${resp.status}`);
-      const responseText = data?.choices?.[0]?.message?.content || '';
-      return extractJsonObject(responseText);
-    } catch (err) {
-      clearTimeout(timeout);
-      throw err;
-    }
+    });
+    const responseText = data?.choices?.[0]?.message?.content || '';
+    return extractJsonObject(responseText);
   }
+}
+
+/**
+ * 用户确认后的视觉兜底请求方法。
+ * 这不是主识别路径，只在 MinerU 失败且用户同意后由 run_pipeline.js 调用。
+ */
+async function callGeminiVisionFallback(text, supplierName, filePath) {
+  const config = getApiConfig();
+  if (!config.apiKey) {
+    throw new Error(`❌ 未设置 API Key。请在 .env 中设置 GEMINI_API_KEY 或 OPENROUTER_API_KEY`);
+  }
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error(`Vision fallback file not found: ${filePath}`);
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  let mimeType = 'application/octet-stream';
+  if (ext === '.pdf') mimeType = 'application/pdf';
+  else if (ext === '.png') mimeType = 'image/png';
+  else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+  else if (ext === '.webp') mimeType = 'image/webp';
+  else if (ext === '.gif') mimeType = 'image/gif';
+  else {
+    throw new Error(`Vision fallback does not support file type: ${ext}`);
+  }
+
+  const prompt = buildPrompt(text, supplierName, `vision_fallback_user_approved (${ext})`);
+  const base64 = fs.readFileSync(filePath).toString('base64');
+
+  if (config.provider === 'gemini') {
+    const url = `${config.baseUrl}/models/${config.model}:generateContent?key=${config.apiKey}`;
+    const body = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType, data: base64 } },
+        ],
+      }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.1,
+      },
+    };
+
+    const data = await requestJson(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    const responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    return extractJsonObject(responseText);
+  }
+
+  if (!mimeType.startsWith('image/')) {
+    throw new Error('OpenRouter vision fallback only supports image files in this project');
+  }
+
+  const url = `${config.baseUrl}/chat/completions`;
+  const body = {
+    model: config.model,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+      ],
+    }],
+    max_tokens: 5000,
+    response_format: { type: 'json_object' },
+  };
+
+  const data = await requestJson(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+  });
+  const responseText = data?.choices?.[0]?.message?.content || '';
+  return extractJsonObject(responseText);
 }
 
 function extractJsonObject(text) {
@@ -353,23 +430,6 @@ async function processOcrOutput(ocrFilePath, sourceFileName) {
   });
 }
 
-/**
- * 多模态 Vision 模式：直接将原图/PDF 发给 Gemini
- */
-async function processMultimodalFile(filePath) {
-  const filename = path.basename(filePath);
-  const supplier = inferSupplierFromPath(filename);
-  const brand = inferBrandFromPath(filename);
-
-  const result = await callGemini('请识别此附件文件内容。', supplier, filePath);
-  if (!result || !result.candidates) return [];
-
-  return result.candidates.map(c => {
-    if (!c.brand && brand) c.brand = brand;
-    return postProcessCandidate(c, supplier);
-  });
-}
-
 async function processTextFile(textFilePath) {
   const content = fs.readFileSync(textFilePath, 'utf-8');
   if (!content.trim() || content.trim().length < 5) return [];
@@ -386,13 +446,29 @@ async function processTextFile(textFilePath) {
   });
 }
 
+async function processVisionFallbackFile(filePath) {
+  const filename = path.basename(filePath);
+  const supplier = inferSupplierFromPath(filename);
+  const brand = inferBrandFromPath(filename);
+
+  const result = await callGeminiVisionFallback('MinerU 识别失败。用户已确认使用视觉大模型兜底识别此附件内容。', supplier, filePath);
+  if (!result || !result.candidates) return [];
+
+  return result.candidates.map(c => {
+    if (!c.brand && brand) c.brand = brand;
+    c._recognition_warning = 'vision_fallback_user_approved';
+    return postProcessCandidate(c, supplier);
+  });
+}
+
 module.exports = {
   callGemini,
+  callGeminiVisionFallback,
   buildPrompt,
   extractJsonObject,
   postProcessCandidate,
   processOcrOutput,
-  processMultimodalFile,
+  processVisionFallbackFile,
   processTextFile,
   inferTradeTerm,
   inferLocation,

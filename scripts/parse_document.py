@@ -4,6 +4,9 @@ import json
 import subprocess
 import shutil
 
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
 
@@ -130,17 +133,38 @@ def run_paddle_ocr(file_path):
         
     try:
         print(f"⌛ Running PaddleOCR on: {file_path}...", file=sys.stderr)
-        ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
-        result = ocr.ocr(file_path, cls=True)
-        if not result or not result[0]:
-            return ""
-            
+        try:
+            ocr = PaddleOCR(
+                lang="ch",
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        except Exception:
+            ocr = PaddleOCR(lang="ch")
+        if hasattr(ocr, "predict"):
+            result = ocr.predict(file_path)
+        else:
+            result = ocr.ocr(file_path)
+
         lines = []
-        for line in result[0]:
-            text = line[1][0]
-            confidence = line[1][1]
-            if confidence > 0.5:
-                lines.append(text)
+        for page in result or []:
+            if isinstance(page, dict):
+                texts = page.get("rec_texts") or page.get("texts") or []
+                scores = page.get("rec_scores") or page.get("scores") or [None] * len(texts)
+                for text, score in zip(texts, scores):
+                    if text and (score is None or float(score) > 0.5):
+                        lines.append(str(text).strip())
+                continue
+            if isinstance(page, list):
+                for line in page:
+                    try:
+                        text = line[1][0]
+                        confidence = line[1][1]
+                        if confidence > 0.5:
+                            lines.append(text)
+                    except Exception:
+                        continue
         return "\n".join(lines).strip()
     except Exception as e:
         print(f"⚠️ PaddleOCR execution error: {e}", file=sys.stderr)

@@ -2,9 +2,17 @@ const { test, expect } = require('bun:test');
 const { Database } = require('bun:sqlite');
 const fs = require('fs');
 
+function removeIfPossible(filePath) {
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (err) {
+    if (err?.code !== 'EBUSY' && err?.code !== 'ENOENT') throw err;
+  }
+}
+
 test('Local cache DB staging operations (create, insert, query, update, delete)', () => {
-  const dbPath = 'local_source_test.db';
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  const dbPath = `local_source_test_${process.pid}.db`;
+  removeIfPossible(dbPath);
   const db = new Database(dbPath);
 
   // Table creation
@@ -42,5 +50,5 @@ test('Local cache DB staging operations (create, insert, query, update, delete)'
   expect(row).toBeNull();
 
   db.close();
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  removeIfPossible(dbPath);
 });

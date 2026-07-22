@@ -28,6 +28,12 @@ const HEADER_ALIASES = {
   '规格': 'trimName', '车型版本': 'trimName', '配置版本': 'trimName',
   // year
   '年款': 'year', '年份': 'year', 'year': 'year', '款': 'year',
+  // manufactureDate
+  'manufacture_date': 'manufactureDate', 'manufacturedate': 'manufactureDate',
+  'production_date': 'manufactureDate', 'productiondate': 'manufactureDate',
+  'time': 'manufactureDate', '制造日期': 'manufactureDate', '生产日期': 'manufactureDate',
+  '出厂日期': 'manufactureDate', '生产时间': 'manufactureDate', '制造时间': 'manufactureDate',
+  '出厂时间': 'manufactureDate',
   // priceExw
   '出厂价': 'priceExw', 'EXW': 'priceExw', 'exw': 'priceExw', 'exw价格': 'priceExw',
   '出厂报价': 'priceExw', '工厂价': 'priceExw', '裸车价': 'priceExw',
@@ -75,7 +81,7 @@ const HEADER_ALIASES = {
 
 // 标准字段列表
 const STANDARD_FIELDS = [
-  'brand', 'modelName', 'trimName', 'year',
+  'brand', 'modelName', 'trimName', 'year', 'manufactureDate',
   'priceExw', 'priceFob', 'priceFca', 'priceCif', 'currency',
   'color', 'interiorColor', 'batteryCapacity', 'range',
   'location', 'quantity', 'notes', 'supplierName',

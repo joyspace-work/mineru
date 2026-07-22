@@ -20,10 +20,12 @@ test('Sync validator rules', () => {
   // CNY priceExw should NOT go into cost_exw_usd
   const cnyExwRecord = validRecords.find(r => r.cost_exw_usd === 70000);
   expect(cnyExwRecord).toBeUndefined(); // Filtered/cleaned to null
+  expect(validRecords.find(r => r.cost_exw_cny === 70000)).toBeDefined();
 
   // Unspecified >= 30000 should NOT go into cost_exw_usd
   const unspecifiedCnyExwRecord = validRecords.find(r => r.cost_exw_usd === 35000);
   expect(unspecifiedCnyExwRecord).toBeUndefined();
+  expect(validRecords.find(r => r.cost_exw_cny === 35000)).toBeDefined();
 
   // Valid USD should go into cost_exw_usd
   const usdRecord = validRecords.find(r => r.cost_exw_usd === 12000);
