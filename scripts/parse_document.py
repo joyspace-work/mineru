@@ -81,10 +81,9 @@ def parse_text_pdf(file_path):
         return None
 
 def run_mineru_ocr(file_path):
-    # MinerU command is magic-pdf. We check if it is available globally
-    magic_pdf_cmd = shutil.which("magic-pdf")
-    if not magic_pdf_cmd:
-        print("⚠️ MinerU (magic-pdf) is not found in the global PATH.", file=sys.stderr)
+    mineru_cmd = shutil.which("mineru") or shutil.which("magic-pdf")
+    if not mineru_cmd:
+        print("⚠️ MinerU CLI is not found in the global PATH.", file=sys.stderr)
         return None
         
     output_dir = os.environ.get("OUTPUT_DIR") or os.path.join(PROJECT_ROOT, "output")
@@ -93,10 +92,25 @@ def run_mineru_ocr(file_path):
 
     
     try:
-        print(f"⌛ Running MinerU (magic-pdf) on scanned PDF: {file_path}...", file=sys.stderr)
-        # Run magic-pdf on the scanned PDF to generate markdown layout
+        command_name = os.path.basename(mineru_cmd).lower()
+        print(f"⌛ Running MinerU ({command_name}) on scanned PDF: {file_path}...", file=sys.stderr)
+        if command_name.startswith("mineru"):
+            cmd = [
+                mineru_cmd,
+                "--path", file_path,
+                "--output", temp_out_dir,
+                "--method", os.environ.get("MINERU_METHOD", "auto"),
+                "--backend", os.environ.get("MINERU_BACKEND", "hybrid-engine"),
+                "--effort", os.environ.get("MINERU_EFFORT", "medium"),
+            ]
+            mineru_lang = os.environ.get("MINERU_LANG", "ch")
+            if mineru_lang:
+                cmd.extend(["--lang", mineru_lang])
+        else:
+            cmd = [mineru_cmd, "--path", file_path, "--output-dir", temp_out_dir, "--method", os.environ.get("MINERU_METHOD", "auto")]
+
         subprocess.run(
-            [magic_pdf_cmd, "-pdf", file_path, "-o", temp_out_dir],
+            cmd,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
@@ -192,13 +206,13 @@ def parse_document(file_path):
             print("✅ Text PDF detected. Extracted text successfully.", file=sys.stderr)
             return {"text": text, "need_vision": False}
             
-        # Scanned PDF: Try MinerU (magic-pdf)
+        # Scanned PDF: Try MinerU
         ocr_text = run_mineru_ocr(file_path)
         if ocr_text:
             print("✅ MinerU successfully converted scanned PDF to layout markdown.", file=sys.stderr)
             return {"text": ocr_text, "need_vision": False}
             
-        # Fallback to general vision since PDF is scanned and magic-pdf was not available
+        # Fallback to general vision since PDF is scanned and MinerU was not available
         print("⚠️ Scanned PDF detected, but MinerU is unavailable. Fallback to Gemini Vision.", file=sys.stderr)
         return {"text": "", "need_vision": True}
         

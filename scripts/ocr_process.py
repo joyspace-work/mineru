@@ -4,7 +4,7 @@ MinerU OCR 批处理脚本
 将 input/classified/ 中的图片、PDF、PPT、DOCX、RTF 等转为结构化 Markdown
 
 依赖安装：
-  pip install magic-pdf[full]   # MinerU (内置 PaddleOCR)
+  pip install -U mineru
 
 用法：
   python scripts/ocr_process.py                    # 处理所有分类文件
@@ -90,7 +90,7 @@ def save_cache(cache: dict):
 
 def get_mineru_command() -> str | None:
     """Return the available MinerU CLI command."""
-    for command in ("magic-pdf", "mineru"):
+    for command in ("mineru", "magic-pdf"):
         try:
             result = subprocess.run(
                 [command, "--version"],
@@ -123,13 +123,35 @@ def build_mineru_command(command: str, filepath: Path, output_dir: Path) -> list
     if method not in {"ocr", "txt", "auto"}:
         method = "auto"
 
-    cmd = [command, "--path", str(filepath), "--output-dir", str(output_dir), "--method", method]
+    output_flag = "--output" if command == "mineru" else "--output-dir"
+    cmd = [command, "--path", str(filepath), output_flag, str(output_dir), "--method", method]
 
     lang = os.environ.get("MINERU_LANG", "").strip()
     if lang:
         cmd.extend(["--lang", lang])
 
-    if env_bool("MINERU_DEBUG", False):
+    if command == "mineru":
+        backend = os.environ.get("MINERU_BACKEND", "pipeline").strip() or "pipeline"
+        if backend in {"pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"}:
+            cmd.extend(["--backend", backend])
+
+        effort = os.environ.get("MINERU_EFFORT", "medium").strip() or "medium"
+        if effort in {"medium", "high"}:
+            cmd.extend(["--effort", effort])
+
+        table = os.environ.get("MINERU_TABLE", "").strip()
+        if table:
+            cmd.extend(["--table", "true" if env_bool("MINERU_TABLE", True) else "false"])
+
+        formula = os.environ.get("MINERU_FORMULA", "").strip()
+        if formula:
+            cmd.extend(["--formula", "true" if env_bool("MINERU_FORMULA", True) else "false"])
+
+        image_analysis = os.environ.get("MINERU_IMAGE_ANALYSIS", "").strip()
+        if image_analysis:
+            cmd.extend(["--image-analysis", "true" if env_bool("MINERU_IMAGE_ANALYSIS", True) else "false"])
+
+    if command == "magic-pdf" and env_bool("MINERU_DEBUG", False):
         cmd.extend(["--debug", "true"])
 
     start_page = os.environ.get("MINERU_START_PAGE", "").strip()
@@ -241,8 +263,9 @@ def convert_rtf_to_text(rtf_path: Path, output_dir: Path) -> Path:
 
 
 def process_with_mineru(filepath: Path, output_dir: Path, command: str) -> Path | None:
-    """Process a single file with MinerU magic-pdf."""
+    """Process a single file with MinerU CLI."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now().timestamp()
     try:
         cmd = build_mineru_command(command, filepath, output_dir)
         timeout_seconds = env_int("MINERU_TIMEOUT_SECONDS", 300)
@@ -251,13 +274,18 @@ def process_with_mineru(filepath: Path, output_dir: Path, command: str) -> Path 
             capture_output=True, text=True, timeout=timeout_seconds
         )
         if result.returncode == 0:
-            # MinerU outputs to: output_dir/<filename>/auto/<filename>.md
+            # MinerU outputs to method/backend-specific subdirectories.
             stem = filepath.stem
             md_candidates = list(output_dir.rglob(f"*{stem}*.md"))
             if md_candidates:
-                return md_candidates[0]
+                fresh_candidates = [
+                    candidate for candidate in md_candidates
+                    if candidate.stat().st_mtime >= started_at - 1
+                ]
+                candidates = fresh_candidates or md_candidates
+                return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
         else:
-            print(f"  ⚠️  MinerU error: {result.stderr[:200]}")
+            print(f"  ⚠️  MinerU error: {result.stderr[:2000]}")
     except subprocess.TimeoutExpired:
         print(f"  ⚠️  MinerU timeout on {filepath.name}")
     except Exception as e:
@@ -434,7 +462,7 @@ def main():
 
     if args.engine == "mineru" and not mineru_command:
         print("\n❌ MinerU is not installed. Professional recognition cannot continue.")
-        print("   Install MinerU:    pip install magic-pdf[full]")
+        print("   Install MinerU:    pip install -U mineru")
         sys.exit(1)
     if args.engine == "paddleocr" and not use_paddle:
         print("\n❌ PaddleOCR is not installed.")
