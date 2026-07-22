@@ -21,6 +21,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-classify", action="store_true", help="Use existing input/classified directory")
     parser.add_argument("--skip-ocr", action="store_true", help="Use existing MinerU output manifest")
     parser.add_argument("--force-ocr", action="store_true", help="Ignore MinerU cache and reprocess")
+    parser.add_argument(
+        "--backend",
+        choices=["pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"],
+        help="MinerU backend for this run; overrides MINERU_BACKEND",
+    )
+    parser.add_argument("--effort", choices=["medium", "high"], help="MinerU hybrid effort; overrides MINERU_EFFORT")
+    parser.add_argument("--method", choices=["auto", "txt", "ocr"], help="MinerU parsing method; overrides MINERU_METHOD")
     parser.add_argument("--vision-fallback", action="store_true", help="Use LLM vision fallback after MinerU failure")
     parser.add_argument("--no-vision-fallback", action="store_true", help="Disable LLM vision fallback")
     parser.add_argument("--id", dest="record_id", help="Record id for edit/delete")

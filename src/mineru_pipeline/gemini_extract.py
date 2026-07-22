@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import base64
+from datetime import datetime
+import hashlib
 import json
 import os
 import re
@@ -11,6 +13,7 @@ import requests
 
 
 TERM_PATTERN = re.compile(r"\b(EXW|FCA|FOB|CIF|CNF)\b", re.I)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_api_config() -> dict[str, str | None]:
@@ -108,28 +111,73 @@ def _request_json(url: str, **kwargs: Any) -> dict[str, Any]:
     return data
 
 
+def _candidate_count(result: dict[str, Any] | None) -> int:
+    candidates = (result or {}).get("candidates", [])
+    return len(candidates) if isinstance(candidates, list) else 0
+
+
+def _raw_output_dir() -> Path:
+    configured = os.getenv("GEMINI_RAW_OUTPUT_DIR")
+    return Path(configured) if configured else PROJECT_ROOT / "output" / "final" / "gemini_raw"
+
+
+def _write_ai_raw_response(result: dict[str, Any] | None, supplier_name: str, attempt: int, prompt: str) -> None:
+    output_dir = _raw_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_supplier = re.sub(r"[^A-Za-z0-9._-]+", "_", supplier_name or "unknown").strip("_") or "unknown"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+    payload = {
+        "created_at": datetime.now().isoformat(),
+        "supplier": supplier_name,
+        "attempt": attempt,
+        "prompt_hash": prompt_hash,
+        "candidate_count": _candidate_count(result),
+        "response": result,
+    }
+    path = output_dir / f"{timestamp}_{safe_supplier}_attempt{attempt}_{prompt_hash}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
+
+
+def _extract_gemini_result(data: dict[str, Any]) -> dict[str, Any] | None:
+    return extract_json_object(data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""))
+
+
+def _extract_openrouter_result(data: dict[str, Any]) -> dict[str, Any] | None:
+    return extract_json_object(data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+
+
 def call_ai(text: str, supplier_name: str = "") -> dict[str, Any] | None:
     config = get_api_config()
     if not config["api_key"]:
         raise RuntimeError("未设置 API Key。请在 .env 中设置 GEMINI_API_KEY 或 OPENROUTER_API_KEY")
     prompt = build_prompt(text, supplier_name, "text")
-    if config["provider"] == "gemini":
-        url = f"{config['base_url']}/models/{config['model']}:generateContent?key={config['api_key']}"
-        data = _request_json(
-            url,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}},
-        )
-        return extract_json_object(data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""))
-    url = f"{config['base_url']}/chat/completions"
-    data = _request_json(
-        url,
-        method="POST",
-        headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
-        json={"model": config["model"], "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}], "max_tokens": 5000, "response_format": {"type": "json_object"}},
-    )
-    return extract_json_object(data.get("choices", [{}])[0].get("message", {}).get("content", ""))
+    empty_retries = int(os.getenv("GEMINI_EMPTY_RETRIES", "2") or "2")
+    last_result: dict[str, Any] | None = None
+    for attempt in range(1, empty_retries + 2):
+        if config["provider"] == "gemini":
+            url = f"{config['base_url']}/models/{config['model']}:generateContent?key={config['api_key']}"
+            data = _request_json(
+                url,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}},
+            )
+            result = _extract_gemini_result(data)
+        else:
+            url = f"{config['base_url']}/chat/completions"
+            data = _request_json(
+                url,
+                method="POST",
+                headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+                json={"model": config["model"], "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}], "max_tokens": 5000, "response_format": {"type": "json_object"}},
+            )
+            result = _extract_openrouter_result(data)
+        _write_ai_raw_response(result, supplier_name, attempt, prompt)
+        last_result = result
+        if _candidate_count(result) > 0:
+            return result
+    return last_result
 
 
 def call_ai_vision_fallback(file_path: Path, supplier_name: str = "") -> dict[str, Any] | None:

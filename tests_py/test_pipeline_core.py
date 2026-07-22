@@ -5,6 +5,7 @@ from mineru_pipeline.pipeline import (
     format_candidates_for_feishu,
     get_db,
     record_to_feishu_fields,
+    run_ocr,
 )
 
 
@@ -50,14 +51,46 @@ def test_record_to_feishu_fields_uses_manufacture_date_not_time():
         "manufacture_date": "2026-07-03",
     })
 
-    assert fields["manufacture_date"] == "2026-07-03"
+    assert isinstance(fields["manufacture_date"], int)
     assert "time" not in fields
+
+
+def test_record_to_feishu_fields_converts_dates_to_milliseconds():
+    fields = record_to_feishu_fields({
+        "brand": "BYD",
+        "model": "Dolphin",
+        "manufacture_date": "2026-07-03",
+    })
+
+    assert fields["manufacture_date"] > 1_700_000_000_000
 
 
 def test_excel_header_aliases_include_manufacture_date():
     assert normalize_header_cell("manufacture_date") == "manufactureDate"
     assert normalize_header_cell("time") == "manufactureDate"
     assert normalize_header_cell("生产日期") == "manufactureDate"
+
+
+def test_run_ocr_passes_backend_configuration(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, cwd=None, env=None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("mineru_pipeline.pipeline.subprocess.run", fake_run)
+
+    assert run_ocr(force=True, backend="hybrid-engine", effort="medium", method="ocr")
+    assert "--force" in captured["cmd"]
+    assert captured["env"]["MINERU_BACKEND"] == "hybrid-engine"
+    assert captured["env"]["MINERU_EFFORT"] == "medium"
+    assert captured["env"]["MINERU_METHOD"] == "ocr"
 
 
 def test_sqlite_schema_has_manufacture_date(tmp_path: Path):

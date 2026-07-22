@@ -79,7 +79,7 @@ def normalize_date_value(value: Any) -> str | None:
     raw = str(value).strip()
     if not raw:
         return None
-    ymd = re.search(r"(20\d{2})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})", raw)
+    ymd = re.search(r"(20\d{2})[年./-](\d{1,2})[月./-](\d{1,2})(?:日|$)", raw)
     if ymd:
         year, month, day = ymd.groups()
         return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
@@ -88,6 +88,17 @@ def normalize_date_value(value: Any) -> str | None:
         year, month = ym.groups()
         return f"{year}-{month.zfill(2)}-01"
     return None
+
+
+def feishu_datetime_value(value: Any) -> int | None:
+    normalized = normalize_date_value(value)
+    if not normalized:
+        return None
+    try:
+        dt = datetime.strptime(normalized, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return int(dt.timestamp() * 1000)
 
 
 def get_manufacture_date(row: dict[str, Any]) -> str | None:
@@ -299,6 +310,12 @@ def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
         "cost_exw_usd", "cost_cif_usd", "steering_setup", "order_wait_days",
     ]
     fields = {key: record[key] for key in allowed if record.get(key) not in (None, "")}
+    if fields.get("manufacture_date"):
+        converted_date = feishu_datetime_value(fields["manufacture_date"])
+        if converted_date is not None:
+            fields["manufacture_date"] = converted_date
+        else:
+            fields.pop("manufacture_date", None)
     if record.get("version_type"):
         fields["market_region"] = [record["version_type"]]
     return fields
@@ -329,11 +346,18 @@ def mark_candidates_synced(db: sqlite3.Connection, ids: list[int]) -> None:
     db.commit()
 
 
-def run_ocr(force: bool = False) -> bool:
+def run_ocr(force: bool = False, backend: str | None = None, effort: str | None = None, method: str | None = None) -> bool:
     cmd = [sys.executable, str(PROJECT_ROOT / "scripts" / "ocr_process.py"), "--engine", "mineru"]
     if force:
         cmd.append("--force")
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
+    env = os.environ.copy()
+    if backend:
+        env["MINERU_BACKEND"] = backend
+    if effort:
+        env["MINERU_EFFORT"] = effort
+    if method:
+        env["MINERU_METHOD"] = method
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env)
     return result.returncode == 0
 
 
@@ -547,7 +571,12 @@ def run_pipeline(args: Any) -> int:
         if not args.skip_classify:
             stats = classify_inputs(INPUT_DIR)
             print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
-        ocr_success = True if args.skip_ocr else run_ocr(force=args.force_ocr)
+        ocr_success = True if args.skip_ocr else run_ocr(
+            force=args.force_ocr,
+            backend=getattr(args, "backend", None),
+            effort=getattr(args, "effort", None),
+            method=getattr(args, "method", None),
+        )
         excel_results = run_excel_parsing(db, args.dry_run)
         ok, message = validate_ai_config()
         ai_candidates = [] if not ok else run_extraction(ocr_success, db, args.dry_run, args.vision_fallback)

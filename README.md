@@ -51,6 +51,8 @@ Copy-Item .env.example .env
 AI_PROVIDER=gemini
 GEMINI_API_KEY=你的 Gemini Key
 GEMINI_SOURCE_IMPORT_MODEL=gemini-3.5-flash
+GEMINI_EMPTY_RETRIES=2
+GEMINI_RAW_OUTPUT_DIR=
 
 FEISHU_APP_ID=你的飞书 app id
 FEISHU_APP_SECRET=你的飞书 app secret
@@ -73,6 +75,8 @@ MINERU_TIMEOUT_SECONDS=300
 
 默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。
 
+Gemini 每次结构化响应会保存到 `output/final/gemini_raw/`；如果模型返回空 candidates，会按 `GEMINI_EMPTY_RETRIES` 自动重试。
+
 ## 常用命令
 
 第一轮建议只跑 dry-run，不写本地库、不上传飞书：
@@ -85,6 +89,12 @@ python -m mineru_pipeline --dry-run --force-ocr
 
 ```powershell
 python -m mineru_pipeline --force-ocr
+```
+
+临时覆盖 MinerU 后端，不需要修改 `.env`：
+
+```powershell
+python -m mineru_pipeline --dry-run --force-ocr --backend hybrid-engine --effort medium --method ocr
 ```
 
 跳过已完成的 OCR：
