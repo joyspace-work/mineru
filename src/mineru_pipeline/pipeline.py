@@ -8,8 +8,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
-import sys
 import time
 from typing import Any
 
@@ -23,6 +21,7 @@ from .gemini_extract import (
     process_text_file,
     process_vision_fallback_file,
 )
+from .ocr_process import main as ocr_process_main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -249,6 +248,14 @@ def _cost_cny(value: Any, currency: Any = None) -> float | None:
     return None
 
 
+def _explicit_number(*values: Any) -> float | None:
+    for value in values:
+        number = to_number(value)
+        if number is not None:
+            return number
+    return None
+
+
 def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     model_index = load_model_index()
     formatted: list[dict[str, Any]] = []
@@ -257,10 +264,10 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         if not brand or not model:
             continue
         wait_days = to_number(row.get("orderWaitDays") or row.get("order_wait_days")) or parse_wait_days(row.get("leadTimeText") or row.get("orderWaitingPeriod"))
-        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}".upper()
+        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''}".upper()
         steering = "左舵" if ("左舵" in steering_raw or "LHD" in steering_raw) else ("右舵" if ("右舵" in steering_raw or "RHD" in steering_raw) else None)
-        version_raw = f"{row.get('marketRegion') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}"
-        version_type = None
+        version_raw = f"{row.get('marketRegion') or ''} {row.get('market_region') or ''} {row.get('version_type') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''}"
+        version_type = row.get("market_region") or row.get("version_type")
         if "国内" in version_raw or "中规" in version_raw:
             version_type = "国内版"
         elif any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")):
@@ -286,13 +293,13 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             "official_suggested_price_cny": to_number(row.get("officialPrice") or row.get("officialPriceCny") or row.get("official_suggested_price_cny")),
             "official_suggested_price_usd": to_number(row.get("officialPriceUsd") or row.get("official_suggested_price_usd")),
             "cost_exw_cny": to_number(row.get("costExwCny") or row.get("cost_exw_cny")) or _cost_cny(row.get("priceExw"), row.get("priceExwCurrency")),
-            "cost_exw_usd": _cost_usd(row.get("priceExw") or row.get("costExwUsd") or row.get("cost_exw_usd"), row.get("priceExwCurrency")),
+            "cost_exw_usd": _explicit_number(row.get("costExwUsd"), row.get("cost_exw_usd")) or _cost_usd(row.get("priceExw"), row.get("priceExwCurrency")),
             "cost_fob_cny": to_number(row.get("costFobCny") or row.get("cost_fob_cny")) or _cost_cny(row.get("priceFob"), row.get("priceFobCurrency")),
-            "cost_fob_usd": _cost_usd(row.get("priceFob") or row.get("costFobUsd") or row.get("cost_fob_usd"), row.get("priceFobCurrency")),
+            "cost_fob_usd": _explicit_number(row.get("costFobUsd"), row.get("cost_fob_usd")) or _cost_usd(row.get("priceFob"), row.get("priceFobCurrency")),
             "cost_fca_cny": to_number(row.get("costFcaCny") or row.get("cost_fca_cny")) or _cost_cny(row.get("priceFca"), row.get("priceFcaCurrency")),
-            "cost_fca_usd": _cost_usd(row.get("priceFca") or row.get("costFcaUsd") or row.get("cost_fca_usd"), row.get("priceFcaCurrency")),
+            "cost_fca_usd": _explicit_number(row.get("costFcaUsd"), row.get("cost_fca_usd")) or _cost_usd(row.get("priceFca"), row.get("priceFcaCurrency")),
             "cost_cif_cny": to_number(row.get("costCifCny") or row.get("cost_cif_cny")) or _cost_cny(row.get("priceCif"), row.get("priceCifCurrency")),
-            "cost_cif_usd": _cost_usd(row.get("priceCif") or row.get("costCifUsd") or row.get("cost_cif_usd"), row.get("priceCifCurrency")),
+            "cost_cif_usd": _explicit_number(row.get("costCifUsd"), row.get("cost_cif_usd")) or _cost_usd(row.get("priceCif"), row.get("priceCifCurrency")),
             "location": row.get("location"),
             "supplier": row.get("supplierName") or row.get("supplier"),
             "notes": row.get("notes"),
@@ -347,18 +354,26 @@ def mark_candidates_synced(db: sqlite3.Connection, ids: list[int]) -> None:
 
 
 def run_ocr(force: bool = False, backend: str | None = None, effort: str | None = None, method: str | None = None) -> bool:
-    cmd = [sys.executable, str(PROJECT_ROOT / "scripts" / "ocr_process.py"), "--engine", "mineru"]
+    argv = ["--engine", "mineru"]
     if force:
-        cmd.append("--force")
-    env = os.environ.copy()
-    if backend:
-        env["MINERU_BACKEND"] = backend
-    if effort:
-        env["MINERU_EFFORT"] = effort
-    if method:
-        env["MINERU_METHOD"] = method
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env)
-    return result.returncode == 0
+        argv.append("--force")
+    overrides = {
+        "MINERU_BACKEND": backend,
+        "MINERU_EFFORT": effort,
+        "MINERU_METHOD": method,
+    }
+    previous = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            if value:
+                os.environ[key] = value
+        return ocr_process_main(argv) == 0
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def read_recognition_manifest() -> dict[str, Any] | None:
@@ -381,8 +396,28 @@ def has_recognition_errors() -> bool:
     return bool(data.get("errors"))
 
 
+def warn_low_confidence_recognition(manifest: dict[str, Any] | None = None) -> None:
+    manifest = manifest if manifest is not None else read_recognition_manifest()
+    if not isinstance(manifest, dict):
+        return
+    for item in manifest.get("files", []):
+        quality = item.get("recognition_quality") or {}
+        if not quality.get("requires_manual_review"):
+            continue
+        source = item.get("source_rel") or item.get("source") or item.get("output_path") or "unknown"
+        threshold = quality.get("threshold")
+        min_confidence = quality.get("min_confidence")
+        low_count = quality.get("low_confidence_count")
+        print(
+            "⚠️  MinerU 识别置信度低于阈值，建议人工判别："
+            f"{source}，min={min_confidence}，低置信片段={low_count}，阈值={threshold}"
+        )
+
+
 def validate_ai_config() -> tuple[bool, str]:
-    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    provider = os.getenv("AI_PROVIDER", "deepseek").strip().lower()
+    if provider == "deepseek":
+        return (bool(os.getenv("DEEPSEEK_API_KEY")), "未配置 DEEPSEEK_API_KEY")
     if provider == "openrouter":
         return (bool(os.getenv("OPENROUTER_API_KEY")), "未配置 OPENROUTER_API_KEY")
     return (bool(os.getenv("GEMINI_API_KEY")), "未配置 GEMINI_API_KEY")
@@ -577,6 +612,8 @@ def run_pipeline(args: Any) -> int:
             effort=getattr(args, "effort", None),
             method=getattr(args, "method", None),
         )
+        if ocr_success:
+            warn_low_confidence_recognition()
         excel_results = run_excel_parsing(db, args.dry_run)
         ok, message = validate_ai_config()
         ai_candidates = [] if not ok else run_extraction(ocr_success, db, args.dry_run, args.vision_fallback)

@@ -56,18 +56,22 @@ pytest==9.1.1
 Copy-Item .env.example .env
 ```
 
-至少需要。当前默认优先走 OpenRouter/NVIDIA；Gemini 保留为可切换备选：
+至少需要。当前默认优先走 DeepSeek 官方 API 的 DeepSeek V4 Pro；Gemini 和 OpenRouter 保留为可切换备选：
 
 ```text
-AI_PROVIDER=openrouter
-OPENROUTER_API_KEY=你的 OpenRouter Key
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
+AI_PROVIDER=deepseek
+DEEPSEEK_API_KEY=你的 DeepSeek Key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_SOURCE_IMPORT_MODEL=deepseek-v4-pro
+LLM_EMPTY_RETRIES=2
+LLM_RAW_OUTPUT_DIR=
 
 GEMINI_API_KEY=你的 Gemini Key
 GEMINI_SOURCE_IMPORT_MODEL=gemini-3.5-flash
-GEMINI_EMPTY_RETRIES=2
-GEMINI_RAW_OUTPUT_DIR=
+
+OPENROUTER_API_KEY=你的 OpenRouter Key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 
 FEISHU_APP_ID=你的飞书 app id
 FEISHU_APP_SECRET=你的飞书 app secret
@@ -85,13 +89,15 @@ MINERU_LANG=ch
 MINERU_TABLE=true
 MINERU_FORMULA=true
 MINERU_IMAGE_ANALYSIS=false
-MINERU_CLI_FALLBACK=false
+MINERU_CONFIDENCE_THRESHOLD=0.6
 MINERU_TIMEOUT_SECONDS=300
 ```
 
-默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。识别层默认通过 MinerU Python SDK 调用；只有显式设置 `MINERU_CLI_FALLBACK=true` 时才允许 SDK 失败后回退到 CLI。
+默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。识别层通过 MinerU Python SDK 调用，不再回退到 MinerU CLI。
 
-Gemini 每次结构化响应会保存到 `output/final/gemini_raw/`；如果模型返回空 candidates，会按 `GEMINI_EMPTY_RETRIES` 自动重试。
+识别层会扫描 MinerU 输出目录中的 JSON 质量分数字段（如 `score`、`confidence`、`rec_scores`）。当任一可用分数低于 `MINERU_CONFIDENCE_THRESHOLD` 时，`manifest.json` 会标记 `requires_manual_review=true`，主流程会打印人工判别提醒；如果 MinerU 当前产物没有暴露分数，则记录为不可用，不伪造置信度。
+
+LLM 每次结构化响应会保存到 `output/final/llm_raw/`；如果模型返回空 candidates，会按 `LLM_EMPTY_RETRIES` 自动重试。旧变量 `GEMINI_EMPTY_RETRIES`、`GEMINI_RAW_OUTPUT_DIR` 仍兼容。
 
 LLM 抽取层只负责从 MinerU Markdown/HTML table 中做事实提取，不在 Prompt 中硬编码品牌/车型业务映射。品牌别名、车型库匹配、日期/币种等规范化由 Python 后处理完成。
 

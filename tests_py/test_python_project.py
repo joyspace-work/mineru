@@ -25,7 +25,9 @@ def test_python_entrypoint_files_exist():
         "src/mineru_pipeline/classify_inputs.py",
         "src/mineru_pipeline/excel_parser.py",
         "src/mineru_pipeline/gemini_extract.py",
+        "src/mineru_pipeline/ocr_process.py",
         "src/mineru_pipeline/pipeline.py",
+        "scripts/ocr_process.py",
     ]
 
     for rel_path in expected:
@@ -42,7 +44,7 @@ def test_readme_uses_python_commands_not_legacy_commands():
 
 
 def test_mineru_defaults_use_fast_pipeline_backend():
-    ocr_script = (ROOT / "scripts" / "ocr_process.py").read_text("utf-8")
+    ocr_script = (ROOT / "src" / "mineru_pipeline" / "ocr_process.py").read_text("utf-8")
     env_example = (ROOT / ".env.example").read_text("utf-8")
     readme = (ROOT / "README.md").read_text("utf-8")
 
@@ -51,10 +53,20 @@ def test_mineru_defaults_use_fast_pipeline_backend():
     assert "MINERU_BACKEND=pipeline" in readme
 
 
-def test_ocr_process_uses_mineru_sdk_before_cli():
-    ocr_script = (ROOT / "scripts" / "ocr_process.py").read_text("utf-8")
+def test_ocr_process_uses_mineru_sdk_without_cli_fallback():
+    ocr_script = (ROOT / "src" / "mineru_pipeline" / "ocr_process.py").read_text("utf-8")
 
     assert "from mineru.cli.common import do_parse as mineru_sdk_do_parse" in ocr_script
     assert "read_fn as mineru_sdk_read_fn" in ocr_script
     assert "process_with_mineru_sdk" in ocr_script
-    assert "process_with_mineru_cli" in ocr_script
+    assert "process_with_mineru_cli" not in ocr_script
+    assert "magic-pdf" not in ocr_script
+    assert "MINERU_CLI_FALLBACK" not in ocr_script
+
+
+def test_legacy_parse_document_uses_sdk_for_mineru():
+    parse_document = (ROOT / "scripts" / "parse_document.py").read_text("utf-8")
+
+    assert "from mineru_pipeline.ocr_process import process_with_mineru" in parse_document
+    assert "magic-pdf" not in parse_document
+    assert 'shutil.which("mineru")' not in parse_document

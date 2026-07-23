@@ -6,6 +6,7 @@ from mineru_pipeline.pipeline import (
     get_db,
     record_to_feishu_fields,
     run_ocr,
+    warn_low_confidence_recognition,
 )
 
 
@@ -44,6 +45,35 @@ def test_format_candidates_resolves_model_id_and_manufacture_date():
     assert seagull["manufacture_date"] == "2026-07-05"
 
 
+def test_format_candidates_accepts_base_aligned_snake_case_fields():
+    formatted = format_candidates_for_feishu([
+        {
+            "brand": "BYD",
+            "model": "Shark",
+            "trim_config": "BYD SHARK 6 PREMIUM 左舵国标",
+            "manufacture_date": "2026年6月",
+            "exterior_color": "黑",
+            "interior_color": None,
+            "stock_quantity": 25,
+            "official_suggested_price_cny": None,
+            "cost_fca_usd": 33650,
+            "location": "广州南沙基地",
+            "supplier": "温州迈卡新能源",
+            "notes": "充电桩随车",
+            "steering_setup": "左舵",
+            "market_region": "国际版",
+        }
+    ])
+
+    assert len(formatted) == 1
+    row = formatted[0]
+    assert row["model"] == "Shark"
+    assert row["trim_config"] == "BYD SHARK 6 PREMIUM 左舵国标"
+    assert row["cost_fca_usd"] == 33650
+    assert row["steering_setup"] == "左舵"
+    assert row["version_type"] == "国际版"
+
+
 def test_record_to_feishu_fields_uses_manufacture_date_not_time():
     fields = record_to_feishu_fields({
         "brand": "BYD",
@@ -71,26 +101,47 @@ def test_excel_header_aliases_include_manufacture_date():
     assert normalize_header_cell("生产日期") == "manufactureDate"
 
 
-def test_run_ocr_passes_backend_configuration(monkeypatch):
+def test_run_ocr_invokes_recognition_layer_in_process(monkeypatch):
     captured = {}
 
-    def fake_run(cmd, cwd=None, env=None):
-        captured["cmd"] = cmd
-        captured["cwd"] = cwd
-        captured["env"] = env
+    def fake_ocr_main(argv):
+        captured["argv"] = argv
+        captured["backend"] = __import__("os").environ.get("MINERU_BACKEND")
+        captured["effort"] = __import__("os").environ.get("MINERU_EFFORT")
+        captured["method"] = __import__("os").environ.get("MINERU_METHOD")
+        return 0
 
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr("mineru_pipeline.pipeline.subprocess.run", fake_run)
+    monkeypatch.setattr("mineru_pipeline.pipeline.ocr_process_main", fake_ocr_main)
 
     assert run_ocr(force=True, backend="hybrid-engine", effort="medium", method="ocr")
-    assert "--force" in captured["cmd"]
-    assert captured["env"]["MINERU_BACKEND"] == "hybrid-engine"
-    assert captured["env"]["MINERU_EFFORT"] == "medium"
-    assert captured["env"]["MINERU_METHOD"] == "ocr"
+    assert "--force" in captured["argv"]
+    assert captured["backend"] == "hybrid-engine"
+    assert captured["effort"] == "medium"
+    assert captured["method"] == "ocr"
+
+
+def test_warn_low_confidence_recognition_prints_manual_review_notice(capsys):
+    manifest = {
+        "files": [
+            {
+                "source_rel": "images/sample.png",
+                "recognition_quality": {
+                    "confidence_available": True,
+                    "threshold": 0.6,
+                    "min_confidence": 0.42,
+                    "low_confidence_count": 3,
+                    "requires_manual_review": True,
+                },
+            }
+        ]
+    }
+
+    warn_low_confidence_recognition(manifest)
+
+    out = capsys.readouterr().out
+    assert "人工判别" in out
+    assert "images/sample.png" in out
+    assert "0.42" in out
 
 
 def test_sqlite_schema_has_manufacture_date(tmp_path: Path):

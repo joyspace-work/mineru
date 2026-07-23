@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import shutil
+from pathlib import Path
 
 os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
@@ -81,58 +82,20 @@ def parse_text_pdf(file_path):
         return None
 
 def run_mineru_ocr(file_path):
-    mineru_cmd = shutil.which("mineru") or shutil.which("magic-pdf")
-    if not mineru_cmd:
-        print("⚠️ MinerU CLI is not found in the global PATH.", file=sys.stderr)
-        return None
-        
+    from mineru_pipeline.ocr_process import process_with_mineru
+
     output_dir = os.environ.get("OUTPUT_DIR") or os.path.join(PROJECT_ROOT, "output")
     temp_out_dir = os.path.join(output_dir, "temp_mineru_out")
     os.makedirs(temp_out_dir, exist_ok=True)
 
-    
     try:
-        command_name = os.path.basename(mineru_cmd).lower()
-        print(f"⌛ Running MinerU ({command_name}) on scanned PDF: {file_path}...", file=sys.stderr)
-        if command_name.startswith("mineru"):
-            cmd = [
-                mineru_cmd,
-                "--path", file_path,
-                "--output", temp_out_dir,
-                "--method", os.environ.get("MINERU_METHOD", "auto"),
-                "--backend", os.environ.get("MINERU_BACKEND", "hybrid-engine"),
-                "--effort", os.environ.get("MINERU_EFFORT", "medium"),
-            ]
-            mineru_lang = os.environ.get("MINERU_LANG", "ch")
-            if mineru_lang:
-                cmd.extend(["--lang", mineru_lang])
-        else:
-            cmd = [mineru_cmd, "--path", file_path, "--output-dir", temp_out_dir, "--method", os.environ.get("MINERU_METHOD", "auto")]
-
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        
-        # Look for the generated markdown file
-        extracted_md = ""
-        for root, dirs, files in os.walk(temp_out_dir):
-            for file in files:
-                if file.endswith(".md"):
-                    md_path = os.path.join(root, file)
-                    with open(md_path, "r", encoding="utf-8") as f:
-                        extracted_md = f.read().strip()
-                    break
-        
-        # Cleanup output folder
-        shutil.rmtree(temp_out_dir, ignore_errors=True)
-        
-        if extracted_md:
-            return extracted_md
+        print(f"⌛ Running MinerU SDK on scanned PDF: {file_path}...", file=sys.stderr)
+        md_path = process_with_mineru(Path(file_path), Path(temp_out_dir), None)
+        if md_path:
+            return Path(md_path).read_text("utf-8").strip()
     except Exception as e:
         print(f"⚠️ MinerU extraction failed: {e}", file=sys.stderr)
+    finally:
         shutil.rmtree(temp_out_dir, ignore_errors=True)
     return None
 

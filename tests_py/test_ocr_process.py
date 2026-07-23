@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_ocr_process_module():
-    spec = importlib.util.spec_from_file_location("ocr_process", ROOT / "scripts" / "ocr_process.py")
+    spec = importlib.util.spec_from_file_location("ocr_process", ROOT / "src" / "mineru_pipeline" / "ocr_process.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -50,3 +50,47 @@ def test_process_with_mineru_sdk_invokes_do_parse(monkeypatch, tmp_path):
     assert calls["kwargs"]["backend"] == "hybrid-engine"
     assert calls["kwargs"]["parse_method"] == "ocr"
     assert calls["kwargs"]["effort"] == "medium"
+
+
+def test_ocr_main_returns_failure_instead_of_exiting_when_mineru_missing(monkeypatch):
+    module = load_ocr_process_module()
+
+    monkeypatch.setattr(module, "mineru_sdk_do_parse", None)
+    monkeypatch.setattr(module, "mineru_sdk_read_fn", None)
+    monkeypatch.setattr(module, "check_paddleocr_installed", lambda: False)
+
+    assert module.main(["--engine", "mineru"]) == 1
+
+
+def test_analyze_recognition_confidence_marks_low_scores(monkeypatch, tmp_path):
+    module = load_ocr_process_module()
+    md_path = tmp_path / "sample.md"
+    md_path.write_text("recognized", "utf-8")
+    detail_path = tmp_path / "sample_middle.json"
+    detail_path.write_text(
+        '{"pages":[{"rec_scores":[0.95,0.58],"lines":[{"confidence":0.72},{"score":0.41}]}]}',
+        "utf-8",
+    )
+
+    monkeypatch.setenv("MINERU_CONFIDENCE_THRESHOLD", "0.6")
+
+    quality = module.analyze_recognition_confidence(md_path)
+
+    assert quality["confidence_available"] is True
+    assert quality["threshold"] == 0.6
+    assert quality["min_confidence"] == 0.41
+    assert quality["low_confidence_count"] == 2
+    assert quality["requires_manual_review"] is True
+    assert quality["warning"] == "recognition_confidence_below_threshold"
+
+
+def test_analyze_recognition_confidence_allows_missing_scores(tmp_path):
+    module = load_ocr_process_module()
+    md_path = tmp_path / "sample.md"
+    md_path.write_text("recognized", "utf-8")
+    (tmp_path / "sample_middle.json").write_text('{"pages":[{"text":"ok"}]}', "utf-8")
+
+    quality = module.analyze_recognition_confidence(md_path)
+
+    assert quality["confidence_available"] is False
+    assert quality["requires_manual_review"] is False
