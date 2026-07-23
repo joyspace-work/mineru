@@ -14,6 +14,7 @@ import requests
 
 TERM_PATTERN = re.compile(r"\b(EXW|FCA|FOB|CIF|CNF)\b", re.I)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TABLE_BLOCK_PATTERN = re.compile(r"<table[\s\S]*?</table>", re.I)
 
 
 def get_api_config() -> dict[str, str | None]:
@@ -22,7 +23,7 @@ def get_api_config() -> dict[str, str | None]:
         return {
             "provider": "openrouter",
             "api_key": os.getenv("OPENROUTER_API_KEY"),
-            "model": os.getenv("OPENROUTER_SOURCE_IMPORT_MODEL", "google/gemini-3.5-flash"),
+            "model": os.getenv("OPENROUTER_SOURCE_IMPORT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"),
             "base_url": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         }
     return {
@@ -88,17 +89,60 @@ def extract_json_object(text: Any) -> dict[str, Any] | None:
     return None
 
 
+def _llm_chunk_limit() -> int:
+    raw = os.getenv("LLM_CHUNK_CHARS", "18000")
+    try:
+        return max(50, int(raw))
+    except ValueError:
+        return 18000
+
+
+def chunk_text_for_extraction(text: str, max_chars: int | None = None) -> list[str]:
+    limit = max_chars or _llm_chunk_limit()
+    if len(text) <= limit:
+        return [text]
+
+    blocks: list[str] = []
+    cursor = 0
+    for match in TABLE_BLOCK_PATTERN.finditer(text):
+        prefix = text[cursor:match.start()]
+        blocks.extend(part for part in re.split(r"\n{2,}", prefix) if part.strip())
+        blocks.append(match.group(0))
+        cursor = match.end()
+    blocks.extend(part for part in re.split(r"\n{2,}", text[cursor:]) if part.strip())
+
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        if not current:
+            current = block
+            continue
+        next_chunk = f"{current}\n\n{block}"
+        if len(next_chunk) <= limit:
+            current = next_chunk
+        else:
+            chunks.append(current)
+            current = block
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def build_prompt(text: str, supplier_name: str = "", mode: str = "text") -> str:
     return "\n\n".join([
         "你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。",
+        "你的职责是事实提取：尽量按源文本字面提取字段，不做车型库匹配、品牌别名修正、汇率换算或外部资料补全。后续代码会负责业务规范化。",
         "只输出一个 JSON 对象，不要输出解释文字。顶层必须包含 candidates 数组。",
         "顶层格式必须是：{\"rawText\":\"\",\"parserNotes\":\"\",\"candidates\":[...]}。",
         "字段必须使用：brand, modelName, year, manufactureDate, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。",
-        "远程 V6E / V7E / V8E 必须映射为 Brand=Farizon，Model=V6E/V7E/V8E。EXW工厂列必须作为 priceExw，人民币语境输出 priceExwCurrency=CNY。MinerU table cell drift 时要区分座位数和电池。",
-        "除品牌和车型规范化外，不得编造源文件不存在的数据，不得联网补全，不得汇率换算。",
+        "MinerU 可能输出 HTML <table> 或 Markdown 表格。请按表头和单元格相对位置解析；rowspan/colspan 表示上方或左侧字段延续到后续行。",
+        "如果一个颜色单元格包含多组数量+颜色组合，例如 `20白/灰+10灰/灰`，请拆成多条 candidates，并复制同一行的车型、价格、地点等字段。",
+        "如果一个地点单元格跨多行，例如 `<td rowspan=\"10\">霍尔果斯基地</td>`，该地点适用于它覆盖的所有候选行。",
+        "价格列名包含 EXW/FCA/FOB/CIF 和 usd/cny 时，必须写到对应 price* 与 price*Currency 字段；不要把官方指导价误写为成本价。",
+        "不得编造源文件不存在的数据，不得联网补全，不得汇率换算。",
         f"供应商：{supplier_name or '未知'}",
         f"解析模式：{mode}",
-        f"原始文本：\n{text[:18000]}" if text else "",
+        f"原始文本：\n{text}" if text else "",
     ])
 
 
@@ -220,8 +264,15 @@ def process_ocr_output(ocr_file_path: Path, source_file_name: str = "") -> list[
         return []
     supplier = infer_supplier_from_path(source_file_name or ocr_file_path.name)
     brand = infer_brand_from_path(source_file_name or ocr_file_path.name)
-    result = call_ai(content, supplier)
-    return [post_process_candidate(c, supplier, brand) for c in (result or {}).get("candidates", [])]
+    rows: list[dict[str, Any]] = []
+    chunks = chunk_text_for_extraction(content)
+    for index, chunk in enumerate(chunks, 1):
+        result = call_ai(chunk, supplier)
+        for candidate in (result or {}).get("candidates", []):
+            candidate["_chunk_index"] = index
+            candidate["_chunk_count"] = len(chunks)
+            rows.append(post_process_candidate(candidate, supplier, brand))
+    return rows
 
 
 def process_text_file(text_file_path: Path) -> list[dict[str, Any]]:
@@ -230,8 +281,15 @@ def process_text_file(text_file_path: Path) -> list[dict[str, Any]]:
         return []
     supplier = infer_supplier_from_path(text_file_path.name)
     brand = infer_brand_from_path(text_file_path.name)
-    result = call_ai(content, supplier)
-    return [post_process_candidate(c, supplier, brand) for c in (result or {}).get("candidates", [])]
+    rows: list[dict[str, Any]] = []
+    chunks = chunk_text_for_extraction(content)
+    for index, chunk in enumerate(chunks, 1):
+        result = call_ai(chunk, supplier)
+        for candidate in (result or {}).get("candidates", []):
+            candidate["_chunk_index"] = index
+            candidate["_chunk_count"] = len(chunks)
+            rows.append(post_process_candidate(candidate, supplier, brand))
+    return rows
 
 
 def process_vision_fallback_file(file_path: Path) -> list[dict[str, Any]]:

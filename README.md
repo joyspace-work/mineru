@@ -8,13 +8,24 @@
 input/
   -> python -m mineru_pipeline classify
   -> input/classified/
-  -> MinerU 专业识别 output/recognized/mineru/
-  -> Gemini Flash 文本结构化抽取
+  -> 识别层: MinerU Python SDK 生成 output/recognized/mineru/
+  -> 转化层: LLM 对 MinerU Markdown/HTML table 做事实提取
+  -> 汇总层: Python 规则规范化、JSON/CSV、SQLite 暂存、飞书同步
   -> output/final/candidates_YYYY-MM-DD.json
   -> output/final/candidates_YYYY-MM-DD.csv
   -> local_source.db
   -> 飞书多维表格
 ```
+
+## 三层边界
+
+| 层 | 职责 | 产物 |
+|---|---|---|
+| 识别 Recognition | 只负责文件读取、OCR/版面分析、表格结构还原。默认直接调用 MinerU Python SDK，不走 CLI 子进程。 | `output/recognized/mineru/manifest.json` 与 MinerU Markdown/JSON |
+| 转化 Transformation | 只负责把 MinerU 的 Markdown/HTML table 按事实抽取为候选 JSON。长文档按 table/段落语义切片，不硬截断。 | LLM raw response 与 raw candidates |
+| 汇总 Aggregation | 只负责业务规则规范化、车型 ID 匹配、本地 SQLite 暂存、人工审核、飞书同步。 | `output/final/candidates_*.json/csv`、`local_source.db`、飞书记录 |
+
+业务映射不放在 LLM Prompt 里。LLM 只做事实提取，品牌/车型规范化和字段修正由汇总层 Python 规则处理。
 
 ## 安装
 
@@ -45,10 +56,14 @@ pytest==9.1.1
 Copy-Item .env.example .env
 ```
 
-至少需要：
+至少需要。当前默认优先走 OpenRouter/NVIDIA；Gemini 保留为可切换备选：
 
 ```text
-AI_PROVIDER=gemini
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=你的 OpenRouter Key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
+
 GEMINI_API_KEY=你的 Gemini Key
 GEMINI_SOURCE_IMPORT_MODEL=gemini-3.5-flash
 GEMINI_EMPTY_RETRIES=2
@@ -70,12 +85,17 @@ MINERU_LANG=ch
 MINERU_TABLE=true
 MINERU_FORMULA=true
 MINERU_IMAGE_ANALYSIS=false
+MINERU_CLI_FALLBACK=false
 MINERU_TIMEOUT_SECONDS=300
 ```
 
-默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。
+默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。识别层默认通过 MinerU Python SDK 调用；只有显式设置 `MINERU_CLI_FALLBACK=true` 时才允许 SDK 失败后回退到 CLI。
 
 Gemini 每次结构化响应会保存到 `output/final/gemini_raw/`；如果模型返回空 candidates，会按 `GEMINI_EMPTY_RETRIES` 自动重试。
+
+LLM 抽取层只负责从 MinerU Markdown/HTML table 中做事实提取，不在 Prompt 中硬编码品牌/车型业务映射。品牌别名、车型库匹配、日期/币种等规范化由 Python 后处理完成。
+
+长文档不会再直接 `text[:18000]` 硬截断；进入 LLM 前会按 MinerU `<table>...</table>`、Markdown 段落等语义块切片，避免在表格中间截断。
 
 ## 常用命令
 

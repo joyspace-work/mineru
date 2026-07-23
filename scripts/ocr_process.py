@@ -22,6 +22,12 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+try:
+    from mineru.cli.common import do_parse as mineru_sdk_do_parse, read_fn as mineru_sdk_read_fn
+except Exception:
+    mineru_sdk_do_parse = None
+    mineru_sdk_read_fn = None
+
 os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
@@ -101,6 +107,10 @@ def get_mineru_command() -> str | None:
         except FileNotFoundError:
             continue
     return None
+
+
+def mineru_sdk_available() -> bool:
+    return mineru_sdk_do_parse is not None and mineru_sdk_read_fn is not None
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -262,8 +272,73 @@ def convert_rtf_to_text(rtf_path: Path, output_dir: Path) -> Path:
     return md_path
 
 
-def process_with_mineru(filepath: Path, output_dir: Path, command: str) -> Path | None:
-    """Process a single file with MinerU CLI."""
+def mineru_parse_options() -> dict:
+    method = os.environ.get("MINERU_METHOD", "auto").strip().lower() or "auto"
+    if method not in {"ocr", "txt", "auto"}:
+        method = "auto"
+    backend = os.environ.get("MINERU_BACKEND", "pipeline").strip() or "pipeline"
+    if backend not in {"pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"}:
+        backend = "pipeline"
+    effort = os.environ.get("MINERU_EFFORT", "medium").strip() or "medium"
+    if effort not in {"medium", "high"}:
+        effort = "medium"
+    lang = os.environ.get("MINERU_LANG", "ch").strip() or "ch"
+    options = {
+        "backend": backend,
+        "parse_method": method,
+        "p_lang_list": [lang],
+        "formula_enable": env_bool("MINERU_FORMULA", True),
+        "table_enable": env_bool("MINERU_TABLE", True),
+        "image_analysis": env_bool("MINERU_IMAGE_ANALYSIS", True),
+        "effort": effort,
+    }
+    start_page = os.environ.get("MINERU_START_PAGE", "").strip()
+    end_page = os.environ.get("MINERU_END_PAGE", "").strip()
+    if start_page:
+        options["start_page_id"] = int(start_page)
+    if end_page:
+        options["end_page_id"] = int(end_page)
+    return options
+
+
+def newest_mineru_markdown(filepath: Path, output_dir: Path, started_at: float) -> Path | None:
+    stem = filepath.stem
+    md_candidates = list(output_dir.rglob(f"*{stem}*.md"))
+    if not md_candidates:
+        return None
+    fresh_candidates = [
+        candidate for candidate in md_candidates
+        if candidate.stat().st_mtime >= started_at - 1
+    ]
+    candidates = fresh_candidates or md_candidates
+    return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+
+
+def process_with_mineru_sdk(filepath: Path, output_dir: Path) -> Path | None:
+    """Process a single file with MinerU Python SDK."""
+    if not mineru_sdk_available():
+        return None
+    output_dir.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now().timestamp()
+    try:
+        options = mineru_parse_options()
+        p_lang_list = options.pop("p_lang_list")
+        file_bytes = mineru_sdk_read_fn(filepath)
+        mineru_sdk_do_parse(
+            str(output_dir),
+            pdf_file_names=[filepath.stem],
+            pdf_bytes_list=[file_bytes],
+            p_lang_list=p_lang_list,
+            **options,
+        )
+        return newest_mineru_markdown(filepath, output_dir, started_at)
+    except Exception as e:
+        print(f"  ⚠️  MinerU SDK exception: {e}")
+        return None
+
+
+def process_with_mineru_cli(filepath: Path, output_dir: Path, command: str) -> Path | None:
+    """Fallback: process a single file with MinerU CLI."""
     output_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now().timestamp()
     try:
@@ -274,22 +349,23 @@ def process_with_mineru(filepath: Path, output_dir: Path, command: str) -> Path 
             capture_output=True, text=True, timeout=timeout_seconds
         )
         if result.returncode == 0:
-            # MinerU outputs to method/backend-specific subdirectories.
-            stem = filepath.stem
-            md_candidates = list(output_dir.rglob(f"*{stem}*.md"))
-            if md_candidates:
-                fresh_candidates = [
-                    candidate for candidate in md_candidates
-                    if candidate.stat().st_mtime >= started_at - 1
-                ]
-                candidates = fresh_candidates or md_candidates
-                return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+            return newest_mineru_markdown(filepath, output_dir, started_at)
         else:
             print(f"  ⚠️  MinerU error: {result.stderr[:2000]}")
     except subprocess.TimeoutExpired:
         print(f"  ⚠️  MinerU timeout on {filepath.name}")
     except Exception as e:
         print(f"  ⚠️  MinerU exception: {e}")
+    return None
+
+
+def process_with_mineru(filepath: Path, output_dir: Path, command: str | None = None) -> Path | None:
+    """Process with MinerU SDK by default; optional CLI fallback is controlled by env."""
+    result = process_with_mineru_sdk(filepath, output_dir)
+    if result:
+        return result
+    if command and env_bool("MINERU_CLI_FALLBACK", False):
+        return process_with_mineru_cli(filepath, output_dir, command)
     return None
 
 
@@ -390,11 +466,11 @@ def process_file(filepath: Path, cache: dict, mineru_command: str | None, engine
 
     result_path = None
 
-    if engine == "mineru" and not mineru_command:
+    if engine == "mineru" and not mineru_sdk_available() and not mineru_command:
         return None, {
             "source": str(filepath),
             "source_rel": rel,
-            "error": "MinerU CLI is not installed",
+            "error": "MinerU SDK/CLI is not installed",
         }
 
     if engine == "paddleocr":
@@ -403,7 +479,7 @@ def process_file(filepath: Path, cache: dict, mineru_command: str | None, engine
     elif ext in [".pptx", ".ppt"]:
         result_path = convert_pptx_to_pdf(filepath, output_subdir)
         # If got PDF, process it further with MinerU
-        if result_path and result_path.suffix == ".pdf" and mineru_command:
+        if result_path and result_path.suffix == ".pdf":
             mineru_result = process_with_mineru(result_path, output_subdir, mineru_command)
             if mineru_result:
                 result_path = mineru_result
@@ -413,20 +489,17 @@ def process_file(filepath: Path, cache: dict, mineru_command: str | None, engine
 
     elif ext == ".rtf":
         result_path = convert_rtf_to_text(filepath, output_subdir)
-        if not result_path and mineru_command:
+        if not result_path:
             result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
     elif ext == ".doc":
-        if mineru_command:
-            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
+        result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
     elif ext == ".pdf":
-        if mineru_command:
-            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
+        result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
     elif ext in [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"]:
-        if mineru_command:
-            result_path = process_with_mineru(filepath, output_subdir, mineru_command)
+        result_path = process_with_mineru(filepath, output_subdir, mineru_command)
 
     if result_path:
         entry = {
@@ -457,10 +530,11 @@ def main():
     mineru_command = get_mineru_command()
     use_paddle = check_paddleocr_installed()
 
-    print(f"🔧 MinerU installed: {'✅' if mineru_command else '❌'}")
+    print(f"🔧 MinerU SDK installed: {'✅' if mineru_sdk_available() else '❌'}")
+    print(f"🔧 MinerU CLI fallback installed: {'✅' if mineru_command else '❌'}")
     print(f"🔧 PaddleOCR installed: {'✅' if use_paddle else '❌'}")
 
-    if args.engine == "mineru" and not mineru_command:
+    if args.engine == "mineru" and not mineru_sdk_available() and not mineru_command:
         print("\n❌ MinerU is not installed. Professional recognition cannot continue.")
         print("   Install MinerU:    pip install -U mineru")
         sys.exit(1)

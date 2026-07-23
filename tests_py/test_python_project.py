@@ -49,3 +49,12 @@ def test_mineru_defaults_use_fast_pipeline_backend():
     assert 'os.environ.get("MINERU_BACKEND", "pipeline")' in ocr_script
     assert "MINERU_BACKEND=pipeline" in env_example
     assert "MINERU_BACKEND=pipeline" in readme
+
+
+def test_ocr_process_uses_mineru_sdk_before_cli():
+    ocr_script = (ROOT / "scripts" / "ocr_process.py").read_text("utf-8")
+
+    assert "from mineru.cli.common import do_parse as mineru_sdk_do_parse" in ocr_script
+    assert "read_fn as mineru_sdk_read_fn" in ocr_script
+    assert "process_with_mineru_sdk" in ocr_script
+    assert "process_with_mineru_cli" in ocr_script
