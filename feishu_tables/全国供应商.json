@@ -1,0 +1,248 @@
+{
+  "table_id": "tblBUDhX9XidkKL4",
+  "table_name": "全国供应商",
+  "fields_definition": [
+    {
+      "description": "",
+      "field_id": "fld0x16h12",
+      "field_name": "供应商代码",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fld1xzItW4",
+      "field_name": "文本 4",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "description": "",
+      "field_id": "flde6L5DIP",
+      "field_name": "所在地",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 0,
+            "id": "opt7pyRN7a",
+            "name": "霍尔果斯基地"
+          },
+          {
+            "color": 1,
+            "id": "opt12vOfCw",
+            "name": "广州南沙基地"
+          },
+          {
+            "color": 2,
+            "id": "optnGsxwQm",
+            "name": "上海嘉定基地"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "description": "",
+      "field_id": "fldsGaA9vI",
+      "field_name": "类型",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 0,
+            "id": "optodrQCe0",
+            "name": "一级基地"
+          },
+          {
+            "color": 1,
+            "id": "optbC1pN3V",
+            "name": "二级基地"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "description": "",
+      "field_id": "fldB3uqdk1",
+      "field_name": "联系人",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldV4yEAGS",
+      "field_name": "联系人电话",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 13,
+      "ui_type": "Phone"
+    },
+    {
+      "description": "",
+      "field_id": "fld5qx1Wdt",
+      "field_name": "该供货商目前能提供总量",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "description": "",
+      "field_id": "fldmC2Le9S",
+      "field_name": "历史总销量",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "description": "",
+      "field_id": "fldr4DpDEK",
+      "field_name": "地图",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "location": {
+          "input_type": "not_limit"
+        }
+      },
+      "type": 22,
+      "ui_type": "Location"
+    },
+    {
+      "field_id": "fldLMcRhw5",
+      "field_name": "单选",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": []
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    }
+  ],
+  "records": [
+    {
+      "record_id": "recvpzPnxgEnQo",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "供应商代码": "XJ001",
+      "单选": null,
+      "历史总销量": "0",
+      "地图": {
+        "address": "霍尔果斯市",
+        "adname": "霍尔果斯市",
+        "cityname": "伊犁哈萨克自治州",
+        "full_address": "新疆维吾尔自治区伊犁哈萨克自治州霍尔果斯市",
+        "location": "80.414614,44.218381",
+        "name": "霍尔果斯市",
+        "pname": "新疆维吾尔自治区"
+      },
+      "所在地": "霍尔果斯基地",
+      "文本 4": "比亚迪",
+      "类型": "一级基地",
+      "联系人": "张xx",
+      "联系人电话": "13700000001",
+      "该供货商目前能提供总量": "10"
+    },
+    {
+      "record_id": "recvpzPnxgOQCh",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "供应商代码": "GD001",
+      "单选": null,
+      "历史总销量": "50",
+      "地图": {
+        "address": "宝安南路2014号振业大厦A座15D",
+        "adname": "罗湖区",
+        "cityname": "深圳市",
+        "full_address": "广东深圳罗湖宝安南路2014号振业大厦A座13A",
+        "location": "114.11142000837452,22.54403100628078",
+        "name": "振业大厦",
+        "pname": "广东省"
+      },
+      "所在地": "广州南沙基地",
+      "文本 4": "比亚迪",
+      "类型": "二级基地",
+      "联系人": "罗xx",
+      "联系人电话": "15800000000",
+      "该供货商目前能提供总量": "57.1047904458"
+    },
+    {
+      "record_id": "recvpBbsnER40r",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "供应商代码": null,
+      "单选": null,
+      "历史总销量": "0",
+      "地图": {
+        "address": "嘉定区",
+        "adname": "嘉定区",
+        "cityname": "上海市",
+        "full_address": "上海市上海市嘉定区",
+        "location": "121.265276,31.375566",
+        "name": "嘉定区",
+        "pname": "上海市"
+      },
+      "所在地": "上海嘉定基地",
+      "文本 4": "比亚迪",
+      "类型": "一级基地",
+      "联系人": null,
+      "联系人电话": null,
+      "该供货商目前能提供总量": "10"
+    },
+    {
+      "record_id": "recvpBe9gje9WC",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "供应商代码": null,
+      "单选": null,
+      "历史总销量": null,
+      "地图": null,
+      "所在地": null,
+      "文本 4": null,
+      "类型": null,
+      "联系人": null,
+      "联系人电话": null,
+      "该供货商目前能提供总量": null
+    }
+  ]
+}

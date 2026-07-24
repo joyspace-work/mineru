@@ -1,0 +1,240 @@
+{
+  "table_id": "tblIY4WdBVqvkZf0",
+  "table_name": "quotes",
+  "fields_definition": [
+    {
+      "field_id": "fldaqGp0EF",
+      "field_name": "record_id",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fld9nBfvIC",
+      "field_name": "quote_no",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldHAJSCdt",
+      "field_name": "inquiry_no",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldTKc9d3v",
+      "field_name": "version",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0.00"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "field_id": "fldZQ721mE",
+      "field_name": "vehicle_id",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldE27GHed",
+      "field_name": "quantity",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0.00"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "field_id": "fldzKvdofc",
+      "field_name": "unit_price",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "formatter": "0.00"
+      },
+      "type": 2,
+      "ui_type": "Number"
+    },
+    {
+      "field_id": "fldLBUT4X3",
+      "field_name": "currency",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 4,
+            "id": "opticIKIom",
+            "name": "USD"
+          },
+          {
+            "color": 1,
+            "id": "optOa8pvaL",
+            "name": "CNY"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldXEC05DZ",
+      "field_name": "trade_term",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 2,
+            "id": "optNtKGweb",
+            "name": "FOB"
+          },
+          {
+            "color": 9,
+            "id": "optagrQ2Ot",
+            "name": "CIF"
+          },
+          {
+            "color": 2,
+            "id": "opt5Wo7Ou6",
+            "name": "CFR"
+          },
+          {
+            "color": 2,
+            "id": "opt45N26BT",
+            "name": "EXW"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldmk9H9OP",
+      "field_name": "payment_terms",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 2,
+            "id": "optm6aLkfV",
+            "name": "LC"
+          },
+          {
+            "color": 4,
+            "id": "opt2Lop7fe",
+            "name": "CAD"
+          },
+          {
+            "color": 5,
+            "id": "optpWN3lZG",
+            "name": "TT advance"
+          },
+          {
+            "color": 4,
+            "id": "opt7aVITpk",
+            "name": "franco valuta"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldJhbL9SL",
+      "field_name": "valid_until",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldvKGuHpt",
+      "field_name": "status",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 2,
+            "id": "optBU8RZ6Z",
+            "name": "Sent"
+          },
+          {
+            "color": 4,
+            "id": "optTyJsOJE",
+            "name": "Counteroffer Received"
+          },
+          {
+            "color": 2,
+            "id": "optdRuuNHG",
+            "name": "Accepted"
+          },
+          {
+            "color": 0,
+            "id": "optQk2mDrA",
+            "name": "Expired"
+          },
+          {
+            "color": 8,
+            "id": "optuiEhouf",
+            "name": "Replaced"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldV3fML7R",
+      "field_name": "change_reason",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldqtbatL1",
+      "field_name": "created_at",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    }
+  ],
+  "records": []
+}

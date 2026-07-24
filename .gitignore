@@ -1,49 +1,40 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Dependencies
+node_modules/
+bun.lock
 
-node_modules
-dist
-dist-ssr
-*.local
+# Environment
 .env
-.env.*
-!.env.example
-data/*.db
-data/*.db-*
-data/source-imports/
 
-# Local supplier files and generated review artifacts
-车源汇总/
-车源汇总.zip
-_doc_review/
-rendered_translation/
-autoYJ_Correction_Summary*.docx
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-
-# Temp scripts and debug files
-fix_*.py
-get_rules.js
-test_sync_suppliers.js
-
-# DB (local SQLite)
-server/*.sqlite
-server/*.sqlite-*
-
-# Prompt cache
-server/prompts/
-.idea
+# OS generated files
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# input files (not tracked)
+input/
+
+# n8n local data
+.n8n/
+
+# Output files (generated)
+output/
+
+# Bun init artifacts
+index.ts
+tsconfig.json
+CLAUDE.md
+
+# Database files
+*.db
+*.sqlite
+local_source.db
+feishu.db
+magic-pdf.json
+
+# Learning data (keep corrections & rules in git for portability)
+# data/corrections.json — tracked
+# data/rules.json — tracked
+# data/rules_pending.json — tracked
