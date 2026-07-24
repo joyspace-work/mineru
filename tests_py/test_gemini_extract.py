@@ -113,6 +113,14 @@ def test_prompt_includes_output_template_and_self_check_rules():
     assert "自检" in prompt
 
 
+def test_prompt_template_can_be_overridden_from_environment(monkeypatch):
+    monkeypatch.setenv("LLM_PROMPT_TEMPLATE", "供应商={supplier_name}; 模式={mode}; 文本={text}")
+
+    prompt = gemini_extract.build_prompt("table text", "supplier", "text")
+
+    assert prompt == "供应商=supplier; 模式=text; 文本=table text"
+
+
 def test_raw_debug_file_includes_unparsed_api_response(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_RAW_OUTPUT_DIR", str(tmp_path))
 

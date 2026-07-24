@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 mineru-pipeline = "mineru_pipeline.cli:main"
+mineru-gui = "mineru_pipeline.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

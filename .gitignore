@@ -15,6 +15,8 @@ __pycache__/
 
 # Classified input files (generated, not tracked)
 input/classified/
+input/gui_current/
+input/run_*/
 
 # n8n local data
 .n8n/

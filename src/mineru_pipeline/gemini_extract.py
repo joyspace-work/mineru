@@ -145,7 +145,7 @@ def chunk_text_for_extraction(text: str, max_chars: int | None = None) -> list[s
     return chunks
 
 
-def build_prompt(text: str, supplier_name: str = "", mode: str = "text") -> str:
+def default_prompt_template() -> str:
     return "\n\n".join([
         "你是车源导入解析助手。请把供应商发来的车源资料解析为严格 JSON。",
         "你的职责是事实提取：尽量按源文本字面提取字段，不做车型库匹配、品牌别名修正、汇率换算或外部资料补全。后续代码会负责业务规范化。",
@@ -168,10 +168,20 @@ def build_prompt(text: str, supplier_name: str = "", mode: str = "text") -> str:
         "自检：输出前确认 candidates 数量等于表格具体车源行按颜色数量拆分后的数量；每条 candidate 都必须有完整字段；源表中出现的价格、数量、地点、颜色、生产日期、赠送、备注、交付说明不能遗漏。",
         "如果价格列是 `FCA提货价 usd`，只填写 priceFca 和 priceFcaCurrency=\"USD\"，不要同时填写 priceExw 或 priceFob。",
         "不得编造源文件不存在的数据，不得联网补全，不得汇率换算。",
-        f"供应商：{supplier_name or '未知'}",
-        f"解析模式：{mode}",
-        f"原始文本：\n{text}" if text else "",
+        "供应商：{supplier_name}",
+        "解析模式：{mode}",
+        "原始文本：\n{text}",
     ])
+
+
+def build_prompt(text: str, supplier_name: str = "", mode: str = "text") -> str:
+    template = os.getenv("LLM_PROMPT_TEMPLATE") or default_prompt_template()
+    return (
+        template
+        .replace("{supplier_name}", supplier_name or "未知")
+        .replace("{mode}", mode)
+        .replace("{text}", text or "")
+    )
 
 
 def _request_json(url: str, **kwargs: Any) -> dict[str, Any]:

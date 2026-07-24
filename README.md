@@ -105,6 +105,18 @@ LLM 抽取层只负责从 MinerU Markdown/HTML table 中做事实提取，不在
 
 ## 常用命令
 
+启动可视化窗口：
+
+```powershell
+python -m mineru_pipeline.gui
+```
+
+或安装后运行：
+
+```powershell
+mineru-gui
+```
+
 第一轮建议只跑 dry-run，不写本地库、不上传飞书：
 
 ```powershell
@@ -128,6 +140,36 @@ python -m mineru_pipeline --dry-run --force-ocr --backend hybrid-engine --effort
 ```powershell
 python -m mineru_pipeline --skip-ocr
 ```
+
+三层单独执行：
+
+```powershell
+python -m mineru_pipeline --action recognize --force-ocr --backend hybrid-engine --effort medium --method ocr
+python -m mineru_pipeline --action extract
+python -m mineru_pipeline --action aggregate --dry-run
+```
+
+可视化窗口里的按钮含义：
+
+| 按钮 | 行为 |
+|---|---|
+| 运行（dry-run） | 执行完整 pipeline，但不写 SQLite、不上传飞书 |
+| 识别层 | 只做输入分类和 MinerU SDK 识别 |
+| 转化层 | 只从 MinerU 输出调用 LLM 生成 raw candidates |
+| 汇总层 | 只把最新 raw candidates 规范化为 final JSON/CSV，可写入本地 SQLite |
+| 一键图片到飞书 | 执行完整 pipeline 并同步飞书 |
+| 中停 | 终止当前正在运行的任务 |
+
+窗口支持单文件或文件夹选择。文件类型复选框可以多选；全部不选时按项目支持的扩展名自动匹配。LLM 服务选择 `deepseek`、`openrouter`、`gemini` 后，会切换对应 API Key、模型和 Base URL 输入项。提示词框默认加载当前 `build_prompt()` 使用的模板，可临时覆盖本次运行。
+
+窗口右侧按流程分为分页：
+
+| 分页 | 可检查内容 |
+|---|---|
+| 设置 | 当前提示词模板 |
+| 识别层 | 本次输入目录、MinerU Markdown/JSON/PDF 产物，点击 Markdown 可直接预览识别文本 |
+| 转化层 | `output/final/llm_raw/` 中的 LLM 原始响应、候选数量、finish_reason、token 信息 |
+| 汇总层 | `candidates_*.json/csv` 汇总结果、候选数量、库存合计、来源分布，以及 `local_source.db` pending/synced 状态 |
 
 只查看本地待同步记录：
 

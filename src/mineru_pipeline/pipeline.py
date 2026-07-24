@@ -25,9 +25,19 @@ from .ocr_process import main as ocr_process_main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INPUT_DIR = PROJECT_ROOT / "input"
-CLASSIFIED_DIR = Path(os.getenv("CLASSIFIED_DIR", PROJECT_ROOT / "input" / "classified"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "output"))
+
+
+def input_dir() -> Path:
+    return Path(os.getenv("PIPELINE_INPUT_DIR", PROJECT_ROOT / "input"))
+
+
+def classified_dir() -> Path:
+    return Path(os.getenv("CLASSIFIED_DIR", input_dir() / "classified"))
+
+
+INPUT_DIR = input_dir()
+CLASSIFIED_DIR = classified_dir()
 RECOGNIZED_DIR = OUTPUT_DIR / "recognized" / "mineru"
 
 
@@ -139,7 +149,9 @@ def parse_wait_days(value: Any) -> int | None:
 
 
 def get_db(db_path: Path | None = None) -> sqlite3.Connection:
-    db = sqlite3.connect(db_path or PROJECT_ROOT / "local_source.db")
+    configured_path = os.getenv("LOCAL_SOURCE_DB_PATH")
+    target_path = db_path or (Path(configured_path) if configured_path else PROJECT_ROOT / "local_source.db")
+    db = sqlite3.connect(target_path)
     db.row_factory = sqlite3.Row
     db.execute("""
         CREATE TABLE IF NOT EXISTS source_candidates (
@@ -328,6 +340,13 @@ def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
+def adapt_fields_to_feishu_table(fields: dict[str, Any], table_field_names: set[str]) -> dict[str, Any]:
+    adapted = dict(fields)
+    if "production_date" in table_field_names and "manufacture_date" not in table_field_names and "manufacture_date" in adapted:
+        adapted["production_date"] = adapted.pop("manufacture_date")
+    return {key: value for key, value in adapted.items() if key in table_field_names}
+
+
 def save_candidates_to_db(db: sqlite3.Connection, candidates: list[dict[str, Any]]) -> list[int]:
     columns = [
         "model_id", "brand", "model", "trim_config", "manufacture_date", "exterior_color",
@@ -435,7 +454,7 @@ def _mark_processed(db: sqlite3.Connection, filename: str, content_hash: str, dr
 
 
 def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dict[str, Any]]:
-    excel_dir = CLASSIFIED_DIR / "excels"
+    excel_dir = classified_dir() / "excels"
     output_dir = OUTPUT_DIR / "parsed" / "excels"
     output_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
@@ -463,9 +482,27 @@ def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dic
     return results
 
 
-def run_extraction(ocr_success: bool, db: sqlite3.Connection, dry_run: bool, allow_vision_fallback: bool = False) -> list[dict[str, Any]]:
+def run_extraction(
+    ocr_success: bool,
+    db: sqlite3.Connection,
+    dry_run: bool,
+    allow_vision_fallback: bool = False,
+    ocr_output: str | None = None,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    if ocr_success and has_recognized_files():
+    if ocr_output:
+        output_path = Path(ocr_output)
+        if not output_path.exists():
+            print(f"OCR output not found: {output_path}")
+            return []
+        rows = process_ocr_output(output_path, output_path.name)
+        content_hash = compute_file_hash(output_path)
+        for row in rows:
+            row["_content_hash"] = content_hash
+            row["_source_file"] = output_path.name
+        candidates.extend(rows)
+        return candidates
+    elif ocr_success and has_recognized_files():
         manifest = read_recognition_manifest() or {}
         for item in manifest.get("files", []):
             source = Path(item.get("source") or item.get("output_path"))
@@ -484,7 +521,7 @@ def run_extraction(ocr_success: bool, db: sqlite3.Connection, dry_run: bool, all
             _mark_processed(db, row["_source_file"] if rows else output_path.name, content_hash, dry_run)
     elif allow_vision_fallback:
         for bucket, suffixes in {"images": {".png", ".jpg", ".jpeg", ".webp", ".gif"}, "pdfs": {".pdf"}}.items():
-            bucket_dir = CLASSIFIED_DIR / bucket
+            bucket_dir = classified_dir() / bucket
             for file_path in sorted(bucket_dir.glob("*")) if bucket_dir.exists() else []:
                 if file_path.suffix.lower() not in suffixes:
                     continue
@@ -498,7 +535,7 @@ def run_extraction(ocr_success: bool, db: sqlite3.Connection, dry_run: bool, all
                 candidates.extend(rows)
                 _mark_processed(db, file_path.name, content_hash, dry_run)
 
-    text_dir = CLASSIFIED_DIR / "texts"
+    text_dir = classified_dir() / "texts"
     for file_path in sorted(text_dir.glob("*")) if text_dir.exists() else []:
         if file_path.suffix.lower() not in {".txt", ".md"}:
             continue
@@ -535,6 +572,33 @@ def save_final_output(candidates: list[dict[str, Any]]) -> tuple[Path, Path]:
     return json_path, csv_path
 
 
+def save_raw_candidates(candidates: list[dict[str, Any]]) -> Path:
+    final_dir = OUTPUT_DIR / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = final_dir / f"raw_candidates_{timestamp}.json"
+    path.write_text(json.dumps(candidates, ensure_ascii=False, indent=2), "utf-8")
+    return path
+
+
+def latest_raw_candidates_path() -> Path | None:
+    final_dir = OUTPUT_DIR / "final"
+    candidates = sorted(final_dir.glob("raw_candidates_*.json")) if final_dir.exists() else []
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+
+
+def load_latest_raw_candidates() -> list[dict[str, Any]]:
+    return load_raw_candidates()
+
+
+def load_raw_candidates(path: str | Path | None = None) -> list[dict[str, Any]]:
+    path = Path(path) if path else latest_raw_candidates_path()
+    if not path:
+        return []
+    data = json.loads(path.read_text("utf-8"))
+    return data if isinstance(data, list) else []
+
+
 def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_delay: float = 1.0, **kwargs: Any) -> dict[str, Any]:
     delay = initial_delay
     last_error: Exception | None = None
@@ -560,6 +624,16 @@ def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_del
     raise RuntimeError(str(last_error))
 
 
+def fetch_feishu_table_field_names(access_token: str, app_token: str, table_id: str) -> set[str]:
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields?page_size=100"
+    data = fetch_with_retry("GET", url, headers={"Authorization": f"Bearer {access_token}"})
+    if data.get("code") != 0:
+        print(f"Feishu field list failed: {data.get('msg')}")
+        return set()
+    items = data.get("data", {}).get("items", [])
+    return {str(item.get("field_name") or item.get("name")) for item in items if item.get("field_name") or item.get("name")}
+
+
 def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> bool:
     if dry_run:
         print("Dry run - skipping Feishu upload")
@@ -581,15 +655,23 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> b
         print(f"Feishu auth failed: {token_data.get('msg')}")
         return False
     access_token = token_data["tenant_access_token"]
+    table_field_names = fetch_feishu_table_field_names(access_token, app_token, table_id)
+    if not table_field_names:
+        print("Feishu table fields could not be loaded; upload aborted.")
+        return False
     uploaded = 0
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create"
     for index in range(0, len(candidates), 100):
         batch = candidates[index:index + 100]
+        records = [
+            {"fields": adapt_fields_to_feishu_table(record_to_feishu_fields(record), table_field_names)}
+            for record in batch
+        ]
         data = fetch_with_retry(
             "POST",
             url,
             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-            json={"records": [{"fields": record_to_feishu_fields(record)} for record in batch]},
+            json={"records": records},
         )
         if data.get("code") == 0:
             uploaded += len(batch)
@@ -604,7 +686,7 @@ def run_pipeline(args: Any) -> int:
     db = get_db()
     try:
         if not args.skip_classify:
-            stats = classify_inputs(INPUT_DIR)
+            stats = classify_inputs(input_dir())
             print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
         ocr_success = True if args.skip_ocr else run_ocr(
             force=args.force_ocr,
@@ -616,7 +698,13 @@ def run_pipeline(args: Any) -> int:
             warn_low_confidence_recognition()
         excel_results = run_excel_parsing(db, args.dry_run)
         ok, message = validate_ai_config()
-        ai_candidates = [] if not ok else run_extraction(ocr_success, db, args.dry_run, args.vision_fallback)
+        ai_candidates = [] if not ok else run_extraction(
+            ocr_success,
+            db,
+            args.dry_run,
+            args.vision_fallback,
+            getattr(args, "ocr_output", None),
+        )
         if not ok:
             print(f"AI extraction skipped: {message}")
         merged = [row for result in excel_results for row in result["rows"]] + ai_candidates
@@ -637,6 +725,77 @@ def run_pipeline(args: Any) -> int:
         return 0
     finally:
         db.close()
+
+
+def action_recognize(args: Any) -> int:
+    init_environment()
+    if not getattr(args, "skip_classify", False):
+        stats = classify_inputs(input_dir())
+        print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
+    ok = run_ocr(
+        force=getattr(args, "force_ocr", False),
+        backend=getattr(args, "backend", None),
+        effort=getattr(args, "effort", None),
+        method=getattr(args, "method", None),
+    )
+    if ok:
+        warn_low_confidence_recognition()
+        print("Recognition layer complete.")
+        return 0
+    print("Recognition layer failed.")
+    return 1
+
+
+def action_extract(args: Any) -> int:
+    init_environment()
+    ok, message = validate_ai_config()
+    if not ok:
+        print(f"AI extraction skipped: {message}")
+        return 1
+    db = get_db()
+    try:
+        rows = run_extraction(
+            True,
+            db,
+            True,
+            getattr(args, "vision_fallback", False),
+            getattr(args, "ocr_output", None),
+        )
+    finally:
+        db.close()
+    if not rows:
+        print("No raw candidates extracted.")
+        return 1
+    path = save_raw_candidates(rows)
+    print(f"Transformation layer complete: {len(rows)} raw candidates")
+    print(f"Raw JSON: {path}")
+    return 0
+
+
+def action_aggregate(args: Any) -> int:
+    init_environment()
+    raw = load_raw_candidates(getattr(args, "raw_candidates", None))
+    if not raw:
+        print("No raw candidates found. Run extraction first.")
+        return 1
+    formatted = format_candidates_for_feishu(raw)
+    if not formatted:
+        print("No formatted candidates generated.")
+        return 1
+    json_path, csv_path = save_final_output(formatted)
+    if getattr(args, "dry_run", False):
+        print("Dry run - skipping SQLite write and Feishu upload")
+    else:
+        db = get_db()
+        try:
+            save_candidates_to_db(db, formatted)
+        finally:
+            db.close()
+        print(f"Saved {len(formatted)} candidates to local_source.db")
+    print(f"Aggregation layer complete: {len(formatted)} candidates")
+    print(f"JSON: {json_path}")
+    print(f"CSV: {csv_path}")
+    return 0
 
 
 def list_pending(db: sqlite3.Connection) -> list[sqlite3.Row]:

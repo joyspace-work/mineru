@@ -16,6 +16,7 @@ def test_pyproject_declares_current_runtime_dependencies():
     assert "python-dotenv==1.2.2" in data["project"]["dependencies"]
     assert "requests==2.34.2" in data["project"]["dependencies"]
     assert data["project"]["scripts"]["mineru-pipeline"] == "mineru_pipeline.cli:main"
+    assert data["project"]["scripts"]["mineru-gui"] == "mineru_pipeline.gui:main"
 
 
 def test_python_entrypoint_files_exist():
@@ -25,6 +26,7 @@ def test_python_entrypoint_files_exist():
         "src/mineru_pipeline/classify_inputs.py",
         "src/mineru_pipeline/excel_parser.py",
         "src/mineru_pipeline/gemini_extract.py",
+        "src/mineru_pipeline/gui.py",
         "src/mineru_pipeline/ocr_process.py",
         "src/mineru_pipeline/pipeline.py",
         "scripts/ocr_process.py",

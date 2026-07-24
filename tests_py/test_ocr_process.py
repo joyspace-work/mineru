@@ -94,3 +94,11 @@ def test_analyze_recognition_confidence_allows_missing_scores(tmp_path):
 
     assert quality["confidence_available"] is False
     assert quality["requires_manual_review"] is False
+
+
+def test_ocr_input_classified_dir_follows_pipeline_input_env(monkeypatch, tmp_path):
+    module = load_ocr_process_module()
+    monkeypatch.setenv("PIPELINE_INPUT_DIR", str(tmp_path / "scoped_input"))
+    monkeypatch.delenv("CLASSIFIED_DIR", raising=False)
+
+    assert module.input_classified_dir() == tmp_path / "scoped_input" / "classified"

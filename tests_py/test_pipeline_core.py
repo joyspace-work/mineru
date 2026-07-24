@@ -2,9 +2,11 @@ from pathlib import Path
 
 from mineru_pipeline.excel_parser import normalize_header_cell
 from mineru_pipeline.pipeline import (
+    adapt_fields_to_feishu_table,
     format_candidates_for_feishu,
     get_db,
     record_to_feishu_fields,
+    run_extraction,
     run_ocr,
     warn_low_confidence_recognition,
 )
@@ -95,6 +97,15 @@ def test_record_to_feishu_fields_converts_dates_to_milliseconds():
     assert fields["manufacture_date"] > 1_700_000_000_000
 
 
+def test_adapt_fields_to_feishu_table_maps_production_date_and_filters_unknown_fields():
+    adapted = adapt_fields_to_feishu_table(
+        {"brand": "BYD", "manufacture_date": 1_785_283_200_000, "cost_cif_usd": 100},
+        {"brand", "production_date"},
+    )
+
+    assert adapted == {"brand": "BYD", "production_date": 1_785_283_200_000}
+
+
 def test_excel_header_aliases_include_manufacture_date():
     assert normalize_header_cell("manufacture_date") == "manufactureDate"
     assert normalize_header_cell("time") == "manufactureDate"
@@ -118,6 +129,43 @@ def test_run_ocr_invokes_recognition_layer_in_process(monkeypatch):
     assert captured["backend"] == "hybrid-engine"
     assert captured["effort"] == "medium"
     assert captured["method"] == "ocr"
+
+
+def test_pipeline_input_dir_can_be_scoped_by_environment(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("PIPELINE_INPUT_DIR", str(tmp_path / "scoped_input"))
+    monkeypatch.delenv("CLASSIFIED_DIR", raising=False)
+
+    from mineru_pipeline import pipeline
+
+    assert pipeline.input_dir() == tmp_path / "scoped_input"
+    assert pipeline.classified_dir() == tmp_path / "scoped_input" / "classified"
+
+
+def test_run_extraction_can_target_one_ocr_output(monkeypatch, tmp_path: Path):
+    ocr_output = tmp_path / "one.md"
+    ocr_output.write_text("recognized", "utf-8")
+    text_dir = tmp_path / "input" / "classified" / "texts"
+    text_dir.mkdir(parents=True)
+    (text_dir / "extra.txt").write_text("should not be read", "utf-8")
+
+    calls = []
+
+    def fake_process_ocr_output(path, source_name):
+        calls.append((path, source_name))
+        return [{"brand": "BYD", "modelName": "Dolphin"}]
+
+    monkeypatch.setattr("mineru_pipeline.pipeline.process_ocr_output", fake_process_ocr_output)
+    monkeypatch.setenv("PIPELINE_INPUT_DIR", str(tmp_path / "input"))
+
+    db = get_db(tmp_path / "db.sqlite")
+    try:
+        rows = run_extraction(True, db, True, ocr_output=str(ocr_output))
+    finally:
+        db.close()
+
+    assert len(rows) == 1
+    assert calls == [(ocr_output, "one.md")]
+    assert rows[0]["_source_file"] == "one.md"
 
 
 def test_warn_low_confidence_recognition_prints_manual_review_notice(capsys):
@@ -152,3 +200,13 @@ def test_sqlite_schema_has_manufacture_date(tmp_path: Path):
         db.close()
 
     assert "manufacture_date" in columns
+
+
+def test_get_db_can_use_environment_scoped_database(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "scoped.db"
+    monkeypatch.setenv("LOCAL_SOURCE_DB_PATH", str(db_path))
+    db = get_db()
+    try:
+        assert db_path.exists()
+    finally:
+        db.close()

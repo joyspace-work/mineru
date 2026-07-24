@@ -37,7 +37,17 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-INPUT_CLASSIFIED = PROJECT_ROOT / "input" / "classified"
+
+
+def pipeline_input_dir() -> Path:
+    return Path(os.getenv("PIPELINE_INPUT_DIR", PROJECT_ROOT / "input"))
+
+
+def input_classified_dir() -> Path:
+    return Path(os.getenv("CLASSIFIED_DIR", pipeline_input_dir() / "classified"))
+
+
+INPUT_CLASSIFIED = input_classified_dir()
 OUTPUT_OCR = PROJECT_ROOT / "output" / "recognized" / "mineru"
 CACHE_FILE = PROJECT_ROOT / "output" / "recognized" / ".mineru_cache.json"
 ERRORS_FILE = OUTPUT_OCR / "errors.json"
@@ -433,7 +443,8 @@ def process_with_paddleocr(filepath: Path, output_dir: Path) -> Path | None:
 def process_file(filepath: Path, cache: dict, engine: str) -> tuple[dict | None, dict | None]:
     """Process a single file, return metadata dict or None."""
     fhash = file_hash(filepath)
-    rel = str(filepath.relative_to(INPUT_CLASSIFIED))
+    input_classified = input_classified_dir()
+    rel = str(filepath.relative_to(input_classified))
     cache_key = f"{rel}::{fhash}"
 
     # Check cache
@@ -453,7 +464,7 @@ def process_file(filepath: Path, cache: dict, engine: str) -> tuple[dict | None,
             return cached, None
 
     ext = filepath.suffix.lower()
-    output_subdir = OUTPUT_OCR / filepath.parent.relative_to(INPUT_CLASSIFIED)
+    output_subdir = OUTPUT_OCR / filepath.parent.relative_to(input_classified)
     output_subdir.mkdir(parents=True, exist_ok=True)
 
     result_path = None
@@ -559,7 +570,7 @@ def main(argv: list[str] | None = None):
         # Batch mode
         buckets_to_process = [args.bucket] if args.bucket else list(OCR_BUCKETS.keys())
         for bucket in buckets_to_process:
-            bucket_dir = INPUT_CLASSIFIED / bucket
+            bucket_dir = input_classified_dir() / bucket
             if not bucket_dir.exists():
                 continue
             files = sorted(bucket_dir.iterdir())
