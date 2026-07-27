@@ -3,10 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import csv
-import hashlib
 import json
 import os
-import re
 import sqlite3
 import time
 from typing import Any
@@ -14,9 +12,16 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
-from .excel_text import iter_excel_files
-from .gemini_extract import (
-    process_excel_file,
+from .codex_extract import (
+    FIELD_SPECS,
+    TARGET_BASE_TOKEN,
+    TARGET_TABLE_ID,
+    TARGET_VIEW_ID,
+    WRITABLE_FIELDS,
+    load_candidate_records,
+    parse_number,
+    validate_candidate_records,
+    write_excel_evidence_bundle,
 )
 
 
@@ -28,111 +33,12 @@ def input_dir() -> Path:
     return Path(os.getenv("PIPELINE_INPUT_DIR", PROJECT_ROOT / "input"))
 
 
-BRAND_MODEL_MAP = {
-    ("比亚迪", "海豚"): ("BYD", "Dolphin"),
-    ("比亚迪", "海鸥"): ("BYD", "Seagull"),
-    ("比亚迪", "汉 EV"): ("BYD", "Han EV"),
-    ("比亚迪", "秦 PLUS"): ("BYD", "Qin PLUS EV"),
-    ("比亚迪", "海豹"): ("BYD", "Seal"),
-    ("吉利", "银河 E5"): ("Geely", "Galaxy E5"),
-    ("吉利", "银河 M9"): ("Geely", "Galaxy M9"),
-    ("远程", "星享V"): ("Farizon", "Xingxiang V"),
-    ("远程", "V6E"): ("Farizon", "V6E"),
-    ("远程", "V7E"): ("Farizon", "V7E"),
-    ("远程", "V8E"): ("Farizon", "V8E"),
-}
-
-ALLOWED_EDIT_KEYS = [
-    "model_id", "brand", "model", "trim_config", "exterior_color", "interior_color",
-    "manufacture_date", "stock_quantity", "min_quantity", "max_quantity", "lead_time",
-    "order_waiting_period", "order_wait_days", "steering_setup", "version_type",
-    "status_vehicle", "official_suggested_price_cny", "official_suggested_price_usd",
-    "cost_exw_cny", "cost_exw_usd", "cost_fob_cny", "cost_fob_usd", "cost_fca_cny",
-    "cost_fca_usd", "cost_cif_cny", "cost_cif_usd", "location", "supplier", "notes",
-    "status",
-]
-
-
 def init_environment() -> None:
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
-def compute_file_hash(file_path: Path) -> str:
-    h = hashlib.sha256()
-    with file_path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def normalize_date_value(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    if isinstance(value, (int, float)):
-        return None
-    raw = str(value).strip()
-    if not raw:
-        return None
-    ymd = re.search(r"(20\d{2})[年./-](\d{1,2})[月./-](\d{1,2})(?:日|$)", raw)
-    if ymd:
-        year, month, day = ymd.groups()
-        return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-    ym = re.search(r"(20\d{2})\D{0,3}(\d{1,2})", raw)
-    if ym:
-        year, month = ym.groups()
-        return f"{year}-{month.zfill(2)}-01"
-    return None
-
-
-def feishu_datetime_value(value: Any) -> int | None:
-    normalized = normalize_date_value(value)
-    if not normalized:
-        return None
-    try:
-        dt = datetime.strptime(normalized, "%Y-%m-%d")
-    except ValueError:
-        return None
-    return int(dt.timestamp() * 1000)
-
-
-def get_manufacture_date(row: dict[str, Any]) -> str | None:
-    for key in ("manufactureDate", "manufacture_date", "productionDate", "production_date", "time"):
-        value = normalize_date_value(row.get(key))
-        if value:
-            return value
-    return None
-
-
-def to_number(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    cleaned = re.sub(r"[^0-9.]", "", str(value))
-    if not cleaned:
-        return None
-    try:
-        number = float(cleaned)
-    except ValueError:
-        return None
-    return int(number) if number.is_integer() else number
-
-
-def parse_wait_days(value: Any) -> int | None:
-    text = str(value or "")
-    range_week = re.search(r"(\d+)\s*[-~至]\s*(\d+)\s*周", text)
-    if range_week:
-        return int(range_week.group(2)) * 7
-    single_week = re.search(r"(\d+)\s*周", text)
-    if single_week:
-        return int(single_week.group(1)) * 7
-    days = re.search(r"(\d+)\s*天", text)
-    if days:
-        return int(days.group(1))
-    months = re.search(r"(\d+)\s*个?月", text)
-    if months:
-        return int(months.group(1)) * 30
-    return None
+def _local_columns() -> list[str]:
+    return [*WRITABLE_FIELDS, "status", "source_file", "content_hash"]
 
 
 def get_db(db_path: Path | None = None) -> sqlite3.Connection:
@@ -140,214 +46,46 @@ def get_db(db_path: Path | None = None) -> sqlite3.Connection:
     target_path = db_path or (Path(configured_path) if configured_path else PROJECT_ROOT / "local_source.db")
     db = sqlite3.connect(target_path)
     db.row_factory = sqlite3.Row
-    db.execute("""
+    field_columns = ",\n          ".join(f"{field} TEXT" for field in WRITABLE_FIELDS)
+    db.execute(f"""
         CREATE TABLE IF NOT EXISTS source_candidates (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
-          model_id TEXT,
-          brand TEXT,
-          model TEXT,
-          trim_config TEXT,
-          manufacture_date TEXT,
-          exterior_color TEXT,
-          interior_color TEXT,
-          stock_quantity INTEGER,
-          min_quantity INTEGER,
-          max_quantity INTEGER,
-          lead_time TEXT,
-          order_waiting_period TEXT,
-          order_wait_days INTEGER,
-          steering_setup TEXT,
-          version_type TEXT,
-          status_vehicle TEXT,
-          official_suggested_price_cny REAL,
-          official_suggested_price_usd REAL,
-          cost_exw_cny REAL,
-          cost_exw_usd REAL,
-          cost_fob_cny REAL,
-          cost_fob_usd REAL,
-          cost_fca_cny REAL,
-          cost_fca_usd REAL,
-          cost_cif_cny REAL,
-          cost_cif_usd REAL,
-          location TEXT,
-          supplier TEXT,
-          notes TEXT,
+          {field_columns},
           status TEXT DEFAULT 'pending',
           source_file TEXT,
           content_hash TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS processed_files (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          filename TEXT,
-          content_hash TEXT UNIQUE,
-          processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    existing = {row["name"] for row in db.execute("PRAGMA table_info(source_candidates)").fetchall()}
+    for column in _local_columns():
+        if column not in existing:
+            db.execute(f"ALTER TABLE source_candidates ADD COLUMN {column} TEXT")
     db.commit()
     return db
 
 
-def load_model_index() -> dict[tuple[str, str], str]:
-    path = PROJECT_ROOT / "feishu_tables" / "vehicle_models.json"
-    try:
-        data = json.loads(path.read_text("utf-8"))
-    except Exception:
-        return {}
-    index: dict[tuple[str, str], str] = {}
-    for record in data.get("records", []):
-        brand = str(record.get("brand") or "").lower()
-        model = str(record.get("model") or "").lower()
-        model_id = record.get("model_id")
-        if brand and model and model_id:
-            index[(brand, model)] = str(model_id)
-    return index
+def _json_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    return value
 
 
-def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | None]:
-    brand_text = str(brand or "").strip()
-    model_text = str(model or "").strip()
-    if not brand_text or not model_text:
-        return brand_text or None, model_text or None
-    for (raw_brand, raw_model), mapped in BRAND_MODEL_MAP.items():
-        if raw_brand in brand_text and raw_model.lower() in model_text.lower():
-            return mapped
-    if brand_text == "比亚迪":
-        brand_text = "BYD"
-    elif brand_text == "吉利":
-        brand_text = "Geely"
-    elif brand_text == "远程":
-        brand_text = "Farizon"
-    if model_text == "海鸥":
-        model_text = "Seagull"
-    elif model_text == "海豚":
-        model_text = "Dolphin"
-    return brand_text, model_text
-
-
-def _cost_usd(value: Any, currency: Any = None) -> float | None:
-    number = to_number(value)
-    if number is None:
-        return None
-    cur = str(currency or "").upper()
-    if cur == "CNY" or (not cur and number >= 30000):
-        return None
-    return number
-
-
-def _cost_cny(value: Any, currency: Any = None) -> float | None:
-    number = to_number(value)
-    if number is None:
-        return None
-    cur = str(currency or "").upper()
-    if cur == "CNY" or (not cur and number >= 30000):
-        return number
-    return None
-
-
-def _explicit_number(*values: Any) -> float | None:
-    for value in values:
-        number = to_number(value)
-        if number is not None:
-            return number
-    return None
-
-
-def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    model_index = load_model_index()
-    formatted: list[dict[str, Any]] = []
-    for row in rows:
-        brand, model = normalize_brand_model(row.get("brand"), row.get("modelName") or row.get("model"))
-        if not brand or not model:
-            continue
-        wait_days = to_number(row.get("orderWaitDays") or row.get("order_wait_days")) or parse_wait_days(row.get("leadTimeText") or row.get("orderWaitingPeriod"))
-        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''}".upper()
-        steering = "左舵" if ("左舵" in steering_raw or "LHD" in steering_raw) else ("右舵" if ("右舵" in steering_raw or "RHD" in steering_raw) else None)
-        version_raw = f"{row.get('marketRegion') or ''} {row.get('market_region') or ''} {row.get('version_type') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''}"
-        version_type = row.get("market_region") or row.get("version_type")
-        if "国内" in version_raw or "中规" in version_raw:
-            version_type = "国内版"
-        elif any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")):
-            version_type = "国际版"
-        model_id = row.get("model_id") or row.get("modelId") or model_index.get((brand.lower(), model.lower()))
-        formatted.append({
-            "model_id": model_id,
-            "brand": brand,
-            "model": model,
-            "trim_config": row.get("trimName") or row.get("trimConfig") or row.get("trim_config"),
-            "manufacture_date": get_manufacture_date(row),
-            "exterior_color": row.get("exteriorColor") or row.get("exterior_color") or row.get("color"),
-            "interior_color": row.get("interiorColor") or row.get("interior_color"),
-            "stock_quantity": to_number(row.get("stockQuantity") or row.get("stock_quantity") or row.get("quantity")),
-            "min_quantity": to_number(row.get("minQuantity") or row.get("min_quantity")),
-            "max_quantity": to_number(row.get("maxQuantity") or row.get("max_quantity")),
-            "lead_time": row.get("leadTime") or row.get("lead_time"),
-            "order_waiting_period": row.get("orderWaitingPeriod") or row.get("order_waiting_period") or row.get("leadTimeText"),
-            "order_wait_days": wait_days,
-            "steering_setup": steering,
-            "version_type": version_type,
-            "status_vehicle": row.get("statusVehicle") or row.get("status_vehicle"),
-            "official_suggested_price_cny": to_number(row.get("officialPrice") or row.get("officialPriceCny") or row.get("official_suggested_price_cny")),
-            "official_suggested_price_usd": to_number(row.get("officialPriceUsd") or row.get("official_suggested_price_usd")),
-            "cost_exw_cny": to_number(row.get("costExwCny") or row.get("cost_exw_cny")) or _cost_cny(row.get("priceExw"), row.get("priceExwCurrency")),
-            "cost_exw_usd": _explicit_number(row.get("costExwUsd"), row.get("cost_exw_usd")) or _cost_usd(row.get("priceExw"), row.get("priceExwCurrency")),
-            "cost_fob_cny": to_number(row.get("costFobCny") or row.get("cost_fob_cny")) or _cost_cny(row.get("priceFob"), row.get("priceFobCurrency")),
-            "cost_fob_usd": _explicit_number(row.get("costFobUsd"), row.get("cost_fob_usd")) or _cost_usd(row.get("priceFob"), row.get("priceFobCurrency")),
-            "cost_fca_cny": to_number(row.get("costFcaCny") or row.get("cost_fca_cny")) or _cost_cny(row.get("priceFca"), row.get("priceFcaCurrency")),
-            "cost_fca_usd": _explicit_number(row.get("costFcaUsd"), row.get("cost_fca_usd")) or _cost_usd(row.get("priceFca"), row.get("priceFcaCurrency")),
-            "cost_cif_cny": to_number(row.get("costCifCny") or row.get("cost_cif_cny")) or _cost_cny(row.get("priceCif"), row.get("priceCifCurrency")),
-            "cost_cif_usd": _explicit_number(row.get("costCifUsd"), row.get("cost_cif_usd")) or _cost_usd(row.get("priceCif"), row.get("priceCifCurrency")),
-            "location": row.get("location"),
-            "supplier": row.get("supplierName") or row.get("supplier"),
-            "notes": row.get("notes"),
-            "source_file": row.get("_source_file") or row.get("source_file"),
-            "content_hash": row.get("_content_hash") or row.get("content_hash"),
-        })
-    return formatted
-
-
-def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
-    allowed = [
-        "model_id", "brand", "model", "trim_config", "manufacture_date", "exterior_color",
-        "interior_color", "stock_quantity", "supplier", "location", "notes", "min_quantity",
-        "max_quantity", "official_suggested_price_cny", "cost_fca_usd", "cost_fob_usd",
-        "cost_exw_usd", "cost_cif_usd", "steering_setup", "order_wait_days",
-    ]
-    fields = {key: record[key] for key in allowed if record.get(key) not in (None, "")}
-    if fields.get("manufacture_date"):
-        converted_date = feishu_datetime_value(fields["manufacture_date"])
-        if converted_date is not None:
-            fields["manufacture_date"] = converted_date
-        else:
-            fields.pop("manufacture_date", None)
-    if record.get("version_type"):
-        fields["market_region"] = [record["version_type"]]
-    return fields
-
-
-def adapt_fields_to_feishu_table(fields: dict[str, Any], table_field_names: set[str]) -> dict[str, Any]:
-    adapted = dict(fields)
-    if "production_date" in table_field_names and "manufacture_date" not in table_field_names and "manufacture_date" in adapted:
-        adapted["production_date"] = adapted.pop("manufacture_date")
-    return {key: value for key, value in adapted.items() if key in table_field_names}
+def _read_json_value(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith("["):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
 
 
 def save_candidates_to_db(db: sqlite3.Connection, candidates: list[dict[str, Any]]) -> list[int]:
-    columns = [
-        "model_id", "brand", "model", "trim_config", "manufacture_date", "exterior_color",
-        "interior_color", "stock_quantity", "min_quantity", "max_quantity", "lead_time",
-        "order_waiting_period", "order_wait_days", "steering_setup", "version_type",
-        "status_vehicle", "official_suggested_price_cny", "official_suggested_price_usd",
-        "cost_exw_cny", "cost_exw_usd", "cost_fob_cny", "cost_fob_usd", "cost_fca_cny",
-        "cost_fca_usd", "cost_cif_cny", "cost_cif_usd", "location", "supplier", "notes",
-        "status", "source_file", "content_hash",
-    ]
+    columns = _local_columns()
     placeholders = ",".join("?" for _ in columns)
     ids: list[int] = []
     for row in candidates:
-        values = [row.get(col) if col != "status" else "pending" for col in columns]
+        values = [_json_value(row.get(col)) if col != "status" else "pending" for col in columns]
         cursor = db.execute(f"INSERT INTO source_candidates ({','.join(columns)}) VALUES ({placeholders})", values)
         ids.append(int(cursor.lastrowid))
     db.commit()
@@ -359,59 +97,29 @@ def mark_candidates_synced(db: sqlite3.Connection, ids: list[int]) -> None:
     db.commit()
 
 
-def validate_ai_config() -> tuple[bool, str]:
-    provider = os.getenv("AI_PROVIDER", "deepseek").strip().lower()
-    if provider == "deepseek":
-        return (bool(os.getenv("DEEPSEEK_API_KEY")), "未配置 DEEPSEEK_API_KEY")
-    if provider == "openrouter":
-        return (bool(os.getenv("OPENROUTER_API_KEY")), "未配置 OPENROUTER_API_KEY")
-    return (bool(os.getenv("GEMINI_API_KEY")), "未配置 GEMINI_API_KEY")
-
-
-def _already_processed(db: sqlite3.Connection, content_hash: str) -> bool:
-    return db.execute("SELECT 1 FROM processed_files WHERE content_hash = ?", (content_hash,)).fetchone() is not None
-
-
-def _mark_processed(db: sqlite3.Connection, filename: str, content_hash: str, dry_run: bool) -> None:
-    if dry_run:
-        return
-    db.execute("INSERT OR IGNORE INTO processed_files (filename, content_hash) VALUES (?, ?)", (filename, content_hash))
-    db.commit()
-
-
-def run_extraction(
-    db: sqlite3.Connection,
-    dry_run: bool,
-    source: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    input_source = Path(source) if source else input_dir()
-    output_dir = OUTPUT_DIR / "parsed" / "excels"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_files: list[dict[str, Any]] = []
-    excel_files = iter_excel_files(input_source)
-    if not excel_files:
-        print(f"No Excel/CSV input files found: {input_source}")
-    for file_path in excel_files:
-        content_hash = compute_file_hash(file_path)
-        if _already_processed(db, content_hash):
+def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for field in WRITABLE_FIELDS:
+        value = _read_json_value(record.get(field))
+        if value in (None, "", []):
             continue
-        rows = process_excel_file(file_path)
-        for row in rows:
-            row["_content_hash"] = content_hash
-            row["_source_file"] = file_path.name
-        candidates.extend(rows)
-        out_path = output_dir / f"{file_path.stem}.raw.json"
-        out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), "utf-8")
-        manifest_files.append({"source": str(file_path), "outputPath": str(out_path), "rowCount": len(rows)})
-        _mark_processed(db, file_path.name, content_hash, dry_run)
-    (output_dir / "manifest.json").write_text(json.dumps({
-        "processedAt": datetime.now().isoformat(),
-        "totalFiles": len(manifest_files),
-        "totalRows": sum(item["rowCount"] for item in manifest_files),
-        "files": manifest_files,
-    }, ensure_ascii=False, indent=2), "utf-8")
-    return candidates
+        spec = FIELD_SPECS[field]
+        if spec.field_type == "number":
+            value = parse_number(value)
+            if value is None:
+                continue
+        if spec.field_type == "select" and field == "market_region" and not isinstance(value, list):
+            value = [value]
+        fields[field] = value
+    return fields
+
+
+def adapt_fields_to_feishu_table(fields: dict[str, Any], table_field_names: set[str]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in fields.items()
+        if key in table_field_names and FIELD_SPECS.get(key) and FIELD_SPECS[key].writable
+    }
 
 
 def save_final_output(candidates: list[dict[str, Any]]) -> tuple[Path, Path]:
@@ -421,45 +129,21 @@ def save_final_output(candidates: list[dict[str, Any]]) -> tuple[Path, Path]:
     json_path = final_dir / f"candidates_{date}.json"
     csv_path = final_dir / f"candidates_{date}.csv"
     json_path.write_text(json.dumps(candidates, ensure_ascii=False, indent=2), "utf-8")
-    fields = [
-        "brand", "model", "trim_config", "manufacture_date", "exterior_color", "interior_color",
-        "stock_quantity", "supplier", "location", "notes", "official_suggested_price_cny",
-        "cost_exw_cny", "cost_exw_usd", "cost_fob_cny", "cost_fob_usd", "cost_fca_cny",
-        "cost_fca_usd", "cost_cif_cny", "cost_cif_usd", "min_quantity", "max_quantity",
-        "steering_setup", "version_type", "order_wait_days",
-    ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=list(WRITABLE_FIELDS), extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(candidates)
+        for row in candidates:
+            writer.writerow({field: _json_value(row.get(field)) for field in WRITABLE_FIELDS})
     return json_path, csv_path
 
 
-def save_raw_candidates(candidates: list[dict[str, Any]]) -> Path:
+def save_invalid_report(invalid: list[dict[str, Any]]) -> Path:
     final_dir = OUTPUT_DIR / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = final_dir / f"raw_candidates_{timestamp}.json"
-    path.write_text(json.dumps(candidates, ensure_ascii=False, indent=2), "utf-8")
+    path = final_dir / f"invalid_candidates_{timestamp}.json"
+    path.write_text(json.dumps(invalid, ensure_ascii=False, indent=2), "utf-8")
     return path
-
-
-def latest_raw_candidates_path() -> Path | None:
-    final_dir = OUTPUT_DIR / "final"
-    candidates = sorted(final_dir.glob("raw_candidates_*.json")) if final_dir.exists() else []
-    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
-
-
-def load_latest_raw_candidates() -> list[dict[str, Any]]:
-    return load_raw_candidates()
-
-
-def load_raw_candidates(path: str | Path | None = None) -> list[dict[str, Any]]:
-    path = Path(path) if path else latest_raw_candidates_path()
-    if not path:
-        return []
-    data = json.loads(path.read_text("utf-8"))
-    return data if isinstance(data, list) else []
 
 
 def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_delay: float = 1.0, **kwargs: Any) -> dict[str, Any]:
@@ -503,8 +187,8 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> b
         return True
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
-    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN")
-    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID")
+    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN", TARGET_BASE_TOKEN)
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID", TARGET_TABLE_ID)
     if not all([app_id, app_secret, app_token, table_id]):
         print("Feishu is not configured; records remain pending.")
         return False
@@ -524,8 +208,8 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> b
         return False
     uploaded = 0
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create"
-    for index in range(0, len(candidates), 100):
-        batch = candidates[index:index + 100]
+    for index in range(0, len(candidates), 200):
+        batch = candidates[index:index + 200]
         records = [
             {"fields": adapt_fields_to_feishu_table(record_to_feishu_fields(record), table_field_names)}
             for record in batch
@@ -544,85 +228,63 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> b
     return uploaded > 0
 
 
-def run_pipeline(args: Any) -> int:
+def build_evidence_bundle(args: Any) -> int:
     init_environment()
-    db = get_db()
-    try:
-        ok, message = validate_ai_config()
-        if not ok:
-            print(f"AI extraction skipped: {message}")
-            return 1
-        raw_candidates = run_extraction(db, args.dry_run, getattr(args, "input", None))
-        if raw_candidates:
-            raw_path = save_raw_candidates(raw_candidates)
-            print(f"Raw candidates: {raw_path}")
-        formatted = format_candidates_for_feishu(raw_candidates)
-        if not formatted:
-            print("No candidates extracted.")
-            return 1
-        json_path, csv_path = save_final_output(formatted)
-        if args.dry_run:
-            print("Dry run - skipping SQLite write and Feishu upload")
-        else:
-            ids = save_candidates_to_db(db, formatted)
-            if sync_to_feishu(formatted, False):
-                mark_candidates_synced(db, ids)
-        print(f"Pipeline complete: {len(formatted)} candidates")
-        print(f"JSON: {json_path}")
-        print(f"CSV: {csv_path}")
-        return 0
-    finally:
-        db.close()
-
-
-def action_extract(args: Any) -> int:
-    init_environment()
-    ok, message = validate_ai_config()
-    if not ok:
-        print(f"AI extraction skipped: {message}")
-        return 1
-    db = get_db()
-    try:
-        rows = run_extraction(db, True, getattr(args, "input", None))
-    finally:
-        db.close()
-    if not rows:
-        print("No raw candidates extracted.")
-        return 1
-    path = save_raw_candidates(rows)
-    print(f"Transformation layer complete: {len(rows)} raw candidates")
-    print(f"Raw JSON: {path}")
+    source = getattr(args, "input", None) or input_dir()
+    bundle_dir = write_excel_evidence_bundle(source, OUTPUT_DIR / "evidence")
+    print(f"Codex evidence bundle: {bundle_dir}")
+    print(f"Target Base: {TARGET_BASE_TOKEN}, table: {TARGET_TABLE_ID}, view: {TARGET_VIEW_ID}")
+    print(f"Fill candidate_template.json after reading the evidence, then run aggregate --raw-candidates <file>.")
     return 0
 
 
-def action_aggregate(args: Any) -> int:
+def aggregate_candidates(args: Any, *, write_db: bool, sync: bool) -> int:
     init_environment()
-    raw = load_raw_candidates(getattr(args, "raw_candidates", None))
-    if not raw:
-        print("No raw candidates found. Run extraction first.")
+    raw_candidates = getattr(args, "raw_candidates", None)
+    if not raw_candidates:
+        print("No candidate file provided. Use --raw-candidates <json>.")
         return 1
-    formatted = format_candidates_for_feishu(raw)
-    if not formatted:
-        print("No formatted candidates generated.")
+    records = load_candidate_records(raw_candidates)
+    valid, invalid = validate_candidate_records(records, require_evidence=not getattr(args, "no_require_evidence", False))
+    if invalid:
+        report = save_invalid_report(invalid)
+        print(f"Invalid candidates: {len(invalid)}. Report: {report}")
         return 1
-    json_path, csv_path = save_final_output(formatted)
-    if getattr(args, "dry_run", False):
-        print("Dry run - skipping SQLite write and Feishu upload")
-    else:
+    if not valid:
+        print("No valid candidates found.")
+        return 1
+    json_path, csv_path = save_final_output(valid)
+    ids: list[int] = []
+    if write_db:
         db = get_db()
         try:
-            save_candidates_to_db(db, formatted)
+            ids = save_candidates_to_db(db, valid)
+            if sync and sync_to_feishu(valid, False):
+                mark_candidates_synced(db, ids)
         finally:
             db.close()
-        print(f"Saved {len(formatted)} candidates to local_source.db")
-    print(f"Aggregation layer complete: {len(formatted)} candidates")
+    print(f"Validated candidates: {len(valid)}")
     print(f"JSON: {json_path}")
     print(f"CSV: {csv_path}")
     return 0
 
 
+def run_pipeline(args: Any) -> int:
+    if getattr(args, "raw_candidates", None):
+        return aggregate_candidates(args, write_db=not getattr(args, "dry_run", False), sync=not getattr(args, "dry_run", False))
+    return build_evidence_bundle(args)
+
+
+def action_extract(args: Any) -> int:
+    return build_evidence_bundle(args)
+
+
+def action_aggregate(args: Any) -> int:
+    return aggregate_candidates(args, write_db=not getattr(args, "dry_run", False), sync=False)
+
+
 def list_pending(db: sqlite3.Connection) -> list[sqlite3.Row]:
-    return db.execute("SELECT id, brand, model, trim_config, manufacture_date, stock_quantity, cost_exw_usd, status FROM source_candidates WHERE status = 'pending'").fetchall()
+    return db.execute("SELECT id, brand, model, trim_config, stock_quantity, cost_fca_usd, status FROM source_candidates WHERE status = 'pending'").fetchall()
 
 
 def action_list() -> int:
@@ -641,7 +303,7 @@ def action_list() -> int:
 
 
 def action_edit(record_id: str, key: str, value: str) -> int:
-    if key not in ALLOWED_EDIT_KEYS:
+    if key not in (*WRITABLE_FIELDS, "status"):
         print(f"Invalid column key: {key}")
         return 1
     init_environment()

@@ -16,7 +16,7 @@ from .pipeline import (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Excel vehicle source extraction and Feishu sync pipeline")
+    parser = argparse.ArgumentParser(description="Codex-run Excel vehicle source extraction and Feishu sync pipeline")
     parser.add_argument("positional_action", nargs="?", help="Optional action: run/extract/aggregate/list/edit/delete/sync/clean")
     parser.add_argument(
         "--action",
@@ -28,7 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--id", dest="record_id", help="Record id for edit/delete")
     parser.add_argument("--key", help="Column key for edit")
     parser.add_argument("--val", help="New value for edit")
-    parser.add_argument("--raw-candidates", help="Specific raw candidates JSON file to aggregate")
+    parser.add_argument("--raw-candidates", help="Codex-created candidate JSON file to validate and aggregate")
+    parser.add_argument("--no-require-evidence", action="store_true", help="Allow candidate fields without per-field evidence")
     return parser
 
 

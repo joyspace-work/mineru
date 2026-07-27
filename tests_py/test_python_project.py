@@ -9,7 +9,7 @@ def test_pyproject_declares_current_runtime_dependencies():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))
 
     assert data["build-system"]["requires"] == ["setuptools==83.0.0", "wheel==0.47.0"]
-    assert data["project"]["name"] == "vehicle-source-excel-pipeline"
+    assert data["project"]["name"] == "codex-vehicle-source-pipeline"
     assert "openpyxl==3.1.5" in data["project"]["dependencies"]
     assert "python-dotenv==1.2.2" in data["project"]["dependencies"]
     assert "requests==2.34.2" in data["project"]["dependencies"]
@@ -23,8 +23,8 @@ def test_python_entrypoint_files_exist():
     expected = [
         "src/mineru_pipeline/__init__.py",
         "src/mineru_pipeline/cli.py",
+        "src/mineru_pipeline/codex_extract.py",
         "src/mineru_pipeline/excel_text.py",
-        "src/mineru_pipeline/gemini_extract.py",
         "src/mineru_pipeline/pipeline.py",
     ]
 
@@ -37,8 +37,8 @@ def test_readme_uses_python_commands_not_legacy_commands():
 
     assert "python -m mineru_pipeline" in readme
     assert "pip install -e ." in readme
-    assert "Excel/CSV 输入" in readme
-    assert "MinerU OCR" in readme
+    assert "Codex" in readme
+    assert "不再调用 DeepSeek" in readme
     assert "scripts/run_pipeline" + ".js" not in readme
     assert "package" + ".json" not in readme
 
@@ -48,6 +48,9 @@ def test_project_no_longer_exposes_mineru_or_gui_runtime():
     readme = (ROOT / "README.md").read_text("utf-8")
 
     assert "MINERU_BACKEND" not in env_example
+    assert "DEEPSEEK_API_KEY" not in env_example
+    assert "GEMINI_API_KEY" not in env_example
+    assert "OPENROUTER_API_KEY" not in env_example
     assert "mineru-gui" not in readme
     assert not (ROOT / "src" / "mineru_pipeline" / "gui.py").exists()
     assert not (ROOT / "src" / "mineru_pipeline" / "ocr_process.py").exists()
