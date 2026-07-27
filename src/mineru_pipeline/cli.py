@@ -10,37 +10,24 @@ from .pipeline import (
     action_edit,
     action_extract,
     action_list,
-    action_recognize,
     action_sync,
     run_pipeline,
 )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="MinerU vehicle source recognition pipeline")
-    parser.add_argument("positional_action", nargs="?", help="Optional action: run/recognize/extract/aggregate/list/edit/delete/sync/clean")
+    parser = argparse.ArgumentParser(description="Excel vehicle source extraction and Feishu sync pipeline")
+    parser.add_argument("positional_action", nargs="?", help="Optional action: run/extract/aggregate/list/edit/delete/sync/clean")
     parser.add_argument(
         "--action",
-        choices=["run", "recognize", "extract", "aggregate", "list", "edit", "delete", "sync", "clean"],
+        choices=["run", "extract", "aggregate", "list", "edit", "delete", "sync", "clean"],
         help="Pipeline action",
     )
+    parser.add_argument("--input", help="Excel file or folder. Defaults to input/")
     parser.add_argument("--dry-run", action="store_true", help="Generate outputs without SQLite staging or Feishu upload")
-    parser.add_argument("--skip-classify", action="store_true", help="Use existing input/classified directory")
-    parser.add_argument("--skip-ocr", action="store_true", help="Use existing MinerU output manifest")
-    parser.add_argument("--force-ocr", action="store_true", help="Ignore MinerU cache and reprocess")
-    parser.add_argument(
-        "--backend",
-        choices=["pipeline", "vlm-engine", "hybrid-engine", "vlm-http-client", "hybrid-http-client"],
-        help="MinerU backend for this run; overrides MINERU_BACKEND",
-    )
-    parser.add_argument("--effort", choices=["medium", "high"], help="MinerU hybrid effort; overrides MINERU_EFFORT")
-    parser.add_argument("--method", choices=["auto", "txt", "ocr"], help="MinerU parsing method; overrides MINERU_METHOD")
-    parser.add_argument("--vision-fallback", action="store_true", help="Use LLM vision fallback after MinerU failure")
-    parser.add_argument("--no-vision-fallback", action="store_true", help="Disable LLM vision fallback")
     parser.add_argument("--id", dest="record_id", help="Record id for edit/delete")
     parser.add_argument("--key", help="Column key for edit")
     parser.add_argument("--val", help="New value for edit")
-    parser.add_argument("--ocr-output", help="Specific MinerU Markdown file to transform")
     parser.add_argument("--raw-candidates", help="Specific raw candidates JSON file to aggregate")
     return parser
 
@@ -51,8 +38,6 @@ def main(argv: list[str] | None = None) -> int:
     action = args.action or args.positional_action or "run"
     if action == "run":
         return run_pipeline(args)
-    if action == "recognize":
-        return action_recognize(args)
     if action == "extract":
         return action_extract(args)
     if action == "aggregate":

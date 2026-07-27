@@ -14,14 +14,10 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
-from .classify_inputs import classify_inputs
-from .excel_parser import parse_excel_file
+from .excel_text import iter_excel_files
 from .gemini_extract import (
-    process_ocr_output,
-    process_text_file,
-    process_vision_fallback_file,
+    process_excel_file,
 )
-from .ocr_process import main as ocr_process_main
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,15 +26,6 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "output"))
 
 def input_dir() -> Path:
     return Path(os.getenv("PIPELINE_INPUT_DIR", PROJECT_ROOT / "input"))
-
-
-def classified_dir() -> Path:
-    return Path(os.getenv("CLASSIFIED_DIR", input_dir() / "classified"))
-
-
-INPUT_DIR = input_dir()
-CLASSIFIED_DIR = classified_dir()
-RECOGNIZED_DIR = OUTPUT_DIR / "recognized" / "mineru"
 
 
 BRAND_MODEL_MAP = {
@@ -372,67 +359,6 @@ def mark_candidates_synced(db: sqlite3.Connection, ids: list[int]) -> None:
     db.commit()
 
 
-def run_ocr(force: bool = False, backend: str | None = None, effort: str | None = None, method: str | None = None) -> bool:
-    argv = ["--engine", "mineru"]
-    if force:
-        argv.append("--force")
-    overrides = {
-        "MINERU_BACKEND": backend,
-        "MINERU_EFFORT": effort,
-        "MINERU_METHOD": method,
-    }
-    previous = {key: os.environ.get(key) for key in overrides}
-    try:
-        for key, value in overrides.items():
-            if value:
-                os.environ[key] = value
-        return ocr_process_main(argv) == 0
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-def read_recognition_manifest() -> dict[str, Any] | None:
-    try:
-        return json.loads((RECOGNIZED_DIR / "manifest.json").read_text("utf-8"))
-    except Exception:
-        return None
-
-
-def has_recognized_files() -> bool:
-    manifest = read_recognition_manifest()
-    return bool(isinstance(manifest, dict) and manifest.get("files"))
-
-
-def has_recognition_errors() -> bool:
-    try:
-        data = json.loads((RECOGNIZED_DIR / "errors.json").read_text("utf-8"))
-    except Exception:
-        return False
-    return bool(data.get("errors"))
-
-
-def warn_low_confidence_recognition(manifest: dict[str, Any] | None = None) -> None:
-    manifest = manifest if manifest is not None else read_recognition_manifest()
-    if not isinstance(manifest, dict):
-        return
-    for item in manifest.get("files", []):
-        quality = item.get("recognition_quality") or {}
-        if not quality.get("requires_manual_review"):
-            continue
-        source = item.get("source_rel") or item.get("source") or item.get("output_path") or "unknown"
-        threshold = quality.get("threshold")
-        min_confidence = quality.get("min_confidence")
-        low_count = quality.get("low_confidence_count")
-        print(
-            "⚠️  MinerU 识别置信度低于阈值，建议人工判别："
-            f"{source}，min={min_confidence}，低置信片段={low_count}，阈值={threshold}"
-        )
-
-
 def validate_ai_config() -> tuple[bool, str]:
     provider = os.getenv("AI_PROVIDER", "deepseek").strip().lower()
     if provider == "deepseek":
@@ -453,101 +379,38 @@ def _mark_processed(db: sqlite3.Connection, filename: str, content_hash: str, dr
     db.commit()
 
 
-def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dict[str, Any]]:
-    excel_dir = classified_dir() / "excels"
+def run_extraction(
+    db: sqlite3.Connection,
+    dry_run: bool,
+    source: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    input_source = Path(source) if source else input_dir()
     output_dir = OUTPUT_DIR / "parsed" / "excels"
     output_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    for file_path in sorted(excel_dir.glob("*")) if excel_dir.exists() else []:
-        if file_path.suffix.lower() not in {".xlsx", ".xls", ".csv"}:
-            continue
+    manifest_files: list[dict[str, Any]] = []
+    excel_files = iter_excel_files(input_source)
+    if not excel_files:
+        print(f"No Excel/CSV input files found: {input_source}")
+    for file_path in excel_files:
         content_hash = compute_file_hash(file_path)
         if _already_processed(db, content_hash):
-            print(f"Skipping already processed file: {file_path.name}")
             continue
-        rows = parse_excel_file(file_path)
+        rows = process_excel_file(file_path)
         for row in rows:
             row["_content_hash"] = content_hash
             row["_source_file"] = file_path.name
-        out_path = output_dir / f"{file_path.stem}.json"
+        candidates.extend(rows)
+        out_path = output_dir / f"{file_path.stem}.raw.json"
         out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), "utf-8")
-        results.append({"source": str(file_path), "outputPath": str(out_path), "rowCount": len(rows), "rows": rows})
+        manifest_files.append({"source": str(file_path), "outputPath": str(out_path), "rowCount": len(rows)})
         _mark_processed(db, file_path.name, content_hash, dry_run)
     (output_dir / "manifest.json").write_text(json.dumps({
         "processedAt": datetime.now().isoformat(),
-        "totalFiles": len(results),
-        "totalRows": sum(r["rowCount"] for r in results),
-        "files": [{k: r[k] for k in ("source", "outputPath", "rowCount")} for r in results],
+        "totalFiles": len(manifest_files),
+        "totalRows": sum(item["rowCount"] for item in manifest_files),
+        "files": manifest_files,
     }, ensure_ascii=False, indent=2), "utf-8")
-    return results
-
-
-def run_extraction(
-    ocr_success: bool,
-    db: sqlite3.Connection,
-    dry_run: bool,
-    allow_vision_fallback: bool = False,
-    ocr_output: str | None = None,
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    if ocr_output:
-        output_path = Path(ocr_output)
-        if not output_path.exists():
-            print(f"OCR output not found: {output_path}")
-            return []
-        rows = process_ocr_output(output_path, output_path.name)
-        content_hash = compute_file_hash(output_path)
-        for row in rows:
-            row["_content_hash"] = content_hash
-            row["_source_file"] = output_path.name
-        candidates.extend(rows)
-        return candidates
-    elif ocr_success and has_recognized_files():
-        manifest = read_recognition_manifest() or {}
-        for item in manifest.get("files", []):
-            source = Path(item.get("source") or item.get("output_path"))
-            output_path = Path(item["output_path"])
-            if not output_path.exists():
-                continue
-            hash_path = source if source.exists() else output_path
-            content_hash = compute_file_hash(hash_path)
-            if _already_processed(db, content_hash):
-                continue
-            rows = process_ocr_output(output_path, item.get("source_rel") or output_path.name)
-            for row in rows:
-                row["_content_hash"] = content_hash
-                row["_source_file"] = Path(item.get("source_rel") or output_path.name).name
-            candidates.extend(rows)
-            _mark_processed(db, row["_source_file"] if rows else output_path.name, content_hash, dry_run)
-    elif allow_vision_fallback:
-        for bucket, suffixes in {"images": {".png", ".jpg", ".jpeg", ".webp", ".gif"}, "pdfs": {".pdf"}}.items():
-            bucket_dir = classified_dir() / bucket
-            for file_path in sorted(bucket_dir.glob("*")) if bucket_dir.exists() else []:
-                if file_path.suffix.lower() not in suffixes:
-                    continue
-                content_hash = compute_file_hash(file_path)
-                if _already_processed(db, content_hash):
-                    continue
-                rows = process_vision_fallback_file(file_path)
-                for row in rows:
-                    row["_content_hash"] = content_hash
-                    row["_source_file"] = file_path.name
-                candidates.extend(rows)
-                _mark_processed(db, file_path.name, content_hash, dry_run)
-
-    text_dir = classified_dir() / "texts"
-    for file_path in sorted(text_dir.glob("*")) if text_dir.exists() else []:
-        if file_path.suffix.lower() not in {".txt", ".md"}:
-            continue
-        content_hash = compute_file_hash(file_path)
-        if _already_processed(db, content_hash):
-            continue
-        rows = process_text_file(file_path)
-        for row in rows:
-            row["_content_hash"] = content_hash
-            row["_source_file"] = file_path.name
-        candidates.extend(rows)
-        _mark_processed(db, file_path.name, content_hash, dry_run)
     return candidates
 
 
@@ -685,30 +548,15 @@ def run_pipeline(args: Any) -> int:
     init_environment()
     db = get_db()
     try:
-        if not args.skip_classify:
-            stats = classify_inputs(input_dir())
-            print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
-        ocr_success = True if args.skip_ocr else run_ocr(
-            force=args.force_ocr,
-            backend=getattr(args, "backend", None),
-            effort=getattr(args, "effort", None),
-            method=getattr(args, "method", None),
-        )
-        if ocr_success:
-            warn_low_confidence_recognition()
-        excel_results = run_excel_parsing(db, args.dry_run)
         ok, message = validate_ai_config()
-        ai_candidates = [] if not ok else run_extraction(
-            ocr_success,
-            db,
-            args.dry_run,
-            args.vision_fallback,
-            getattr(args, "ocr_output", None),
-        )
         if not ok:
             print(f"AI extraction skipped: {message}")
-        merged = [row for result in excel_results for row in result["rows"]] + ai_candidates
-        formatted = format_candidates_for_feishu(merged)
+            return 1
+        raw_candidates = run_extraction(db, args.dry_run, getattr(args, "input", None))
+        if raw_candidates:
+            raw_path = save_raw_candidates(raw_candidates)
+            print(f"Raw candidates: {raw_path}")
+        formatted = format_candidates_for_feishu(raw_candidates)
         if not formatted:
             print("No candidates extracted.")
             return 1
@@ -727,25 +575,6 @@ def run_pipeline(args: Any) -> int:
         db.close()
 
 
-def action_recognize(args: Any) -> int:
-    init_environment()
-    if not getattr(args, "skip_classify", False):
-        stats = classify_inputs(input_dir())
-        print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
-    ok = run_ocr(
-        force=getattr(args, "force_ocr", False),
-        backend=getattr(args, "backend", None),
-        effort=getattr(args, "effort", None),
-        method=getattr(args, "method", None),
-    )
-    if ok:
-        warn_low_confidence_recognition()
-        print("Recognition layer complete.")
-        return 0
-    print("Recognition layer failed.")
-    return 1
-
-
 def action_extract(args: Any) -> int:
     init_environment()
     ok, message = validate_ai_config()
@@ -754,13 +583,7 @@ def action_extract(args: Any) -> int:
         return 1
     db = get_db()
     try:
-        rows = run_extraction(
-            True,
-            db,
-            True,
-            getattr(args, "vision_fallback", False),
-            getattr(args, "ocr_output", None),
-        )
+        rows = run_extraction(db, True, getattr(args, "input", None))
     finally:
         db.close()
     if not rows:

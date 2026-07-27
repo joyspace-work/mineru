@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import base64
 from datetime import datetime
 import hashlib
 import json
@@ -10,6 +9,8 @@ import re
 from typing import Any
 
 import requests
+
+from .excel_text import render_excel_file
 
 
 TERM_PATTERN = re.compile(r"\b(EXW|FCA|FOB|CIF|CNF)\b", re.I)
@@ -154,12 +155,13 @@ def default_prompt_template() -> str:
         "顶层格式必须是：{\"rawText\":\"\",\"parserNotes\":\"\",\"candidates\":[]}，其中 candidates 必须永远是数组，不能是 null、字符串或对象。",
         "每个 candidate 必须包含完整字段集合：brand, modelName, year, manufactureDate, trimName, exteriorColor, interiorColor, stockQuantity, priceExw, priceExwCurrency, priceFca, priceFcaCurrency, priceFob, priceFobCurrency, officialPrice, location, preorderMinDays, preorderMaxDays, canPreorder, notes, rawText, rawFields, confidence, uncertainFields。",
         "字段缺失时用 null；文本字段保留源文本；数字字段只填数字；currency 字段只能填 CNY、USD 或 null；confidence 填 0 到 1 的数字；uncertainFields 必须是字符串数组。",
-        "MinerU 可能输出 HTML <table> 或 Markdown 表格。请按表头和单元格相对位置解析；rowspan/colspan 表示上方或左侧字段延续到后续行。",
-        "表格解析规则：逐行读取 table；跳过合计、更多车型、标题、空行等非具体车源行；跨行地点必须复制到覆盖范围内的每个 candidate。",
+        "输入来自 Excel 工作簿文本化结果，格式包含 Source、Sheet、merged 合并单元格说明、row 行号和 A/B/C 列坐标。请把这些坐标当作表格结构，不要当作普通正文。",
+        "Excel 解析规则：逐个 Sheet、逐行读取；识别表头和相邻单元格关系；merged 合并单元格表示该值延续到合并范围内的后续行/列，必须复制到覆盖范围内的每个 candidate。",
+        "跳过合计、更多车型、标题、空行、装饰说明等非具体车源行；但不要跳过包含具体车型、价格、数量、颜色、交付或地点的行。",
         "如果一个颜色单元格包含多组数量+颜色组合，例如 `20白/灰+10灰/灰`，请拆成多条 candidates，并复制同一行的车型、价格、地点等字段。",
-        "如果一个地点单元格跨多行，例如 `<td rowspan=\"10\">霍尔果斯基地</td>`，该地点适用于它覆盖的所有候选行。",
+        "如果一个地点单元格通过 merged 范围覆盖多行，例如 `A2:A10=霍尔果斯基地`，该地点适用于它覆盖的所有候选行。",
         "价格列名包含 EXW/FCA/FOB/CIF 和 usd/cny 时，必须写到对应 price* 与 price*Currency 字段；不要把官方指导价误写为成本价。",
-        "Few-shot 示例：输入行 `<tr><td rowspan=\"2\">霍尔果斯基地</td><td>车型A</td><td>¥79,800</td><td>2026年5月</td><td>30</td><td>20白/灰+10灰/灰</td><td>赠送卡片钥匙</td><td>/</td><td>现车</td><td>9250</td></tr>` 必须拆成两个 candidates，第一条 stockQuantity=20 exteriorColor=\"白\" interiorColor=\"灰\" priceFca=9250 priceFcaCurrency=\"USD\" location=\"霍尔果斯基地\"；第二条 stockQuantity=10 exteriorColor=\"灰\" interiorColor=\"灰\"，其他字段复制。",
+        "Few-shot 示例：输入 `merged: A2:A3=霍尔果斯基地`，表头 `row 1: A=地点 | B=车型 | C=指导价 | D=生产日期 | E=颜色库存 | F=FCA提货价 usd | G=备注`，数据行 `row 2: B=车型A | C=¥79,800 | D=2026年5月 | E=20白/灰+10灰/灰 | F=9250 | G=赠送卡片钥匙`，必须拆成两个 candidates，第一条 stockQuantity=20 exteriorColor=\"白\" interiorColor=\"灰\" priceFca=9250 priceFcaCurrency=\"USD\" location=\"霍尔果斯基地\"；第二条 stockQuantity=10 exteriorColor=\"灰\" interiorColor=\"灰\"，其他字段复制。",
         "输出样例模板只用于说明字段形状，不要复制样例内容：{\"rawText\":\"源表片段\",\"parserNotes\":\"逐行解析 table，按颜色数量拆分，跳过合计行\",\"candidates\":[{\"brand\":null,\"modelName\":\"海狮05EV 520旗智航版-国际版国内车型\",\"year\":null,\"manufactureDate\":\"2026年7月\",\"trimName\":null,\"exteriorColor\":\"暖阳白\",\"interiorColor\":\"黑\",\"stockQuantity\":3,\"priceExw\":null,\"priceExwCurrency\":null,\"priceFca\":9250,\"priceFcaCurrency\":\"USD\",\"priceFob\":null,\"priceFobCurrency\":null,\"officialPrice\":137800,\"location\":\"霍尔果斯基地\",\"preorderMinDays\":null,\"preorderMaxDays\":null,\"canPreorder\":true,\"notes\":\"赠送卡片钥匙 | 7月交付\",\"rawText\":\"海狮05EV...3暖阳白/黑...7月交付...9250\",\"rawFields\":{},\"confidence\":0.95,\"uncertainFields\":[]}]}。",
         "为避免输出过长：candidate.rawText 只保留不超过 80 个字符的原始证据片段；candidate.rawFields 默认输出空对象 {}，除非某字段确实不确定，最多保留 3 个关键源字段。",
         "交付说明必须保留到 notes：例如 `7月交付`、`5月底排产`、`6-8周`、`6月底7月初交付`、`国际版海外车型` 都属于源表事实，不能丢弃。",
@@ -312,28 +314,6 @@ def call_ai(text: str, supplier_name: str = "") -> dict[str, Any] | None:
     return last_result
 
 
-def call_ai_vision_fallback(file_path: Path, supplier_name: str = "") -> dict[str, Any] | None:
-    config = get_api_config()
-    if not config["api_key"]:
-        raise RuntimeError("未设置 API Key。请在 .env 中设置 DEEPSEEK_API_KEY、GEMINI_API_KEY 或 OPENROUTER_API_KEY")
-    ext = file_path.suffix.lower()
-    mime = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}.get(ext)
-    if not mime:
-        raise RuntimeError(f"Vision fallback does not support file type: {ext}")
-    prompt = build_prompt("MinerU 识别失败。用户已确认使用视觉大模型兜底识别此附件内容。", supplier_name, f"vision_fallback_user_approved ({ext})")
-    payload = base64.b64encode(file_path.read_bytes()).decode("ascii")
-    if config["provider"] != "gemini":
-        raise RuntimeError("Vision fallback is only enabled for Gemini in the Python pipeline")
-    url = f"{config['base_url']}/models/{config['model']}:generateContent?key={config['api_key']}"
-    data = _request_json(
-        url,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": mime, "data": payload}}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}},
-    )
-    return extract_json_object(data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", ""))
-
-
 def post_process_candidate(candidate: dict[str, Any], supplier_name: str = "", brand_hint: str = "") -> dict[str, Any]:
     if not candidate.get("brand") and brand_hint:
         candidate["brand"] = brand_hint
@@ -346,45 +326,20 @@ def post_process_candidate(candidate: dict[str, Any], supplier_name: str = "", b
     return candidate
 
 
-def process_ocr_output(ocr_file_path: Path, source_file_name: str = "") -> list[dict[str, Any]]:
-    content = ocr_file_path.read_text("utf-8")
-    if not content.strip():
+def process_excel_file(excel_file_path: Path) -> list[dict[str, Any]]:
+    rendered = render_excel_file(excel_file_path)
+    if len(rendered.text.strip()) < 5:
         return []
-    supplier = infer_supplier_from_path(source_file_name or ocr_file_path.name)
-    brand = infer_brand_from_path(source_file_name or ocr_file_path.name)
+    supplier = infer_supplier_from_path(excel_file_path.name)
+    brand = infer_brand_from_path(excel_file_path.name)
     rows: list[dict[str, Any]] = []
-    chunks = chunk_text_for_extraction(content)
+    chunks = chunk_text_for_extraction(rendered.text)
     for index, chunk in enumerate(chunks, 1):
         result = call_ai(chunk, supplier)
         for candidate in (result or {}).get("candidates", []):
             candidate["_chunk_index"] = index
             candidate["_chunk_count"] = len(chunks)
+            candidate["_sheet_count"] = rendered.sheet_count
+            candidate["_source_row_count"] = rendered.row_count
             rows.append(post_process_candidate(candidate, supplier, brand))
-    return rows
-
-
-def process_text_file(text_file_path: Path) -> list[dict[str, Any]]:
-    content = text_file_path.read_text("utf-8")
-    if len(content.strip()) < 5:
-        return []
-    supplier = infer_supplier_from_path(text_file_path.name)
-    brand = infer_brand_from_path(text_file_path.name)
-    rows: list[dict[str, Any]] = []
-    chunks = chunk_text_for_extraction(content)
-    for index, chunk in enumerate(chunks, 1):
-        result = call_ai(chunk, supplier)
-        for candidate in (result or {}).get("candidates", []):
-            candidate["_chunk_index"] = index
-            candidate["_chunk_count"] = len(chunks)
-            rows.append(post_process_candidate(candidate, supplier, brand))
-    return rows
-
-
-def process_vision_fallback_file(file_path: Path) -> list[dict[str, Any]]:
-    supplier = infer_supplier_from_path(file_path.name)
-    brand = infer_brand_from_path(file_path.name)
-    result = call_ai_vision_fallback(file_path, supplier)
-    rows = [post_process_candidate(c, supplier, brand) for c in (result or {}).get("candidates", [])]
-    for row in rows:
-        row["_recognition_warning"] = "vision_fallback_user_approved"
     return rows

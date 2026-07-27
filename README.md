@@ -1,31 +1,21 @@
-# MinerU 车源导入与结构化解析流水线
+# Excel 车源导入与结构化解析流水线
 
-将供应商发来的图片、PDF、PPT、DOCX、Excel、TXT 等车源资料，按 MinerU-first 路线识别、结构化提取，输出 JSON/CSV，暂存本地 SQLite，并可同步到飞书多维表格。
+当前项目只处理供应商 Excel/CSV 车源表，不再包含 MinerU OCR 识别层，也不再提供 GUI。
 
 ## 架构
 
 ```text
-input/
-  -> python -m mineru_pipeline classify
-  -> input/classified/
-  -> 识别层: MinerU Python SDK 生成 output/recognized/mineru/
-  -> 转化层: LLM 对 MinerU Markdown/HTML table 做事实提取
-  -> 汇总层: Python 规则规范化、JSON/CSV、SQLite 暂存、飞书同步
+Excel/CSV 输入
+  -> Excel 文本化: 保留 Source、Sheet、row 行号、A/B/C 列坐标、merged 合并单元格
+  -> 转化层: LLM 按事实抽取 raw candidates JSON
+  -> 汇总层: Python 字段规范化、车型 ID 匹配、JSON/CSV、SQLite 暂存、飞书同步
   -> output/final/candidates_YYYY-MM-DD.json
   -> output/final/candidates_YYYY-MM-DD.csv
   -> local_source.db
   -> 飞书多维表格
 ```
 
-## 三层边界
-
-| 层 | 职责 | 产物 |
-|---|---|---|
-| 识别 Recognition | 只负责文件读取、OCR/版面分析、表格结构还原。默认直接调用 MinerU Python SDK，不走 CLI 子进程。 | `output/recognized/mineru/manifest.json` 与 MinerU Markdown/JSON |
-| 转化 Transformation | 只负责把 MinerU 的 Markdown/HTML table 按事实抽取为候选 JSON。长文档按 table/段落语义切片，不硬截断。 | LLM raw response 与 raw candidates |
-| 汇总 Aggregation | 只负责业务规则规范化、车型 ID 匹配、本地 SQLite 暂存、人工审核、飞书同步。 | `output/final/candidates_*.json/csv`、`local_source.db`、飞书记录 |
-
-业务映射不放在 LLM Prompt 里。LLM 只做事实提取，品牌/车型规范化和字段修正由汇总层 Python 规则处理。
+LLM 只负责事实提取，不做车型库匹配、品牌别名修正、汇率换算或外部资料补全。业务规范化由 Python 汇总层完成。
 
 ## 安装
 
@@ -34,17 +24,12 @@ python -m pip install -U pip
 python -m pip install -e .[dev]
 ```
 
-`pyproject.toml` 已固定当前查询到的最新关键依赖版本，包括：
+关键依赖：
 
 ```text
-mineru==3.4.4
-paddleocr==3.7.0
 openpyxl==3.1.5
 python-dotenv==1.2.2
 requests==2.34.2
-python-docx==1.2.0
-python-pptx==1.0.2
-accelerate==1.14.0
 pytest==9.1.1
 ```
 
@@ -56,7 +41,7 @@ pytest==9.1.1
 Copy-Item .env.example .env
 ```
 
-至少需要。当前默认优先走 DeepSeek 官方 API 的 DeepSeek V4 Pro；Gemini 和 OpenRouter 保留为可切换备选：
+默认使用 DeepSeek 官方 API；Gemini 和 OpenRouter 仍可作为备选：
 
 ```text
 AI_PROVIDER=deepseek
@@ -64,14 +49,7 @@ DEEPSEEK_API_KEY=你的 DeepSeek Key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_SOURCE_IMPORT_MODEL=deepseek-v4-pro
 LLM_EMPTY_RETRIES=2
-LLM_RAW_OUTPUT_DIR=
-
-GEMINI_API_KEY=你的 Gemini Key
-GEMINI_SOURCE_IMPORT_MODEL=gemini-3.5-flash
-
-OPENROUTER_API_KEY=你的 OpenRouter Key
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
+LLM_CHUNK_CHARS=18000
 
 FEISHU_APP_ID=你的飞书 app id
 FEISHU_APP_SECRET=你的飞书 app secret
@@ -79,141 +57,69 @@ FEISHU_BITABLE_APP_TOKEN=Is6Xb3btbazhFhsDXgFcqFG1nRc
 FEISHU_BITABLE_TABLE_ID=tblAfMQdjhSV4Wd4
 ```
 
-MinerU 可调参数：
-
-```text
-MINERU_METHOD=auto
-MINERU_BACKEND=pipeline
-MINERU_EFFORT=medium
-MINERU_LANG=ch
-MINERU_TABLE=true
-MINERU_FORMULA=true
-MINERU_IMAGE_ANALYSIS=false
-MINERU_CONFIDENCE_THRESHOLD=0.6
-MINERU_TIMEOUT_SECONDS=300
-```
-
-默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。识别层通过 MinerU Python SDK 调用，不再回退到 MinerU CLI。
-
-识别层会扫描 MinerU 输出目录中的 JSON 质量分数字段（如 `score`、`confidence`、`rec_scores`）。当任一可用分数低于 `MINERU_CONFIDENCE_THRESHOLD` 时，`manifest.json` 会标记 `requires_manual_review=true`，主流程会打印人工判别提醒；如果 MinerU 当前产物没有暴露分数，则记录为不可用，不伪造置信度。
-
-LLM 每次结构化响应会保存到 `output/final/llm_raw/`；如果模型返回空 candidates，会按 `LLM_EMPTY_RETRIES` 自动重试。旧变量 `GEMINI_EMPTY_RETRIES`、`GEMINI_RAW_OUTPUT_DIR` 仍兼容。
-
-LLM 抽取层只负责从 MinerU Markdown/HTML table 中做事实提取，不在 Prompt 中硬编码品牌/车型业务映射。品牌别名、车型库匹配、日期/币种等规范化由 Python 后处理完成。
-
-长文档不会再直接 `text[:18000]` 硬截断；进入 LLM 前会按 MinerU `<table>...</table>`、Markdown 段落等语义块切片，避免在表格中间截断。
-
 ## 常用命令
 
-启动可视化窗口：
+默认读取 `input/` 下所有 `.xlsx/.xlsm/.csv`：
 
 ```powershell
-python -m mineru_pipeline.gui
+python -m mineru_pipeline --dry-run
 ```
 
-或安装后运行：
+指定一个 Excel 文件或文件夹：
 
 ```powershell
-mineru-gui
+python -m mineru_pipeline --input "C:\path\to\车源表.xlsx" --dry-run
+python -m mineru_pipeline --input "C:\path\to\车源文件夹" --dry-run
 ```
 
-第一轮建议只跑 dry-run，不写本地库、不上传飞书：
+正式完整流程会写入 `local_source.db`，并在飞书配置完整时同步飞书：
 
 ```powershell
-python -m mineru_pipeline --dry-run --force-ocr
+python -m mineru_pipeline --input "C:\path\to\车源文件夹"
 ```
 
-正式完整流程：
+单独执行转化层，生成 `output/final/raw_candidates_*.json`：
 
 ```powershell
-python -m mineru_pipeline --force-ocr
+python -m mineru_pipeline --action extract --input "C:\path\to\车源表.xlsx"
 ```
 
-临时覆盖 MinerU 后端，不需要修改 `.env`：
+单独执行汇总层，从已有 raw candidates 继续生成最终 JSON/CSV：
 
 ```powershell
-python -m mineru_pipeline --dry-run --force-ocr --backend hybrid-engine --effort medium --method ocr
+python -m mineru_pipeline --action aggregate --raw-candidates output\final\raw_candidates_20260727_120000.json --dry-run
 ```
 
-跳过已完成的 OCR：
-
-```powershell
-python -m mineru_pipeline --skip-ocr
-```
-
-三层单独执行：
-
-```powershell
-python -m mineru_pipeline --action recognize --force-ocr --backend hybrid-engine --effort medium --method ocr
-python -m mineru_pipeline --action extract
-python -m mineru_pipeline --action aggregate --dry-run
-```
-
-可视化窗口里的按钮含义：
-
-| 按钮 | 行为 |
-|---|---|
-| 运行（dry-run） | 执行完整 pipeline，但不写 SQLite、不上传飞书 |
-| 识别层 | 只做输入分类和 MinerU SDK 识别 |
-| 转化层 | 只从 MinerU 输出调用 LLM 生成 raw candidates |
-| 汇总层 | 只把最新 raw candidates 规范化为 final JSON/CSV，可写入本地 SQLite |
-| 一键图片到飞书 | 执行完整 pipeline 并同步飞书 |
-| 中停 | 终止当前正在运行的任务 |
-
-窗口支持单文件或文件夹选择。文件类型复选框可以多选；全部不选时按项目支持的扩展名自动匹配。LLM 服务选择 `deepseek`、`openrouter`、`gemini` 后，会切换对应 API Key、模型和 Base URL 输入项。提示词框默认加载当前 `build_prompt()` 使用的模板，可临时覆盖本次运行。
-
-窗口右侧按流程分为分页：
-
-| 分页 | 可检查内容 |
-|---|---|
-| 设置 | 当前提示词模板 |
-| 识别层 | 本次输入目录、MinerU Markdown/JSON/PDF 产物，点击 Markdown 可直接预览识别文本 |
-| 转化层 | `output/final/llm_raw/` 中的 LLM 原始响应、候选数量、finish_reason、token 信息 |
-| 汇总层 | `candidates_*.json/csv` 汇总结果、候选数量、库存合计、来源分布，以及 `local_source.db` pending/synced 状态 |
-
-只查看本地待同步记录：
+本地暂存记录管理：
 
 ```powershell
 python -m mineru_pipeline --action list
-```
-
-编辑或删除本地暂存记录：
-
-```powershell
 python -m mineru_pipeline --action edit --id 3 --key cost_exw_cny --val 70700
 python -m mineru_pipeline --action delete --id 3
-```
-
-手动同步本地 pending 记录到飞书：
-
-```powershell
 python -m mineru_pipeline --action sync
-```
-
-清空本地暂存：
-
-```powershell
 python -m mineru_pipeline --action clean
 ```
 
-## 输入覆盖
+## Excel 文本化策略
 
-| 类别 | 扩展名 | 处理路径 |
-|---|---|---|
-| 图片 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.tiff`, `.svg` | MinerU 专业识别，失败后可显式启用视觉兜底 |
-| PDF | `.pdf` | MinerU 专业识别 |
-| PPT | `.pptx`, `.ppt` | MinerU / 文本提取 |
-| Documents | `.docx`, `.doc`, `.rtf` | 文本提取或 MinerU |
-| Excel | `.xlsx`, `.xls`, `.csv` | Python `openpyxl` / CSV 直接解析 |
-| TXT | `.txt`, `.md` | 直接读取文本后进入结构化抽取 |
+转化层不会把 Excel 简单拼成普通文本，而是保留可被 LLM 理解的表格证据：
 
-未知类型会进入 `input/classified/other/`，不会被删除。
+```text
+# Source: supplier.xlsx
+## Sheet: 报价表
+merged: A2:A10=霍尔果斯基地
+row 1: A=地点 | B=车型 | C=指导价 | D=颜色库存 | E=FCA提货价 usd
+row 2: B=车型A | C=¥79,800 | D=20白/灰+10灰/灰 | E=9250
+```
+
+这样 DeepSeek 能看到 sheet、行号、列坐标和合并单元格覆盖关系，减少地点、价格、颜色库存错位。
 
 ## 输出位置
 
 ```text
-output/recognized/mineru/manifest.json
-output/recognized/mineru/errors.json
+output/parsed/excels/manifest.json
+output/final/llm_raw/*.json
+output/final/raw_candidates_*.json
 output/final/candidates_YYYY-MM-DD.json
 output/final/candidates_YYYY-MM-DD.csv
 local_source.db
@@ -223,5 +129,5 @@ local_source.db
 
 ```powershell
 python -m pytest
-python -m py_compile scripts\ocr_process.py scripts\parse_document.py
+python -m compileall -q src tests_py
 ```

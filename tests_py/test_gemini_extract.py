@@ -67,16 +67,16 @@ def test_chunk_text_preserves_html_tables(monkeypatch):
 
 
 def test_prompt_is_extraction_focused_without_business_mapping():
-    prompt = gemini_extract.build_prompt("<table><tr><td>车型</td></tr></table>", "supplier")
+    prompt = gemini_extract.build_prompt("row 1: A=车型", "supplier")
 
     assert "远程 V6E" not in prompt
     assert "Brand=Farizon" not in prompt
-    assert "MinerU" in prompt
-    assert "<table>" in prompt
+    assert "Excel 工作簿文本化结果" in prompt
+    assert "row 1: A=车型" in prompt
 
 
 def test_prompt_enforces_deepseek_strict_json_contract():
-    prompt = gemini_extract.build_prompt("<table><tr><td>车型</td></tr></table>", "supplier")
+    prompt = gemini_extract.build_prompt("row 1: A=车型", "supplier")
 
     assert "禁止输出 null 作为顶层结果" in prompt
     assert "只能输出一个可被 json.loads 直接解析的 JSON 对象" in prompt
@@ -86,7 +86,7 @@ def test_prompt_enforces_deepseek_strict_json_contract():
 
 
 def test_prompt_keeps_llm_output_on_extraction_schema_not_base_schema():
-    prompt = gemini_extract.build_prompt("<table><tr><td>FCA提货价 usd</td></tr></table>", "supplier")
+    prompt = gemini_extract.build_prompt("row 1: A=FCA提货价 usd", "supplier")
 
     assert "modelName" in prompt
     assert "trimName" in prompt
@@ -98,7 +98,7 @@ def test_prompt_keeps_llm_output_on_extraction_schema_not_base_schema():
 
 
 def test_prompt_includes_output_template_and_self_check_rules():
-    prompt = gemini_extract.build_prompt("<table><tr><td>7月交付</td></tr></table>", "supplier")
+    prompt = gemini_extract.build_prompt("row 1: A=7月交付", "supplier")
 
     assert "输出样例模板" in prompt
     assert '"priceFca":9250' in prompt
@@ -144,22 +144,33 @@ def test_raw_debug_file_includes_unparsed_api_response(monkeypatch, tmp_path):
     assert payload["api_response"] == api_response
 
 
-def test_process_ocr_output_merges_semantic_chunks(monkeypatch, tmp_path):
-    ocr_file = tmp_path / "BYD__supplier__sheet.md"
-    ocr_file.write_text("<table><tr><td>one</td></tr></table>\n\n<table><tr><td>two</td></tr></table>", "utf-8")
+def test_process_excel_file_merges_semantic_chunks(monkeypatch, tmp_path):
+    excel_file = tmp_path / "BYD__supplier__sheet.xlsx"
     calls = []
 
+    class Rendered:
+        text = "rendered excel"
+        sheet_count = 2
+        row_count = 10
+
+    def fake_render_excel_file(path):
+        assert path == excel_file
+        return Rendered()
+
     def fake_chunk_text(content):
+        assert content == "rendered excel"
         return ["chunk-one", "chunk-two"]
 
     def fake_call_ai(text, supplier):
         calls.append((text, supplier))
         return {"candidates": [{"brand": "BYD", "modelName": text}]}
 
+    monkeypatch.setattr(gemini_extract, "render_excel_file", fake_render_excel_file)
     monkeypatch.setattr(gemini_extract, "chunk_text_for_extraction", fake_chunk_text)
     monkeypatch.setattr(gemini_extract, "call_ai", fake_call_ai)
 
-    rows = gemini_extract.process_ocr_output(ocr_file, "BYD__supplier__sheet.png")
+    rows = gemini_extract.process_excel_file(excel_file)
 
     assert [row["modelName"] for row in rows] == ["chunk-one", "chunk-two"]
     assert len(calls) == 2
+    assert rows[0]["_sheet_count"] == 2

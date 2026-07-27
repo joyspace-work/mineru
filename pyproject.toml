@@ -3,20 +3,15 @@ requires = ["setuptools==83.0.0", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mineru-vehicle-pipeline"
+name = "vehicle-source-excel-pipeline"
 version = "0.2.0"
-description = "MinerU-first vehicle source recognition and Feishu Base sync pipeline"
+description = "Excel-first vehicle source extraction and Feishu Base sync pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "mineru==3.4.4",
-  "paddleocr==3.7.0",
   "openpyxl==3.1.5",
   "python-dotenv==1.2.2",
   "requests==2.34.2",
-  "python-docx==1.2.0",
-  "python-pptx==1.0.2",
-  "accelerate==1.14.0",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +21,6 @@ dev = [
 
 [project.scripts]
 mineru-pipeline = "mineru_pipeline.cli:main"
-mineru-gui = "mineru_pipeline.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
