@@ -348,6 +348,16 @@ def get_pydantic_vehicle_schema():
 # BRAND & MODEL OFFICIAL MAPPING DICTIONARY (SSOT)
 # ==============================================================================
 BRAND_MODEL_MAPPINGS: list[dict[str, str]] = [
+    {"raw_brand": "吉利", "raw_model": "A7", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "吉利", "raw_model": "a7", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "吉利", "raw_model": "A7 EM-i", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "吉利", "raw_model": "银河A7", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "吉利", "raw_model": "牛仔", "brand": "Geely", "model": "Cowboy"},
+    {"raw_brand": "吉利", "raw_model": "吉利牛仔", "brand": "Geely", "model": "Cowboy"},
+    {"raw_brand": "吉利", "raw_model": "全新牛仔", "brand": "Geely", "model": "Cowboy"},
+    {"raw_brand": "吉利", "raw_model": "星耀6", "brand": "Geely", "model": "Starshine 6"},
+    {"raw_brand": "奥迪", "raw_model": "A7", "brand": "Audi", "model": "A7"},
+    {"raw_brand": "Audi", "raw_model": "A7", "brand": "Audi", "model": "A7"},
     {"raw_brand": "问界", "raw_model": "M9", "brand": "AITO", "model": "M9"},
     {"raw_brand": "比亚迪", "raw_model": "海豚", "brand": "BYD", "model": "Dolphin"},
     {"raw_brand": "比亚迪", "raw_model": "Dolphin", "brand": "BYD", "model": "Dolphin"},
@@ -509,6 +519,7 @@ KNOWLEDGE_BASE_PATH = CONFIG_DIR / "rules_knowledge_base.json"
 DEFAULT_KNOWLEDGE_BASE = {
     "version": "1.0.0",
     "header_aliases": {
+        "brand": ["品牌", "车辆品牌", "厂商", "brand"],
         "modelName": ["车型", "型号", "车系", "项目名称", "车辆名称", "子品牌", "车型描述"],
         "trimConfig": ["配置", "版型", "版本", "配置代号", "配置版本", "电池容量", "续航"],
         "exteriorColor": ["外观颜色", "外观色", "车色", "颜色", "外观"],
@@ -606,6 +617,12 @@ class RuleEngine:
             for alias in aliases:
                 if alias.lower() in cleaned:
                     return field_name
+
+        # SSOT fallback from VEHICLE_FIELDS definitions
+        ssot_aliases = get_header_aliases()
+        for alias, pydantic_name in ssot_aliases.items():
+            if alias.lower() in cleaned:
+                return pydantic_name
 
         return None
 

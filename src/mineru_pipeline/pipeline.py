@@ -309,6 +309,21 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
     if is_invalid_model_name(model_text):
         model_text = ""
 
+    # Check if brand_text is actually a model name (e.g. "2025款 A7", "A7", "吉利牛仔", "星耀6")
+    has_known_brand = False
+    for zh_brand, en_brand in CHINESE_TO_ENGLISH_BRANDS.items():
+        if brand_text and (brand_text == zh_brand or zh_brand in brand_text or en_brand.lower() == brand_text.lower()):
+            has_known_brand = True
+            break
+
+    if not has_known_brand and brand_text:
+        for (rb, rm), (mapped_b, mapped_m) in BRAND_MODEL_MAP.items():
+            if rm and len(rm) >= 2 and rm.lower() in brand_text.lower():
+                model_text = mapped_m
+                brand_text = mapped_b
+                has_known_brand = True
+                break
+
     if not brand_text and not model_text:
         return None, None
 

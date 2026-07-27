@@ -1,6 +1,66 @@
 {
   "mappings": [
     {
+      "raw_brand": "吉利",
+      "raw_model": "A7",
+      "brand": "Geely",
+      "model": "Galaxy A7"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "a7",
+      "brand": "Geely",
+      "model": "Galaxy A7"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "A7 EM-i",
+      "brand": "Geely",
+      "model": "Galaxy A7"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "银河A7",
+      "brand": "Geely",
+      "model": "Galaxy A7"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "牛仔",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "吉利牛仔",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "全新牛仔",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "星耀6",
+      "brand": "Geely",
+      "model": "Starshine 6"
+    },
+    {
+      "raw_brand": "奥迪",
+      "raw_model": "A7",
+      "brand": "Audi",
+      "model": "A7"
+    },
+    {
+      "raw_brand": "Audi",
+      "raw_model": "A7",
+      "brand": "Audi",
+      "model": "A7"
+    },
+    {
       "raw_brand": "问界",
       "raw_model": "M9",
       "brand": "AITO",

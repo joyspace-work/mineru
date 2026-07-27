@@ -1,6 +1,12 @@
 {
   "version": "1.0.0",
   "header_aliases": {
+    "brand": [
+      "品牌",
+      "车辆品牌",
+      "厂商",
+      "brand"
+    ],
     "modelName": [
       "车型",
       "型号",
@@ -153,8 +159,8 @@
     }
   ],
   "telemetry": {
-    "total_runs": 18,
-    "deterministic_hits": 1320,
+    "total_runs": 23,
+    "deterministic_hits": 2480,
     "ai_fallbacks": 0
   }
 }

@@ -70,3 +70,14 @@ def test_sqlite_schema_has_manufacture_year_month(tmp_path: Path):
 
     assert "manufacture_year" in columns
     assert "manufacture_month" in columns
+
+
+def test_normalize_brand_model_handles_model_in_brand_column():
+    from mineru_pipeline.pipeline import normalize_brand_model
+    b1, m1 = normalize_brand_model("2025款\nA7", "2025款150探索+")
+    assert b1 == "Geely"
+    assert m1 == "Galaxy A7"
+
+    b2, m2 = normalize_brand_model("吉利牛仔", "2026款观野版")
+    assert b2 == "Geely"
+    assert m2 == "Cowboy"
