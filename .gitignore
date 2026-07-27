@@ -38,3 +38,7 @@ magic-pdf.json
 # data/corrections.json — tracked
 # data/rules.json — tracked
 # data/rules_pending.json — tracked
+
+# Excluded directories
+superpowers/
+feishu_tables/

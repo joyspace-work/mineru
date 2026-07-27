@@ -18,137 +18,29 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from dotenv import load_dotenv
 
-from .async_pipeline import run_async_pipeline
-from .input_classifier import classify_inputs
-from .excel_parser import parse_excel_file, excel_to_markdown
-from .llm_extractor import (
-    process_ocr_output,
-    process_text_file,
-    process_vision_fallback_file,
+from .parser import parse_excel_file
+from .schema import (
+    VEHICLE_FIELDS,
+    get_allowed_edit_keys,
+    get_brand_model_mapping,
+    get_create_table_sql,
+    get_feishu_field_map,
 )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INPUT_DIR = PROJECT_ROOT / "input"
-CLASSIFIED_DIR = Path(os.getenv("CLASSIFIED_DIR", PROJECT_ROOT / "input" / "classified"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "output"))
-RECOGNIZED_DIR = OUTPUT_DIR / "recognized" / "mineru"
 
 
 def load_brand_model_map() -> dict[tuple[str, str], tuple[str, str]]:
-    config_file = PROJECT_ROOT / "config" / "brand_model_mapping.json"
-    mapping: dict[tuple[str, str], tuple[str, str]] = {}
-    if config_file.exists():
-        try:
-            data = json.loads(config_file.read_text("utf-8"))
-            for item in data.get("mappings", []):
-                raw_b = str(item.get("raw_brand", "")).strip()
-                raw_m = str(item.get("raw_model", "")).strip()
-                b = str(item.get("brand", "")).strip()
-                m = str(item.get("model", "")).strip()
-                if raw_b and raw_m and b and m:
-                    mapping[(raw_b, raw_m)] = (b, m)
-        except Exception:
-            pass
-    if not mapping:
-        mapping = {
-            ("问界", "M9"): ("AITO", "M9"),
-            ("方程豹", "豹3"): ("Fangchengbao", "Ti 3"),
-            ("方程豹", "铁3"): ("Fangchengbao", "Ti 3"),
-            ("方程豹", "钛3"): ("Fangchengbao", "Ti 3"),
-            ("方程豹", "豹5"): ("Fangchengbao", "Leopard 5"),
-            ("方程豹", "豹7"): ("Fangchengbao", "Ti 7"),
-            ("方程豹", "钛7"): ("Fangchengbao", "Ti 7"),
-            ("方程豹", "TI7"): ("Fangchengbao", "Ti 7"),
-            ("方程豹", "豹8"): ("Fangchengbao", "Leopard 8"),
-            ("比亚迪", "TI7"): ("Fangchengbao", "Ti 7"),
-            ("比亚迪", "海豚"): ("BYD", "Dolphin"),
-            ("比亚迪", "汉 EV"): ("BYD", "Han EV"),
-            ("比亚迪", "秦 PLUS"): ("BYD", "Qin PLUS EV"),
-            ("比亚迪", "海鸥"): ("BYD", "Seagull"),
-            ("比亚迪", "海豹"): ("BYD", "Seal"),
-            ("比亚迪", "海狮05EV"): ("BYD", "Sealion 7"),
-            ("比亚迪", "海狮07EV"): ("BYD", "Sealion 7"),
-            ("比亚迪", "海狮 7"): ("BYD", "Sealion 7"),
-            ("比亚迪", "鲨鱼"): ("BYD", "Shark"),
-            ("比亚迪", "唐 L EV"): ("BYD", "Tang L EV"),
-            ("比亚迪", "元 UP"): ("BYD", "Yuan UP"),
-            ("长安", "Lumin"): ("Changan", "Lumin"),
-            ("长安", "糯玉米"): ("Changan", "Lumin"),
-            ("长安启源", "Q05"): ("Changan Nevo", "Q05"),
-            ("深蓝", "S05"): ("Deepal", "S05"),
-            ("深蓝", "S07"): ("Deepal", "S07"),
-            ("东风", "纳米01"): ("Dongfeng", "Nammi 01"),
-            ("东风", "锐骐6 EV"): ("Dongfeng", "Rich 6 EV"),
-            ("吉利", "银河 E5"): ("Geely", "Galaxy E5"),
-            ("吉利", "银河 M9"): ("Geely", "Galaxy M9"),
-            ("吉利", "几何"): ("Geely", "Geome"),
-            ("吉利", "几何C"): ("Geely", "Geometry C"),
-            ("零跑", "T03"): ("Leapmotor", "T03"),
-            ("零跑", "小马"): ("Leapmotor", "T03"),
-            ("零跑", "小马奔腾"): ("Leapmotor", "T03"),
-            ("Smart", "Smart"): ("Smart", "Smart #1"),
-            ("山东小车", "卡王"): ("Shandong EV", "KW"),
-            ("山东小车", "卡王KW"): ("Shandong EV", "KW"),
-            ("山东小车", "KW"): ("Shandong EV", "KW"),
-            ("山东小车", "小钢炮"): ("Shandong EV", "XGP"),
-            ("山东小车", "小钢炮XGP"): ("Shandong EV", "XGP"),
-            ("山东小车", "XGP"): ("Shandong EV", "XGP"),
-            ("智己", "L6"): ("IM Motors", "L6"),
-            ("智己", "LS6"): ("IM Motors", "LS6"),
-            ("上汽", "智己"): ("IM Motors", "LS6"),
-            ("捷途", "DASHING"): ("Jetour", "Dashing"),
-            ("捷途", "G700"): ("Jetour", "T2"),
-            ("捷途", "T1"): ("Jetour", "T2"),
-            ("捷途", "T2"): ("Jetour", "T2"),
-            ("捷途", "X50"): ("Jetour", "Dashing"),
-            ("捷途", "X70FL"): ("Jetour", "Dashing"),
-            ("捷途", "X70PLUS"): ("Jetour", "Dashing"),
-            ("捷途", "价格表"): ("Jetour", "Dashing"),
-            ("丰田", "铂智3X"): ("Toyota", "bZ3X"),
-            ("丰田", "铂智3x"): ("Toyota", "bZ3X"),
-            ("奔腾小马", "小马"): ("Bestune", "Xiaoma"),
-            ("奔腾", "小马"): ("Bestune", "Xiaoma"),
-            ("吉利", "A7"): ("Geely", "Galaxy A7"),
-            ("吉利", "牛仔"): ("Geely", "Geome"),
-            ("吉利牛仔", "观野版"): ("Geely", "Geome"),
-            ("吉利牛仔", "趣野版"): ("Geely", "Geome"),
-            ("星耀6", "125KM"): ("Geely", "Galaxy L6"),
-            ("福瑞通", "V6E"): ("Dongfeng", "Rich 6 EV"),
-            ("福瑞通", "V8E"): ("Dongfeng", "Rich 6 EV"),
-            ("福田", "奥铃"): ("Farizon", "Xingxiang V"),
-            ("广汽", "i60"): ("GAC Aion", "i60"),
-            ("阿维塔", "阿维塔"): ("Avatr", "12"),
-            ("阿维塔", "06"): ("Avatr", "07"),
-            ("阿维塔", "12"): ("Avatr", "12"),
-            ("长安", "阿维塔"): ("Avatr", "12"),
-            ("小米", "小米价格表"): ("Xiaomi", "SU7 Ultra"),
-            ("小米", "小米su7"): ("Xiaomi", "SU7"),
-            ("名爵", "MG4 EV"): ("MG", "MG4 EV"),
-            ("雷达", "RD6"): ("Radar", "RD6"),
-            ("享界", "S9"): ("Stelato", "S9"),
-            ("坦克", "500"): ("Tank", "500 Hi4-T"),
-            ("岚图", "泰山 X8"): ("Voyah", "Taishan X8"),
-            ("五菱", "缤果 Plus"): ("Wuling", "Bingo Plus"),
-            ("小鹏", "G9"): ("XPENG", "G9"),
-            ("小米", "SU7 Ultra"): ("Xiaomi", "SU7 Ultra"),
-            ("小米", "YU7"): ("Xiaomi", "YU7"),
-            ("极氪", "001"): ("Zeekr", "001"),
-            ("极氪", "9X"): ("Zeekr", "9X"),
-        }
-    return mapping
+    return get_brand_model_mapping()
 
 
 BRAND_MODEL_MAP = load_brand_model_map()
 
 
-ALLOWED_EDIT_KEYS = [
-    "model_id", "brand", "model", "trim_config", "exterior_color", "interior_color",
-    "manufacture_year", "manufacture_month", "stock_quantity", "min_quantity", "max_quantity", "lead_time",
-    "order_wait_days", "steering_setup", "version_type",
-    "status_vehicle", "supplier_price_cny", "cost_exw_usd", "cost_fob_usd",
-    "cost_fca_usd", "location", "supplier", "notes", "status",
-]
+ALLOWED_EDIT_KEYS = sorted(list(get_allowed_edit_keys()) + ["status"])
 
 
 def init_environment() -> None:
@@ -312,13 +204,15 @@ def load_model_index() -> dict[tuple[str, str], str]:
 
 
 NOISE_WORDS_RE = re.compile(
-    r"(FOB价格表|EXW价格表|FCA价格表|库存价格表|价格表|报价表|价格|报价|FOB|EXW|FCA|\.png|\.jpg|\.pdf|\.txt|\.xlsx|\.csv)",
+    r"(FOB价格表|EXW价格表|FCA价格表|库存价格表|价格表|报价表|价格|报价|FOB|EXW|FCA|\.png|\.jpg|\.pdf|\.txt|\.xlsx|\.csv|"
+    r"国[IVVIVIⅥⅤ456]|China\s*[IVVIVIⅥⅤ456]|国六b?\s*RDE|国六B（RDE）|国六B\(RDE\)|国Ⅴ|国Ⅵ|"
+    r"2026款|2025款|2024款|第三代|第四代|全新第二代)",
     re.IGNORECASE,
 )
 
 
 def clean_noise_words(text: str) -> str:
-    cleaned = NOISE_WORDS_RE.sub("", text).strip(" _-.")
+    cleaned = NOISE_WORDS_RE.sub("", text).strip(" _-.\n\r")
     return cleaned
 
 
@@ -326,7 +220,8 @@ FOOTER_NOISE_PATTERNS = [
     r"^\d+[\.、\s]",  # Starts with digit dot e.g. "1. ", "2. ", "3. "
     r"汇率", r"境外人民币", r"基于.*港", r"滚装船", r"运费", r"单独计算", r"套色", r"额外增加",
     r"含税", r"不含税", r"含国内运费", r"二类底盘", r"售价", r"定金", r"订金",
-    r"交付", r"款项", r"尾款", r"有效", r"截止", r"说明", r"提示"
+    r"交付", r"款项", r"尾款", r"有效", r"截止", r"说明", r"提示",
+    r"微卡mini", r"微面mini", r"微卡", r"微面", r"车系", r"车型", r"五菱电动车", r"五菱批发端", r"现车可指定发运", r"加价", r"来源"
 ]
 
 
@@ -342,6 +237,71 @@ def is_invalid_model_name(model_text: str) -> bool:
     return False
 
 
+CHINESE_TO_ENGLISH_BRANDS: dict[str, str] = {
+    "比亚迪": "BYD",
+    "吉利": "Geely",
+    "全新牛仔": "Geely",
+    "吉利牛仔": "Geely",
+    "长安": "Changan",
+    "五菱": "Wuling",
+    "东风": "Dongfeng",
+    "丰田": "Toyota",
+    "捷途": "Jetour",
+    "方程豹": "Fangchengbao",
+    "深蓝": "Deepal",
+    "启源": "Changan",
+    "长安启源": "Changan",
+    "阿维塔": "Avatr",
+    "红旗": "Hongqi",
+    "零跑": "Leapmotor",
+    "理想": "Li Auto",
+    "小鹏": "XPENG",
+    "小米": "Xiaomi",
+    "智己": "IM Motors",
+    "极氪": "Zeekr",
+    "福田": "Foton",
+    "远程": "Farizon",
+    "奇瑞": "Chery",
+    "长城": "GWM",
+    "坦克": "Tank",
+    "岚图": "Voyah",
+    "问界": "AITO",
+    "享界": "Stelato",
+    "尊界": "Maextro",
+    "尚界": "Shangjie",
+    "山东小车": "Shandong EV",
+    "奔腾": "Bestune",
+    "广汽": "GAC",
+    "广汽埃安": "GAC",
+    "埃安": "GAC",
+}
+
+
+def resolve_wuling_model_code(model_code: str) -> str | None:
+    if not model_code:
+        return None
+    mc = model_code.upper().strip()
+    if mc.startswith(("LZW6470", "LZW6478")):
+        return "Starlight S"
+    if mc.startswith(("LZW6502", "LZW6500", "LZW6521")):
+        return "Starlight L"
+    if mc.startswith(("LZW6490", "LZW6461", "LZW7154", "LZW7157")):
+        return "Starlight"
+    if mc.startswith(("LZW6451", "LZW6452")):
+        return "Bingo Plus"
+    if mc.startswith(("LZW7009", "LZW7004", "E261")):
+        return "Bingo"
+    if mc.startswith(("LZW6389", "LZW6402", "LZW6448", "LZW6449", "LZW6450")):
+        return "Hongguang"
+    if mc.startswith(("LZW1020", "LZW1028", "LZW1029", "LZW1030", "LZW5021", "LZW5022", "LZW5024", "LZW5028", "LZW5030", "LZW5032", "LZW5033")):
+        return "Rongguang"
+    if mc.startswith("LZW7001") or mc == "001":
+        return "Hongguang MINI EV"
+    if mc.startswith("LZW7007") or mc in ("07", "7"):
+        return "Baojun 07"
+    return None
+
+
 def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | None]:
     brand_text = clean_noise_words(str(brand or "").strip())
     model_text = clean_noise_words(str(model or "").strip())
@@ -352,135 +312,71 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
     if not brand_text and not model_text:
         return None, None
 
-    # Handle A7 and Cowboy/Geome special strings
-    if "a7" in brand_text.lower() or "a7" in model_text.lower():
-        return "Geely", "Galaxy A7"
-    if "牛仔" in brand_text or "牛仔" in model_text:
-        return "Geely", "Geome"
-    if "sv" in brand_text.lower() or "sv" in model_text.lower() or "新v" in brand_text.lower() or "新v" in model_text.lower():
-        return "Farizon", "Xingxiang V"
-    if "卡王" in brand_text or "卡王" in model_text:
-        return "Shandong EV", "KW"
-    if "小钢炮" in brand_text or "小钢炮" in model_text:
-        return "Shandong EV", "XGP"
+    bt_clean = brand_text.lower().replace(" ", "")
+    mt_clean = model_text.lower().replace(" ", "")
 
+    # 1. Match against BRAND_MODEL_MAP (loaded from config/brand_model_mapping.json)
     for (raw_brand, raw_model), mapped in BRAND_MODEL_MAP.items():
-        if raw_brand and raw_model:
-            if raw_brand.lower() in brand_text.lower() and (raw_model.lower() in model_text.lower() or raw_model.lower() in brand_text.lower()):
-                return mapped
+        if raw_brand:
+            rb_clean = raw_brand.lower().replace(" ", "")
+            rm_clean = raw_model.lower().replace(" ", "") if raw_model else ""
+            brand_matched = (
+                rb_clean == bt_clean or
+                rb_clean in bt_clean or
+                (rb_clean in ("比亚迪", "byd") and ("byd" in bt_clean or "比亚迪" in bt_clean))
+            )
+            if len(rm_clean) <= 2:
+                model_matched = (
+                    not rm_clean or
+                    rm_clean == mt_clean or
+                    rm_clean == bt_clean or
+                    bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", mt_clean, re.IGNORECASE)) or
+                    bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", bt_clean, re.IGNORECASE))
+                )
+            else:
+                model_matched = (
+                    not rm_clean or
+                    rm_clean in mt_clean or
+                    rm_clean in bt_clean or
+                    (rm_clean.replace("ev", "") in mt_clean if "ev" in rm_clean else False)
+                )
+            if brand_matched and model_matched:
+                final_brand = mapped[0]
+                final_model = mapped[1] if rm_clean else (model_text or None)
+                return final_brand, final_model
 
-    if "启源" in brand_text or "启源" in model_text or "nevo" in brand_text.lower():
-        brand_text = "Changan Nevo"
-        m_upper = model_text.upper()
-        if "A07" in m_upper or "SC7000" in m_upper:
-            model_text = "A07"
-        elif "A05" in m_upper or "SC7150" in m_upper:
-            model_text = "A05"
-        elif "E07" in m_upper or "SC6485" in m_upper:
-            model_text = "E07"
+    # 2. Translate Chinese brand name if present for fallback matching
+    for zh_brand, en_brand in CHINESE_TO_ENGLISH_BRANDS.items():
+        if brand_text and (brand_text == zh_brand or zh_brand in brand_text):
+            brand_text = en_brand
+            bt_clean = brand_text.lower().replace(" ", "")
+            break
+
+    # 3. Wuling industrial model code resolution
+    if brand_text == "Wuling" or bt_clean == "wuling":
+        wuling_resolved = resolve_wuling_model_code(model_text)
+        if wuling_resolved:
+            return "Wuling", wuling_resolved
+
+    # 4. Fallback brand resolution from official brands in BRAND_MODEL_MAP
+    official_brands = {b for _, (b, _) in BRAND_MODEL_MAP.items()}
+    official_models = {m for _, (_, m) in BRAND_MODEL_MAP.items()}
+
+    for official_brand in official_brands:
+        if official_brand.lower().replace(" ", "") == bt_clean or official_brand.lower() in bt_clean:
+            brand_text = official_brand
+            break
+
+    # 5. Fallback model resolution from official models in BRAND_MODEL_MAP
+    for official_model in official_models:
+        om_clean = official_model.lower().replace(" ", "")
+        if len(om_clean) <= 2:
+            model_matched = (om_clean == mt_clean)
         else:
-            model_text = "Q05"
-        return brand_text, model_text
-
-    if "深蓝" in brand_text or "深蓝" in model_text or "deepal" in brand_text.lower():
-        brand_text = "Deepal"
-        m_upper = model_text.upper()
-        if "S05" in m_upper:
-            model_text = "S05"
-        else:
-            model_text = "S07"
-        return brand_text, model_text
-
-    if any(noise in model_text for noise in ("五菱批发端", "五菱电动车", "微卡mini", "微面mini", "广州现车", "现车可指定发运", "车型", "加价", "来源")):
-        model_text = ""
-
-    if "阿维塔" in brand_text or "阿维塔" in model_text or "avatr" in brand_text.lower():
-        brand_text = "Changan"
-        if "06" in model_text or "6" in model_text:
-            model_text = "Avatr 06"
-        elif "12" in model_text:
-            model_text = "Avatr 12"
-        elif "11" in model_text:
-            model_text = "Avatr 11"
-        elif "07" in model_text or "7" in model_text:
-            model_text = "Avatr 07"
-        else:
-            model_text = "Avatr 12"
-        return brand_text, model_text
-
-    if "惠迪" in brand_text or "惠迪" in str(brand):
-        brand_text = "BYD"
-    elif any(k in brand_text.lower() for k in ("福田", "foton")):
-        brand_text = "Foton"
-    elif any(k in brand_text.lower() for k in ("比亚迪", "byd")):
-        brand_text = "BYD"
-    elif any(k in brand_text.lower() for k in ("吉利", "geely")):
-        brand_text = "Geely"
-        if "牛仔" in brand_text or "牛仔" in model_text:
-            model_text = "Geome"
-        elif "a7" in brand_text.lower() or "a7" in model_text.lower():
-            model_text = "Galaxy A7"
-    elif any(k in brand_text.lower() for k in ("远程", "farizon")):
-        brand_text = "Farizon"
-    elif any(k in brand_text.lower() for k in ("五菱", "wuling", "sgmw")):
-        brand_text = "Wuling"
-        m_lower = model_text.lower()
-        if "缤果" in m_lower or "bingo" in m_lower:
-            model_text = "Bingo Plus" if "plus" in m_lower else "Bingo"
-        elif "星光" in m_lower or "starlight" in m_lower:
-            model_text = "Starlight"
-        elif "宏光" in m_lower or "hongguang" in m_lower:
-            model_text = "Hongguang MINIEV" if "mini" in m_lower else "Hongguang"
-        elif "之光" in m_lower or "sunshine" in m_lower:
-            model_text = "Sunshine"
-        elif "扬光" in m_lower or "yangguang" in m_lower:
-            model_text = "Yangguang"
-        else:
-            model_text = "Rongguang"
-    elif any(k in brand_text.lower() for k in ("长安", "changan")):
-        brand_text = "Changan"
-    elif any(k in brand_text.lower() for k in ("东风", "dongfeng")):
-        brand_text = "Dongfeng"
-    elif any(k in brand_text.lower() for k in ("捷途", "jetour")):
-        brand_text = "Jetour"
-        if "dashing" in model_text.lower() or "x50" in model_text.lower() or "x70" in model_text.lower():
-            model_text = "Dashing"
-        elif "t1" in model_text.lower() or "t2" in model_text.lower() or "g700" in model_text.lower():
-            model_text = "T2"
-    elif any(k in brand_text.lower() for k in ("丰田", "toyota")):
-        brand_text = "Toyota"
-        if "铂智" in model_text:
-            model_text = "bZ3X"
-    elif any(k in brand_text.lower() for k in ("智己", "im motors")) or (brand_text == "上汽" and "智己" in model_text):
-        brand_text = "IM Motors"
-        if "l6" in model_text.lower():
-            model_text = "L6"
-        elif "ls6" in model_text.lower():
-            model_text = "LS6"
-    elif any(k in brand_text.lower() for k in ("小米", "xiaomi")):
-        brand_text = "Xiaomi"
-        if "su7" in model_text.lower():
-            model_text = "SU7"
-    elif "奔腾" in brand_text or "奔腾" in model_text:
-        brand_text = "Bestune"
-        model_text = "Xiaoma"
-    elif any(k in brand_text.lower() for k in ("广汽", "gac", "i60")):
-        brand_text = "GAC Aion"
-        if "i60" in model_text.lower() or brand_text == "i60":
-            model_text = "i60"
-    elif "星耀6" in brand_text or "星耀6" in model_text:
-        brand_text = "Geely"
-        model_text = "Galaxy L6"
-    elif "福瑞通" in brand_text:
-        brand_text = "Dongfeng"
-        model_text = "Rich 6 EV"
-    elif brand_text in ("2026款", "2025款", "2024款"):
-        brand_text = "Geely"
-
-    if model_text == "海鸥":
-        model_text = "Seagull"
-    elif model_text == "海豚":
-        model_text = "Dolphin"
+            model_matched = (om_clean == mt_clean or om_clean in mt_clean)
+        if model_matched:
+            model_text = official_model
+            break
 
     return brand_text or None, model_text or None
 
@@ -594,12 +490,6 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
             if 20000 <= val <= 2000000:
                 cny = val
 
-    if not loc:
-        for loc_kw in ("南沙", "武汉", "深圳", "天津", "上海", "霍尔果斯基地", "霍尔果斯", "广州", "宁波", "青岛", "湘潭", "盐城", "喀什", "二连浩特", "成都", "乌鲁木齐"):
-            if loc_kw in combo_text:
-                loc = loc_kw
-                break
-
     return {
         "cost_exw_usd": exw,
         "cost_fob_usd": fob,
@@ -634,6 +524,74 @@ def clean_color(color_val: Any) -> tuple[str | None, str | None, int | None]:
     ext_col = re.sub(r"套色", "", ext_col).strip()
 
     return ext_col or None, int_col or None, stock_qty
+
+
+def clean_trim_config_and_extract_notes(
+    trim_val: Any,
+    brand: str,
+    model: str,
+    raw_brand: Any = None,
+    raw_model: Any = None,
+    existing_notes: str | None = None
+) -> tuple[str | None, str | None]:
+    if trim_val is None:
+        return None, existing_notes
+
+    trim_raw_str = str(trim_val).strip()
+    if not trim_raw_str:
+        return None, existing_notes
+
+    lines = [line.strip() for line in trim_raw_str.split("\n") if line.strip()]
+    unique_lines = []
+    for line in lines:
+        if line not in unique_lines:
+            unique_lines.append(line)
+
+    equipment_details: list[str] = []
+    clean_parts: list[str] = []
+
+    for line in unique_lines:
+        match_paren = re.search(r"([（\(][^）\)]+[）\)])", line)
+        if match_paren:
+            detail = line.strip()
+            if detail not in equipment_details:
+                equipment_details.append(detail)
+            c_line = re.sub(r"[（\(][^）\)]+[）\)]", "", line).strip()
+            if c_line and c_line not in clean_parts:
+                clean_parts.append(c_line)
+        elif any(kw in line for kw in ["空调", "EPS", "ABS", "显示屏", "扬声器", "悬挂", "悬架", "铝合金", "雷达", "天窗", "快充", "座椅", "退税", "关税", "内饰", "座", "门"]):
+            if line not in equipment_details:
+                equipment_details.append(line)
+            m_short = re.match(r"^(LV\d+(?:\s*[\u4e00-\u9fa5]+)?|[^\s,，、；;]+)", line, re.IGNORECASE)
+            if m_short:
+                c_part = m_short.group(1).strip()
+                if c_part and c_part not in clean_parts:
+                    clean_parts.append(c_part)
+        else:
+            if line not in clean_parts:
+                clean_parts.append(line)
+
+    clean_trim = " ".join(clean_parts) if clean_parts else (unique_lines[0] if unique_lines else "")
+    if clean_trim:
+        clean_trim = clean_trim_config(clean_trim, brand, model, raw_brand, raw_model)
+
+    if clean_trim:
+        tokens = clean_trim.split()
+        if len(tokens) >= 2 and len(set(tokens)) == 1:
+            clean_trim = tokens[0]
+
+    notes_list: list[str] = []
+    if existing_notes and str(existing_notes).strip():
+        notes_list.append(str(existing_notes).strip())
+
+    if equipment_details:
+        zh_details = [d for d in equipment_details if re.search(r"[\u4e00-\u9fa5]", d)]
+        note_text = "; ".join(zh_details if zh_details else equipment_details)
+        if note_text not in notes_list:
+            notes_list.append(f"配置详情: {note_text}")
+
+    final_notes = "; ".join(notes_list) if notes_list else None
+    return clean_trim or None, final_notes
 
 
 def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str | None:
@@ -675,8 +633,12 @@ def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = No
     for b_cand, m_cand in [("极氪", "001"), ("比亚迪", "BYD"), ("东风", "eπ007"), ("东风", "eπ008"), ("东风", "纳米01"), ("阿维塔", "12"), ("吉利", "银河"), ("山东小车", "卡王"), ("山东小车", "小钢炮")]:
         to_strip.extend([b_cand, m_cand])
 
+    wuling_series_keywords = ["荣光", "宏光", "之光", "缤果", "星光", "rongguang", "hongguang", "sunshine", "bingo", "starlight"]
+
     for target in to_strip:
         if target and len(target) >= 2:
+            if brand == "Wuling" and target.lower() in wuling_series_keywords:
+                continue
             if trim_str.lower() == target.lower() or trim_str.lower() == f"{target.lower()}新款" or trim_str == f"{target}+":
                 return None
             pattern = re.compile(rf"^{re.escape(target)}\s*[\+\-款]?\s*", re.IGNORECASE)
@@ -707,10 +669,16 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                         break
             if not model or model in ("待确认车型", "未知", "unknown"):
                 for (rb, rm), mapped in BRAND_MODEL_MAP.items():
-                    if rm and rm.lower() in fallback_text.lower():
-                        brand = mapped[0]
-                        model = mapped[1]
-                        break
+                    if rm:
+                        rm_clean = rm.lower().strip()
+                        if len(rm_clean) <= 2:
+                            rm_matched = bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", fallback_text.lower()))
+                        else:
+                            rm_matched = (rm_clean in fallback_text.lower())
+                        if rm_matched:
+                            brand = mapped[0]
+                            model = mapped[1]
+                            break
             if not brand or not model:
                 if "sv" in fallback_text.lower() or "新v" in fallback_text.lower():
                     brand, model = "Farizon", "Xingxiang V"
@@ -727,16 +695,47 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
         final_brand = brand
         final_model = model
+        trim_val = row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+
+        # Wuling brand & series rule: brand MUST ALWAYS be Wuling; series keywords (荣光, 宏光, 之光, 缤果, 星光) belong in trim_config
+        wuling_series_map = {
+            "荣光": "荣光", "rongguang": "Rongguang",
+            "宏光": "宏光", "hongguang": "Hongguang",
+            "之光": "之光", "sunshine": "Sunshine",
+            "缤果": "缤果", "bingo": "Bingo",
+            "星光": "星光", "starlight": "Starlight"
+        }
+        wuling_tokens = ["wuling", "五菱", "sgmw", "五菱汽车"] + list(wuling_series_map.keys())
+        search_scope = f"{brand} {model} {row.get('supplierName') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''} {row.get('ocr_raw') or ''} {row.get('_source_file') or ''}".lower()
+        if any(tok in search_scope for tok in wuling_tokens):
+            final_brand = "Wuling"
+            found_series = None
+            for s_kw, s_val in wuling_series_map.items():
+                if s_kw in search_scope:
+                    found_series = s_val
+                    break
+            if found_series:
+                curr_trim = str(trim_val or "").strip()
+                if found_series.lower() not in curr_trim.lower():
+                    trim_val = f"{found_series} {curr_trim}".strip()
 
         wait_days = to_number(row.get("orderWaitDays") or row.get("order_wait_days")) or parse_wait_days(row.get("leadTimeText") or row.get("orderWaitingPeriod"))
-        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}".upper()
-        steering = "右舵" if ("右舵" in steering_raw or "RHD" in steering_raw) else "左舵"
-        version_raw = f"{row.get('marketRegion') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}"
+        version_raw = f"{row.get('marketRegion') or ''} {row.get('version_type') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('_source_file') or ''}"
         version_type = None
         if "国内" in version_raw or "中规" in version_raw or "DOMESTIC" in version_raw.upper():
             version_type = "国内版"
         elif any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")) or "INTERNATIONAL" in version_raw.upper():
             version_type = "国际版"
+
+        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}".upper()
+        if "右舵" in steering_raw or "RHD" in steering_raw:
+            steering = "右舵"
+        elif "左舵" in steering_raw or "LHD" in steering_raw:
+            steering = "左舵"
+        elif version_type == "国内版":
+            steering = "左舵"
+        else:
+            steering = None
         status_raw = str(row.get("statusVehicle") or row.get("status_vehicle") or "").lower()
         if "现车" in status_raw or "stock" in status_raw:
             status_v = "现车"
@@ -769,10 +768,24 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                         pass
                 trim_val = None
 
-        trim_val = clean_trim_config(trim_val, final_brand, final_model, brand_raw, model_raw)
+        existing_note = row.get("notes") or row.get("remark") or row.get("备注")
+        trim_val, final_notes = clean_trim_config_and_extract_notes(
+            trim_val, final_brand, final_model, brand_raw, model_raw, existing_notes=existing_note
+        )
 
         conf_raw = row.get("confidence") or row.get("ocr_confidence") or row.get("_confidence")
-        conf_val = round(float(conf_raw), 2) if conf_raw is not None else 1.0
+        if conf_raw is not None:
+            conf_val = round(float(conf_raw), 2)
+        else:
+            # Field extraction completeness & quality score
+            score = 1.00
+            if official_price is None and exw_usd is None and fob_usd is None and fca_usd is None:
+                score -= 0.15
+            if not row.get("exteriorColor") and not row.get("exterior_color"):
+                score -= 0.05
+            if not trim_val:
+                score -= 0.05
+            conf_val = round(max(0.50, score), 2)
 
         m_year, m_month = parse_manufacture_year_month(row)
 
@@ -809,7 +822,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             "location": final_loc,
             "confidence": conf_val,
             "supplier": row.get("supplierName") or row.get("supplier"),
-            "notes": None,
+            "notes": final_notes,
             "source_file": row.get("_source_file") or row.get("source_file"),
             "content_hash": row.get("_content_hash") or row.get("content_hash"),
         }
@@ -840,29 +853,12 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         else:
             formatted.append(item)
 
-    # Post-process: Collapse single-vehicle spec sheet duplicates (e.g. Shandong EV / 山东小车工厂: 2 models total)
-    collapsed: list[dict[str, Any]] = []
-    seen_sd_models: set[str] = set()
-
-    for item in formatted:
-        if item.get("brand") == "Shandong EV" or "山东小车" in str(item.get("supplier") or ""):
-            model_key = item.get("model")
-            if model_key in seen_sd_models:
-                continue
-            seen_sd_models.add(model_key)
-            if not item.get("trim_config"):
-                if model_key == "KW":
-                    item["trim_config"] = "五门四座"
-                elif model_key == "XGP":
-                    item["trim_config"] = "两门两座"
-        collapsed.append(item)
-
-    # Post-process 2: Deduplicate exact identical records and collapse priceless redundant duplicate rows
+    # Post-process: Deduplicate exact identical records and collapse priceless redundant duplicate rows
     deduped: list[dict[str, Any]] = []
     seen_keys: set[tuple[Any, ...]] = set()
     priceless_keys: set[tuple[Any, ...]] = set()
 
-    for item in collapsed:
+    for item in formatted:
         sup = item.get("supplier") or ""
         b = item.get("brand") or ""
         m = item.get("model") or ""
@@ -885,8 +881,11 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             continue
         seen_keys.add(key)
 
-        # Collapse empty price-less duplicates (where all prices & colors are None)
+        # Filter out priceless section header rows from structured excel parsing (where all prices, colors, and trim are None)
         is_priceless = (cny is None and exw is None and fob is None and fca is None)
+        if item.get("_type") == "structured" and is_priceless and not ext and not t:
+            continue
+
         if is_priceless and not ext:
             p_key = (sup, b, m, t, src)
             if p_key in priceless_keys:
@@ -900,16 +899,33 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
 FEISHU_FIELD_MAP = get_feishu_field_map()
 
+FEISHU_TABLE_ALLOWED_FIELDS = {
+    "supplier", "brand", "model", "model_id", "trim_config", "trim_config_id",
+    "manufacture_year", "manufacture_month", "exterior_color", "interior_color",
+    "stock_quantity", "min_quantity", "max_quantity", "supplier_price_cny",
+    "cost_exw_usd", "cost_fob_usd", "cost_fca_usd", "location", "steering_setup",
+    "market_region", "confidence", "notes", "order_wait_days", "display_price_low",
+    "display_price_high", "review_progress", "reviewer", "ai_importer", "developer"
+}
+
 
 def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for db_col, feishu_col in FEISHU_FIELD_MAP.items():
+        if feishu_col not in FEISHU_TABLE_ALLOWED_FIELDS:
+            continue
         val = record.get(db_col)
         if val not in (None, ""):
             fields[feishu_col] = val
 
     if record.get("version_type"):
         fields["market_region"] = [record["version_type"]]
+
+    if "brand" in fields and isinstance(fields["brand"], list):
+        fields["brand"] = fields["brand"][0] if fields["brand"] else None
+        if not fields["brand"]:
+            fields.pop("brand", None)
+
     return fields
 
 
@@ -929,41 +945,6 @@ def save_candidates_to_db(db: sqlite3.Connection, candidates: list[dict[str, Any
 def mark_candidates_synced(db: sqlite3.Connection, ids: list[int]) -> None:
     db.executemany("UPDATE source_candidates SET status = 'synced' WHERE id = ?", [(i,) for i in ids])
     db.commit()
-
-
-def run_ocr(force: bool = False, backend: str | None = None, effort: str | None = None, method: str | None = None) -> bool:
-    cmd = [sys.executable, str(PROJECT_ROOT / "scripts" / "ocr_process.py"), "--engine", "mineru"]
-    if force:
-        cmd.append("--force")
-    env = os.environ.copy()
-    if backend:
-        env["MINERU_BACKEND"] = backend
-    if effort:
-        env["MINERU_EFFORT"] = effort
-    if method:
-        env["MINERU_METHOD"] = method
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env)
-    return result.returncode == 0
-
-
-def read_recognition_manifest() -> dict[str, Any] | None:
-    try:
-        return json.loads((RECOGNIZED_DIR / "manifest.json").read_text("utf-8"))
-    except Exception:
-        return None
-
-
-def has_recognized_files() -> bool:
-    manifest = read_recognition_manifest()
-    return bool(isinstance(manifest, dict) and manifest.get("files"))
-
-
-def has_recognition_errors() -> bool:
-    try:
-        data = json.loads((RECOGNIZED_DIR / "errors.json").read_text("utf-8"))
-    except Exception:
-        return False
-    return bool(data.get("errors"))
 
 
 def validate_ai_config() -> tuple[bool, str]:
@@ -994,41 +975,43 @@ def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dic
     parsed_dir = OUTPUT_DIR / "parsed"
     parsed_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
-    if not CLASSIFIED_DIR.exists():
-        return results
-    for file_path in sorted(CLASSIFIED_DIR.rglob("*")):
-        if not file_path.is_file() or file_path.suffix.lower() not in {".xlsx", ".xls", ".csv"}:
+
+    search_dirs = [PROJECT_ROOT / "input"]
+    processed_paths: set[Path] = set()
+
+    for target_dir in search_dirs:
+        if not target_dir.exists():
             continue
-        content_hash = compute_file_hash(file_path)
-        if _already_processed(db, content_hash):
-            print(f"Skipping already processed file: {file_path.name}")
-            continue
+        for file_path in sorted(target_dir.rglob("*")):
+            if not file_path.is_file() or file_path.suffix.lower() not in {".xlsx", ".xls", ".csv"}:
+                continue
+            resolved = file_path.resolve()
+            if resolved in processed_paths:
+                continue
+            processed_paths.add(resolved)
 
-        md_content = excel_to_markdown(file_path)
-        try:
-            rel_path = file_path.relative_to(CLASSIFIED_DIR)
-        except Exception:
-            rel_path = Path(file_path.name)
+            content_hash = compute_file_hash(file_path)
+            if _already_processed(db, content_hash):
+                print(f"Skipping already processed file: {file_path.name}")
+                continue
 
-        md_out_path = parsed_dir / rel_path.with_suffix(".md")
-        md_out_path.parent.mkdir(parents=True, exist_ok=True)
-        md_out_path.write_text(md_content, encoding="utf-8")
+            rows = parse_excel_file(file_path)
+            for row in rows:
+                row["_content_hash"] = content_hash
+                row["_source_file"] = file_path.name
 
-        # Flat stem output directly in output/parsed/
-        flat_stem = str(rel_path).replace("/", "__").replace("\\", "__")
-        (parsed_dir / f"{flat_stem}.md").write_text(md_content, encoding="utf-8")
+            try:
+                rel_path = file_path.relative_to(target_dir)
+            except Exception:
+                rel_path = Path(file_path.name)
 
-        rows = parse_excel_file(file_path)
-        for row in rows:
-            row["_content_hash"] = content_hash
-            row["_source_file"] = file_path.name
+            json_out_path = parsed_dir / rel_path.with_suffix(".json")
+            json_out_path.parent.mkdir(parents=True, exist_ok=True)
+            json_out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        json_out_path = parsed_dir / rel_path.with_suffix(".json")
-        json_out_path.parent.mkdir(parents=True, exist_ok=True)
-        json_out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+            results.append({"source": str(file_path), "outputPath": str(json_out_path), "rowCount": len(rows), "rows": rows})
+            _mark_processed(db, file_path.name, content_hash, dry_run)
 
-        results.append({"source": str(file_path), "outputPath": str(md_out_path), "rowCount": len(rows), "rows": rows})
-        _mark_processed(db, file_path.name, content_hash, dry_run)
     (parsed_dir / "manifest.json").write_text(json.dumps({
         "processedAt": datetime.now().isoformat(),
         "totalFiles": len(results),
@@ -1038,59 +1021,6 @@ def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dic
     return results
 
 
-def run_extraction(ocr_success: bool, db: sqlite3.Connection, dry_run: bool, allow_vision_fallback: bool = False) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    ocr_files_to_process: list[tuple[Path, str]] = []
-
-    if has_recognized_files():
-        manifest = read_recognition_manifest() or {}
-        for item in manifest.get("files", []):
-            source = Path(item.get("source") or item.get("output_path"))
-            output_path = Path(item["output_path"])
-            if not output_path.exists():
-                continue
-            hash_path = source if source.exists() else output_path
-            content_hash = compute_file_hash(hash_path)
-            if _already_processed(db, content_hash):
-                continue
-            ocr_files_to_process.append((output_path, item.get("source_rel") or output_path.name))
-
-    supported_doc_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".pptx", ".txt", ".md"}
-    if CLASSIFIED_DIR.exists():
-        for file_path in sorted(CLASSIFIED_DIR.rglob("*")):
-            if file_path.is_file() and file_path.suffix.lower() in supported_doc_extensions:
-                content_hash = compute_file_hash(file_path)
-                if not _already_processed(db, content_hash) and not any(fp == file_path for fp, _ in ocr_files_to_process):
-                    ocr_files_to_process.append((file_path, file_path.name))
-
-    if ocr_files_to_process:
-        print(f"🚀 Running Async Producer-Consumer Pipeline on {len(ocr_files_to_process)} OCR/input files...")
-        async_extracted = run_async_pipeline(ocr_files_to_process, concurrency=4)
-        for cand in async_extracted:
-            source_file = cand.get("_source_file") or cand.get("source_file", "")
-            if source_file and Path(source_file).exists():
-                cand["_content_hash"] = compute_file_hash(Path(source_file))
-        candidates.extend(async_extracted)
-        for out_path, rel_name in ocr_files_to_process:
-            c_hash = compute_file_hash(out_path)
-            _mark_processed(db, rel_name, c_hash, dry_run)
-    elif allow_vision_fallback:
-        vision_extensions = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf"}
-        if CLASSIFIED_DIR.exists():
-            for file_path in sorted(CLASSIFIED_DIR.rglob("*")):
-                if not file_path.is_file() or file_path.suffix.lower() not in vision_extensions:
-                    continue
-                content_hash = compute_file_hash(file_path)
-                if _already_processed(db, content_hash):
-                    continue
-                rows = process_vision_fallback_file(file_path)
-                for row in rows:
-                    row["_content_hash"] = content_hash
-                    row["_source_file"] = file_path.name
-                candidates.extend(rows)
-                _mark_processed(db, file_path.name, content_hash, dry_run)
-
-    return candidates
 
 
 def generate_empty_templates() -> tuple[Path, Path, Path]:
@@ -1210,7 +1140,31 @@ def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_del
     raise RuntimeError(str(last_error))
 
 
-def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> bool:
+def clear_feishu_table(access_token: str, app_token: str, table_id: str) -> int:
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    deleted_count = 0
+    while True:
+        list_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records?page_size=500"
+        res = fetch_with_retry("GET", list_url, headers=headers)
+        data = res.get("data", {})
+        items = data.get("items", [])
+        if not items:
+            break
+        record_ids = [item["record_id"] for item in items]
+
+        for i in range(0, len(record_ids), 500):
+            chunk = record_ids[i:i + 500]
+            del_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_delete"
+            fetch_with_retry("POST", del_url, headers=headers, json={"records": chunk})
+            deleted_count += len(chunk)
+
+        if not data.get("has_more"):
+            break
+    print(f"Cleared {deleted_count} existing records from Feishu table ({table_id}).")
+    return deleted_count
+
+
+def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False, clear_table: bool = True) -> bool:
     if dry_run:
         print("Dry run - skipping Feishu upload")
         return True
@@ -1231,6 +1185,10 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False) -> b
         print(f"Feishu auth failed: {token_data.get('msg')}")
         return False
     access_token = token_data["tenant_access_token"]
+
+    if clear_table:
+        clear_feishu_table(access_token, app_token, table_id)
+
     uploaded = 0
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create"
     for index in range(0, len(candidates), 100):
@@ -1253,21 +1211,8 @@ def run_pipeline(args: Any) -> int:
     init_environment()
     db = get_db()
     try:
-        if not args.skip_classify:
-            stats = classify_inputs(INPUT_DIR)
-            print(f"Classified {stats.classified} files; deleted {stats.deleted} junk files.")
-        ocr_success = True if args.skip_ocr else run_ocr(
-            force=args.force_ocr,
-            backend=getattr(args, "backend", None),
-            effort=getattr(args, "effort", None),
-            method=getattr(args, "method", None),
-        )
         excel_results = run_excel_parsing(db, args.dry_run)
-        ok, message = validate_ai_config()
-        ai_candidates = [] if not ok else run_extraction(ocr_success, db, args.dry_run, args.vision_fallback)
-        if not ok:
-            print(f"AI extraction skipped: {message}")
-        merged = [row for result in excel_results for row in result["rows"]] + ai_candidates
+        merged = [row for result in excel_results for row in result["rows"]]
         formatted = format_candidates_for_feishu(merged)
         if not formatted:
             print("No candidates extracted.")
@@ -1280,9 +1225,14 @@ def run_pipeline(args: Any) -> int:
             print(f"Staged {len(ids)} candidates into local SQLite (status: pending).")
             print("💡 Run 'python -m mineru_pipeline list' to inspect or edit candidates.")
             print("💡 Run 'python -m mineru_pipeline sync' to manually sync to Feishu.")
+        from .rule_engine import get_rule_engine
+        engine = get_rule_engine()
+        engine.record_run_telemetry(deterministic_count=len(formatted), ai_count=0)
+
         print(f"Pipeline stage 1-2 complete: {len(formatted)} candidates staged.")
         print(f"JSON: {json_path}")
         print(f"CSV: {csv_path}")
+        print(engine.get_telemetry_summary())
         return 0
     finally:
         db.close()
@@ -1321,9 +1271,18 @@ def action_edit(record_id: str, key: str, value: str) -> int:
     init_environment()
     db = get_db()
     try:
+        old_row = db.execute("SELECT * FROM source_candidates WHERE id = ?", (record_id,)).fetchone()
+        old_val = dict(old_row).get(key) if old_row else None
+
         db.execute(f"UPDATE source_candidates SET {key} = ? WHERE id = ?", (value, record_id))
         db.commit()
         print(f"Updated record #{record_id}: {key} = {value}")
+
+        from .rule_engine import get_rule_engine
+        engine = get_rule_engine()
+        rule = engine.distill_rule_from_edit(key, old_val, value, context=f"record_{record_id}")
+        if rule:
+            print(f"💡 已自动提炼并持久化保存规则: [{key}] '{old_val}' -> '{value}'")
         return 0
     finally:
         db.close()
@@ -1366,3 +1325,46 @@ def action_sync(dry_run: bool = False) -> int:
         return 0
     finally:
         db.close()
+
+
+import argparse
+import sys
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="MinerU vehicle source recognition pipeline")
+    parser.add_argument("positional_action", nargs="?", help="Optional action: run/list/edit/delete/sync/clean")
+    parser.add_argument("--action", choices=["run", "list", "edit", "delete", "sync", "clean"], help="Pipeline action")
+    parser.add_argument("--dry-run", action="store_true", help="Generate outputs without SQLite staging or Feishu upload")
+    parser.add_argument("--id", dest="record_id", help="Record id for edit/delete")
+    parser.add_argument("--key", help="Column key for edit")
+    parser.add_argument("--val", help="New value for edit")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    action = args.action or args.positional_action or "run"
+    if action == "run":
+        return run_pipeline(args)
+    if action == "list":
+        return action_list()
+    if action == "edit":
+        if not args.record_id or not args.key or args.val is None:
+            parser.error("edit requires --id <id> --key <field> --val <value>")
+        return action_edit(args.record_id, args.key, args.val)
+    if action == "delete":
+        if not args.record_id:
+            parser.error("delete requires --id <id>")
+        return action_delete(args.record_id)
+    if action == "sync":
+        return action_sync(args.dry_run)
+    if action == "clean":
+        return action_clean()
+    parser.error(f"Unknown action: {action}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

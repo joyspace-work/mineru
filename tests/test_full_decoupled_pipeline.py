@@ -120,67 +120,22 @@ def test_full_decoupled_pipeline_end_to_end(
     """
     project_dir = tmp_path / "project"
     input_dir = project_dir / "input"
-    classified_dir = input_dir / "classified"
-    pdfs_dir = classified_dir / "pdfs"
-    excels_dir = classified_dir / "excels"
-    texts_dir = classified_dir / "texts"
     output_dir = project_dir / "output"
 
-    pdfs_dir.mkdir(parents=True)
-    excels_dir.mkdir(parents=True)
-    texts_dir.mkdir(parents=True)
+    excel_dir = input_dir / "BYD Direct" / "Nansha" / "BYD" / "Seagull"
+    excel_dir.mkdir(parents=True)
     output_dir.mkdir(parents=True)
 
-    sample_pdf = pdfs_dir / "sample_car_source.pdf"
-    sample_pdf.write_bytes(b"%PDF-1.4 Mock Car Quotation")
-
-    sample_txt = texts_dir / "sample_note.txt"
-    sample_txt.write_text("BYD Seagull White Stock 5 Price 65000 CNY", encoding="utf-8")
+    sample_csv = excel_dir / "sample_car_source.csv"
+    sample_csv.write_text("品牌,车型,配置,EXW(USD),数量,等待天数\nBYD,Seagull,Flying Edition,68000,10,42", encoding="utf-8-sig")
 
     monkeypatch.setattr("mineru_pipeline.pipeline.PROJECT_ROOT", project_dir)
     monkeypatch.setattr("mineru_pipeline.pipeline.INPUT_DIR", input_dir)
-    monkeypatch.setattr("mineru_pipeline.pipeline.CLASSIFIED_DIR", classified_dir)
     monkeypatch.setattr("mineru_pipeline.pipeline.OUTPUT_DIR", output_dir)
-    monkeypatch.setattr("mineru_pipeline.pipeline.RECOGNIZED_DIR", output_dir / "recognized" / "mineru")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key-mock")
 
-    # Mock SDK parse engine
-    def fake_process_file_with_sdk(file_path: Path, out_dir: Path, force: bool = False):
-        from mineru_pipeline.ocr_engine import OCRResult
-        md_file = out_dir / f"{file_path.stem}.md"
-        md_file.write_text("# 比亚迪 海鸥 Quotation\nStock: 10\nPrice: 68000 CNY", encoding="utf-8")
-        return OCRResult(
-            source_path=file_path,
-            markdown_path=md_file,
-            markdown_content=md_file.read_text(encoding="utf-8"),
-            avg_confidence=0.88,
-            is_cached=False,
-        )
-
-    # Mock LLM Pydantic Retry
-    def fake_call_ai_pydantic_retry(content: str, supplier_name: str = "", max_retries: int = 3):
-        return {
-            "candidates": [
-                {
-                    "brand": "比亚迪",
-                    "modelName": "海鸥",
-                    "trimName": "Flying Edition",
-                    "color": "暖阳白",
-                    "stockQuantity": 10,
-                    "priceExw": 68000,
-                    "priceExwCurrency": "CNY",
-                    "leadTimeText": "4-6周",
-                    "supplierName": supplier_name or "BYD Direct",
-                }
-            ]
-        }
-
-    monkeypatch.setattr("mineru_pipeline.async_pipeline.process_file_with_sdk", fake_process_file_with_sdk)
-    monkeypatch.setattr("mineru_pipeline.async_pipeline.call_ai_with_pydantic_retry", fake_call_ai_pydantic_retry)
-    monkeypatch.setattr("mineru_pipeline.llm_extractor.call_ai_with_pydantic_retry", fake_call_ai_pydantic_retry)
-
     # Execute main CLI run pipeline
-    ret = main(["run", "--skip-classify", "--skip-ocr"])
+    ret = main(["run"])
     assert ret == 0
 
     captured = capsys.readouterr()

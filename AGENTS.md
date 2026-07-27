@@ -1,109 +1,29 @@
 # 飞书多维表格车源自动同步 Agent 规则说明书 (AGENTS.md)
 
-你是一个专门负责“车源数据解析与飞书多维表格同步”的 AI 助手。
-请先仔细阅读并遵循当前目录下的 `AGENTS.md` 文件。接下来用户发给你的一切车源图片或 Excel 数据，都请按里面的规则进行解析，并自动运行 `lark_sync.py` 进行本地暂存，引导用户核对后再同步飞书。
+你是一个专门负责“车源 Excel 数据解析与飞书多维表格同步”的 AI 助手。
+本工程已全面重构升级为 **100% 原生 Excel 极速解析架构**（免去一切 OCR 干扰），并支持 **4 级标准目录结构**元数据自动继承。
 
 ---
 
 ## 1. 结构化提取与映射规则
 
 > [!IMPORTANT]
-> **🚨 核心原则：数据真实性与封闭性原则**
-> - **数据100%忠于源头**：所有解析并录入飞书表格的数据，必须且只能完全来自用户发送的原始车源图片、Excel或文本数据源。
-> - **严禁扩充或上网调研**：除了品牌（Brand）和车型（Model）两个字段外，其他所有数据均严格执行封闭性原则。如果原始车源表中未提供官方建议指导价、成本价等信息，则必须留空。
-> - **无中生有必须留空**：对于除品牌 and 车型外的其他字段，如果原始车源表中未直接提供，则 must 一律保持留空（填写 `null` 或空字符串），只做纯粹的结构化整理，不做任何数据扩充与虚假脑补。
-> - **🚨 核心原则：车型与品牌规范化原则**
->   - **车源型号与车型库一一对应**：`Vehicle_Models` 是公开信息车型库，`Vehicles` 是我们的车源。车源的车型（`Model`）与品牌（`Brand`）在提取录入时，必须严格与 `Vehicle_Models` 表中的官方英文/拼音车型库保持 100% 一一对应。
->   - **提取时自动转译**：当你（Agent）从中文车源中提取品牌 and 车型时，**必须**使用下表自动将其转译为官方格式，绝对禁止直接写入中文车型名（如“海鸥”、“极氪001”）或中文品牌名。
-> 
-> #### 🚨 车型与品牌规范化映射对照表 (必须 100% 对应 Vehicle_Models 车型库)
-> 
-> | 原始中文品牌/车型 | 官方写入 Brand | 官方写入 Model |
-> | :--- | :--- | :--- |
-> | 问界 M9 | **`AITO`** | **`M9`** |
-> | 比亚迪 海豚 / Dolphin | **`BYD`** | **`Dolphin`** |
-> | 比亚迪 汉 EV / Han EV | **`BYD`** | **`Han EV`** |
-> | 比亚迪 秦 PLUS / Qin PLUS EV | **`BYD`** | **`Qin PLUS EV`** |
-> | 比亚迪 海鸥 / Seagull | **`BYD`** | **`Seagull`** |
-> | 比亚迪 海豹 / Seal | **`BYD`** | **`Seal`** |
-> | 比亚迪 海狮05EV / 海狮05 EV | **`BYD`** | **`Sealion 7`** |
-> | 比亚迪 海狮07EV / 海狮07 EV / 海狮 7 | **`BYD`** | **`Sealion 7`** |
-> | 比亚迪 鲨鱼 / Shark | **`BYD`** | **`Shark`** |
-> | 比亚迪 鲨鱼 6 / Shark 6 | **`BYD`** | **`Shark`** |
-> | 比亚迪 唐 L EV / Tang L EV | **`BYD`** | **`Tang L EV`** |
-> | 比亚迪 元 UP / Yuan UP | **`BYD`** | **`Yuan UP`** |
-> | 长安 糯玉米 / Lumin | **`Changan`** | **`Lumin`** |
-> | 长安启源 Q05 / Q05 | **`Changan Nevo`** | **`Q05`** |
-> | 深蓝 S05 / S05 | **`Deepal`** | **`S05`** |
-> | 深蓝 S07 / S07 | **`Deepal`** | **`S07`** |
-> | 东风 纳米01 / Nammi 01 | **`Dongfeng`** | **`Nammi 01`** |
-> | 东风纳米 纳米01 / 纳米01 | **`Dongfeng`** | **`Nammi 01`** |
-> | 东风 锐骐6 EV / Rich 6 EV | **`Dongfeng`** | **`Rich 6 EV`** |
-> | 方程豹 豹3 / Leopard 3 / 铁3 | **`Fangchengbao`** | **`Ti 3`** |
-> | 方程豹 豹5 / Leopard 5 | **`Fangchengbao`** | **`Leopard 5`** |
-> | 方程豹 豹7 / Leopard 7 | **`Fangchengbao`** | **`Ti 7`** |
-> | 方程豹 豹8 / Leopard 8 | **`Fangchengbao`** | **`Leopard 8`** |
-> | 方程豹 钛3 / Ti 3 | **`Fangchengbao`** | **`Ti 3`** |
-> | 方程豹 钛7 / TI7 / Ti 7 | **`Fangchengbao`** | **`Ti 7`** |
-> | 比亚迪 TI7 | **`Fangchengbao`** | **`Ti 7`** |
-> | 远程 星享V / Xingxiang V | **`Farizon`** | **`Xingxiang V`** |
-> | 广汽埃安 RT / RT | **`GAC Aion`** | **`RT`** |
-> | 广汽埃安 V / Aion V / V | **`GAC Aion`** | **`V`** |
-> | 广汽埃安 i60 / i60 | **`GAC Aion`** | **`i60`** |
-> | 埃安 Y Plus / Aion Y Plus | **`GAC Motor`** | **`Aion Y Plus`** |
-> | 长城 炮 EV / Cannon EV | **`GWM`** | **`Cannon EV`** |
-> | 吉利 银河 E5 / Galaxy E5 | **`Geely`** | **`Galaxy E5`** |
-> | 吉利 银河 M9 / Galaxy M9 | **`Geely`** | **`Galaxy M9`** |
-> | 吉利 几何 / Geome / 熊猫 | **`Geely`** | **`Geome`** |
-> | 吉利 几何C / Geometry C | **`Geely`** | **`Geometry C`** |
-> | 红旗 E-HS9 | **`Hongqi`** | **`E-HS9`** |
-> | 零跑 D19 | **`Leapmotor`** | **`D19`** |
-> | 零跑 Lafa 5 | **`Leapmotor`** | **`Lafa 5`** |
-> | 零跑 T03 | **`Leapmotor`** | **`T03`** |
-> | 理想 L6 | **`Li Auto`** | **`L6`** |
-> | 领徽 e7 / e7 | **`Linghui`** | **`e7`** |
-> | 名爵 MG4 EV / MG4 EV | **`MG`** | **`MG4 EV`** |
-> | 雷达 RD6 | **`Radar`** | **`RD6`** |
-> | 享界 S9 | **`Stelato`** | **`S9`** |
-> | 坦克 500 / Tank 500 | **`Tank`** | **`500 Hi4-T`** |
-> | 岚图 泰山 X8 / Taishan X8 | **`Voyah`** | **`Taishan X8`** |
-> | 五菱 缤果 Plus / Bingo Plus | **`Wuling`** | **`Bingo Plus`** |
-> | 小鹏 G9 / G9 | **`XPENG`** | **`G9`** |
-> | 小米 SU7 Ultra | **`Xiaomi`** | **`SU7 Ultra`** |
-> | 小米 YU7 | **`Xiaomi`** | **`YU7`** |
-> | 山东小车 卡王 / 卡王KW | **`Shandong EV`** | **`KW`** |
-> | 山东小车 小钢炮 / 小钢炮XGP | **`Shandong EV`** | **`XGP`** |
-> | 极氪 001 | **`Zeekr`** | **`001`** |
-> | 极氪 9X | **`Zeekr`** | **`9X`** |
+> **🚨 核心原则：数据真实性与目录上下文继承**
+> - **100% 原生 Excel 数据源**：所有解析并录入飞书表格的数据，均直接来自原生 Excel 表格及 4 级标准目录层级。
+> - **4 级目录上下文自动继承**：
+>   - **1 级文件夹**：供应商 `Supplier`（如 `广州恩特湃`）
+>   - **2 级文件夹**：提货地点 `Location`（如 `南沙` / `霍尔果斯基地`）
+>   - **3 级文件夹**：品牌 `Brand`（如 `BYD`）
+>   - **4 级文件夹**：具体车型 `Model`（如 `海狮05`）
+>   - 若源 Excel 文件名极其简单（如 `价格表.xlsx`），单元格未写明品牌/车型/地点/供应商，系统将**自动从 4 级目录路径中提取继承**，绝不丢失任何上下文。
+> - **数据100%忠于源头**：除了品牌（Brand）和车型（Model）由字典规范为英文/拼音外，其他非提供字段一律保持留空（`null`），严禁脑补与扩充。
+> - **🚨 车型与品牌规范化原则**：车型 (`Model`) 与品牌 (`Brand`) 必须转译为官方英文/拼音格式，严格遵循配置文件 `config/brand_model_mapping.json` 与 `src/mineru_pipeline/schema.py`。
 
-对于接收到的任意格式车源文本、图片或 Excel 文件，必须将其精确提取并清洗为符合 `src/mineru_pipeline/schema.py` 单点真实源 (SSOT) 规范的数据结构。
+### 2. 字段规格与单点真实源 (SSOT)
 
-### 字段规格表（严格对应 `schema.py` 核心字段定义）：
+对于接收到的任意格式车源文本、图片或 Excel 文件，必须将其精确提取并清洗为符合 **`src/mineru_pipeline/schema.py`** 单点真实源 (SSOT) 规范的数据结构。
 
-1. **`supplier`** (`supplier` / 文本): 一级供应商名称。提至最前排显示。
-2. **`brand`** (`brand` / 单选): 车辆品牌。必须转译为官方英文/拼音格式（如 `BYD`、`Zeekr` 等）。
-3. **`model`** (`model` / 文本): 车型名称。必须转译为官方英文/拼音格式（如 `Dolphin`、`Seagull` 等）。
-4. **`model_id`** (`model_id` / 文本): 官方车型库车型 ID（如 `MDL-002`）。匹配 `Vehicle_Models` 得到；未匹配到保持留空（`null`）。
-5. **`trim_config`** (`trim_config` / 文本): 细分车型/配置版本（对应 `vehicle_variants` 中的 `variant` 细分车型描述，如 `2023款 DM-i 冠军版 55KM 领先型`、`300Pro巡航版`）。必须清洗剔除重复包含的品牌/车型名称与“合计/小计”等噪声，纯数字指导价严禁写入此列，须重定向至指导价字段。
-6. **`manufacture_year`** (`manufacture_year` / 整数): 生产年份（四位整数，如 `2026`，可空 `null`）。
-7. **`manufacture_month`** (`manufacture_month` / 整数): 生产月份（1-12 整数，如 `7`，可空 `null`）。
-8. **`exterior_color`** (`exterior_color` / 文本): 外观颜色（如 `雪域白`）。须剥离前置数量数字。
-9. **`interior_color`** (`interior_color` / 文本): 内饰颜色（如 `玄武黑`）。
-10. **`stock_quantity`** (`stock_quantity` / 整数): 库存数量。
-11. **`min_quantity`** (`min_quantity` / 整数): 阶梯起订量下限。普通单报价默认为 `1`。
-12. **`max_quantity`** (`max_quantity` / 整数): 阶梯起订量上限。无上限填 `null`。
-13. **`lead_time`** (`lead_time` / 日期): 具体交付日期。统一为 `YYYY-MM-DD` 格式。若属于等待周期则留空。
-14. **`order_wait_days`** (`order_wait_days` / 整数): 订单等待整数天数（根据等待周期/周/月文本自动换算为天数）。
-15. **`steering_setup`** (`steering_setup` / 单选): 舵向位置。精确单选映射为 `"左舵"` 或 `"右舵"`。
-16. **`version_type`** (`version_type` / 单选): 国际/国内版本分类。精确单选填入 `"国内版"` 或 `"国际版"`。
-17. **`status_vehicle`** (`status_vehicle` / 单选): 车辆状态。精确单选映射为 `"现车"`、`"在途"` 或 `"无具体信息"`。
-18. **`supplier_price_cny`** (`supplier_price_cny` / 整数): 供应商指导价/报价(人民币)。严格忠于源数据解析，源数据若未提供必须留空 (`null`)，绝对禁止凭空猜测或脑补。（注：6-9 倍汇率比例仅作为校验原始币种与纠错辅助参考）。
-19. **`cost_exw_usd`** (`cost_exw_usd` / 整数): EXW 成本价(美金)。四舍五入纯整数。单价低于 $1,000 美金（如 3、205、301 等误采数字）或高于 $200,000 美金一律视为无效数据自动剔除留空。
-20. **`cost_fob_usd`** (`cost_fob_usd` / 整数): FOB 成本价(美金)。四舍五入纯整数。单价低于 $1,000 美金或高于 $200,000 美金一律视为无效数据自动剔除留空。
-21. **`cost_fca_usd`** (`cost_fca_usd` / 整数): FCA 成本价(美金)。四舍五入纯整数。单价低于 $1,000 美金或高于 $200,000 美金一律视为无效数据自动剔除留空。
-22. **`location`** (`location` / 文本): 提货地点/港口（如 `南沙`、`深圳`），剔除贸易条款前缀。
-23. **`confidence`** (`confidence` / 浮点数): 识别置信度 (0.00 - 1.00，由 OCR/算法引擎生成)。
-24. **`notes`** (`notes` / 文本): 人工与系统补充备注。记录车源原始描述组合文本、车源额外备注及未结构化的补充说明信息。
+所有 24 个字段的具体定义、数据类型（如数字必须为 INTEGER）、枚举约束（如舵向: 左舵/右舵，国内版自动确定为左舵）及处理边界，均**严格以 `src/mineru_pipeline/schema.py` 中的 `VEHICLE_FIELDS` 声明为准**。
 
 ---
 
@@ -255,6 +175,32 @@ python -m mineru_pipeline run
 python -m mineru_pipeline sync
 ```
 脚本会将本地 SQLite 中所有状态为 `pending` 的记录同步至飞书多维表格，同步成功后自动将状态置为 `synced`。
+
+
+---
+
+## 6. 标准运行流与规则自动提炼防越权约束 (SOP & Governance Rules)
+
+为了确保后续任何 AI Agent（或开发者脚本）接手本工程时都能遵循同一套**“自我学习闭环”**，所有 AI 助手必须严格遵循以下三层约束：
+
+### 6.1 强制使用标准 CLI 修正命令（严禁直接写数据库）
+- **🚨 铁律**：当需要修改或校正任何候选车源数据时，**必须且只能**调用标准 CLI 命令：
+  ```bash
+  python -m mineru_pipeline edit --id <id> --key <field> --val <value>
+  ```
+- **❌ 严禁行为**：**绝对禁止** Agent 直接编写 Python 代码或 Bash 执行 SQLite 原生 `UPDATE source_candidates ...` SQL 语句！
+- **为什么必须这样**：因为直接操作 SQLite 会绕过系统的 **`RuleEngine` 提炼引擎**，导致系统无法自动学习该次修改，从而在下次遇到同类数据时重蹈覆辙。使用 `edit` 命令会自动触发规则蒸馏并持久化到 `config/rules_knowledge_base.json`。
+
+### 6.2 5 步标准运行流 (Standard Agent SOP)
+任何 AI Agent 接手工作时，必须严格按照以下 SOP 顺序执行：
+1. **解析提取与暂存**：`python -m mineru_pipeline run`
+2. **候选结果盘点**：`python -m mineru_pipeline list`
+3. **交互校对与规则学习**：`python -m mineru_pipeline edit --id <id> --key <key> --val <val>`（自动蒸馏规则）
+4. **废弃废件删除**：`python -m mineru_pipeline delete --id <id>`
+5. **一键同步飞书**：`python -m mineru_pipeline sync`
+
+### 6.3 零 AI Token 消耗保障与验证
+- 每次运行 `python -m mineru_pipeline run` 结束后，必须检查并向用户汇报控制台打印的 **Schema Intelligence Telemetry Report**，确认确定性极速引擎 (Deterministic Fast-Path) 命中率维持在 95%+ 以上。
 
 
 

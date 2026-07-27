@@ -1,3 +1,9 @@
+"""
+[辅助工具脚本] 飞书 BitTable 全表数据拉取备份工具
+功能：通过飞书 OpenAPI 导出 Base Token 下的所有数据表为本地 JSON 文件。
+用法：python scripts/pull_feishu_raw.py
+"""
+
 import json
 import urllib.request
 import urllib.parse

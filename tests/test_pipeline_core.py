@@ -5,7 +5,6 @@ from mineru_pipeline.pipeline import (
     format_candidates_for_feishu,
     get_db,
     record_to_feishu_fields,
-    run_ocr,
 )
 
 
@@ -59,26 +58,7 @@ def test_excel_header_aliases_include_manufacture_year_month():
     assert normalize_header_cell("生产月份") == "manufactureMonth"
 
 
-def test_run_ocr_passes_backend_configuration(monkeypatch):
-    captured = {}
 
-    def fake_run(cmd, cwd=None, env=None):
-        captured["cmd"] = cmd
-        captured["cwd"] = cwd
-        captured["env"] = env
-
-        class Result:
-            returncode = 0
-
-        return Result()
-
-    monkeypatch.setattr("mineru_pipeline.pipeline.subprocess.run", fake_run)
-
-    assert run_ocr(force=True, backend="hybrid-engine", effort="medium", method="ocr")
-    assert "--force" in captured["cmd"]
-    assert captured["env"]["MINERU_BACKEND"] == "hybrid-engine"
-    assert captured["env"]["MINERU_EFFORT"] == "medium"
-    assert captured["env"]["MINERU_METHOD"] == "ocr"
 
 
 def test_sqlite_schema_has_manufacture_year_month(tmp_path: Path):

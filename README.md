@@ -118,7 +118,7 @@ flowchart TD
     subgraph Cleaning["4. 规则引擎与品牌/车型对齐 (Rule Engine)"]
         X --> N["确定性规则引擎"]
         M --> N
-        N --> O["读取 config/brand_model_mapping.json<br/>自动标准化中英文品牌与车型"]
+        N --> O["读取 schema.py (SSOT)<br/>自动标准化中英文品牌与车型"]
         O --> P["阶梯报价拆分与多配色方案拆分"]
     end
 

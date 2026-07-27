@@ -1,3 +1,9 @@
+"""
+[辅助测试脚本] 研发测试专用：清空并强刷数据至飞书 vehicle_b 表 (tblbihrupDmLn6RH)
+功能：读取 output/final/ 中的 JSON 结果，清空 vehicle_b 测试表并重新灌入。
+用法：python scripts/sync_to_vehicle_b.py
+"""
+
 from __future__ import annotations
 
 import json

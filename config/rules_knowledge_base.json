@@ -1,0 +1,160 @@
+{
+  "version": "1.0.0",
+  "header_aliases": {
+    "modelName": [
+      "车型",
+      "型号",
+      "车系",
+      "项目名称",
+      "车辆名称",
+      "子品牌",
+      "车型描述"
+    ],
+    "trimConfig": [
+      "配置",
+      "版型",
+      "版本",
+      "配置代号",
+      "配置版本",
+      "电池容量",
+      "续航"
+    ],
+    "exteriorColor": [
+      "外观颜色",
+      "外观色",
+      "车色",
+      "颜色",
+      "外观"
+    ],
+    "interiorColor": [
+      "内饰颜色",
+      "内饰色",
+      "内饰"
+    ],
+    "priceExw": [
+      "EXW",
+      "EXW报价",
+      "工厂交货价",
+      "出厂价",
+      "裸车价"
+    ],
+    "priceFob": [
+      "FOB",
+      "FOB报价",
+      "离岸价"
+    ],
+    "priceFca": [
+      "FCA",
+      "FCA报价",
+      "货运承运人价"
+    ],
+    "priceCif": [
+      "CIF",
+      "到岸价"
+    ],
+    "supplierPriceCny": [
+      "采购价",
+      "批价",
+      "底价",
+      "优惠价",
+      "全款裸车价",
+      "供货价",
+      "单价"
+    ],
+    "officialSuggestedPriceCny": [
+      "指导价",
+      "官方指导价",
+      " MSRP",
+      "厂方指导价"
+    ],
+    "stockQuantity": [
+      "现车数量",
+      "台数",
+      "数量",
+      "库存",
+      "数量（台）",
+      "配额"
+    ],
+    "location": [
+      "提货地",
+      "提货地点",
+      "港口",
+      "发货地",
+      "仓库",
+      "存放地"
+    ],
+    "steering": [
+      "舵向",
+      "方向盘位置",
+      "驱动方向"
+    ],
+    "manufactureYear": [
+      "manufacture_year",
+      "manufactureyear",
+      "生产年份",
+      "年款"
+    ],
+    "manufactureMonth": [
+      "manufacture_month",
+      "manufacturemonth",
+      "生产月份"
+    ],
+    "manufactureYearMonth": [
+      "生产日期",
+      "出厂日期"
+    ],
+    "orderWaitDays": [
+      "等待天数",
+      "货期",
+      "交货期",
+      "等待时间",
+      "等待周数"
+    ],
+    "vinStatus": [
+      "车架号状态",
+      "VIN码状态",
+      "随车手续"
+    ],
+    "notes": [
+      "备注",
+      "说明",
+      "促销送充电桩",
+      "条款"
+    ]
+  },
+  "trade_location_cleaners": [
+    "^FCA\\s*",
+    "^EXW\\s*",
+    "^FOB\\s*",
+    "^CIF\\s*"
+  ],
+  "wuling_model_code_mappings": {
+    "LZW6394": "Wuling Sunshine",
+    "LZW6400": "Wuling Rongguang",
+    "LZW6430": "Wuling Hongguang",
+    "LZW7000": "Wuling Hongguang MINI EV",
+    "LZW7001": "Wuling Bingo",
+    "LZW7002": "Wuling Starlight"
+  },
+  "user_learned_rules": [
+    {
+      "type": "field_override",
+      "field": "exterior_color",
+      "raw_pattern": "White",
+      "target_value": "Black",
+      "context": "record_1"
+    },
+    {
+      "type": "field_override",
+      "field": "model",
+      "raw_pattern": "",
+      "target_value": "TEST_MODEL",
+      "context": "record_1"
+    }
+  ],
+  "telemetry": {
+    "total_runs": 17,
+    "deterministic_hits": 1163,
+    "ai_fallbacks": 0
+  }
+}

@@ -1,7 +1,34 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Sequence
+
+from pydantic import BaseModel, Field
+
+class VehicleCandidateModel(BaseModel):
+    brand: str | None = None
+    modelName: str | None = None
+    trimConfig: str | None = None
+    exteriorColor: str | None = None
+    interiorColor: str | None = None
+    priceExw: float | None = None
+    priceFob: float | None = None
+    priceFca: float | None = None
+    priceCif: float | None = None
+    supplierPriceCny: float | None = None
+    officialSuggestedPriceCny: float | None = None
+    stockQuantity: int | None = None
+    location: str | None = None
+    steering: str | None = None
+    vinStatus: str | None = None
+    notes: str | None = None
+
+class VehicleBatchResponse(BaseModel):
+    candidates: list[VehicleCandidateModel] = Field(default_factory=list)
+
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -148,7 +175,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
         feishu_name="order_wait_days",
         pydantic_name="orderWaitDays",
         sql_type="INTEGER",
-        excel_aliases=("等待天数", "交期天数", "等待周期", "订车周期", "等待时间", "交期", "orderwaitdays", "orderwaitingperiod"),
+        excel_aliases=("等待天数", "交期天数", "等待周期", "订车周期", "等待时间", "交期", "货期", "orderwaitdays", "orderwaitingperiod"),
         feishu_type="number",
         description="订单等待整数天数(整数)",
     ),
@@ -315,3 +342,339 @@ def get_pydantic_vehicle_schema():
     field_definitions["priceFca"] = (int | str | None, Field(default=None, description="FCA价格"))
 
     return create_model("VehicleCandidateSchema", **field_definitions)
+
+
+# ==============================================================================
+# BRAND & MODEL OFFICIAL MAPPING DICTIONARY (SSOT)
+# ==============================================================================
+BRAND_MODEL_MAPPINGS: list[dict[str, str]] = [
+    {"raw_brand": "问界", "raw_model": "M9", "brand": "AITO", "model": "M9"},
+    {"raw_brand": "比亚迪", "raw_model": "海豚", "brand": "BYD", "model": "Dolphin"},
+    {"raw_brand": "比亚迪", "raw_model": "Dolphin", "brand": "BYD", "model": "Dolphin"},
+    {"raw_brand": "比亚迪", "raw_model": "汉 EV", "brand": "BYD", "model": "Han EV"},
+    {"raw_brand": "比亚迪", "raw_model": "Han EV", "brand": "BYD", "model": "Han EV"},
+    {"raw_brand": "比亚迪", "raw_model": "秦 PLUS", "brand": "BYD", "model": "Qin PLUS EV"},
+    {"raw_brand": "比亚迪", "raw_model": "Qin PLUS EV", "brand": "BYD", "model": "Qin PLUS EV"},
+    {"raw_brand": "比亚迪", "raw_model": "海鸥", "brand": "BYD", "model": "Seagull"},
+    {"raw_brand": "比亚迪", "raw_model": "Seagull", "brand": "BYD", "model": "Seagull"},
+    {"raw_brand": "比亚迪", "raw_model": "海豹", "brand": "BYD", "model": "Seal"},
+    {"raw_brand": "比亚迪", "raw_model": "Seal", "brand": "BYD", "model": "Seal"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮05EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮05 EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮05ev", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮 05", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮05", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮05EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮05 EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮05ev", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮 05", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮05", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮07EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮07EV", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "海狮 7", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "海狮 7", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "Sealion 7", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "BYD", "raw_model": "Sealion 7", "brand": "BYD", "model": "Sealion 7"},
+    {"raw_brand": "比亚迪", "raw_model": "鲨鱼", "brand": "BYD", "model": "Shark"},
+    {"raw_brand": "比亚迪", "raw_model": "鲨鱼 6", "brand": "BYD", "model": "Shark"},
+    {"raw_brand": "比亚迪", "raw_model": "Shark 6", "brand": "BYD", "model": "Shark"},
+    {"raw_brand": "比亚迪", "raw_model": "唐 L EV", "brand": "BYD", "model": "Tang L EV"},
+    {"raw_brand": "比亚迪", "raw_model": "Tang L EV", "brand": "BYD", "model": "Tang L EV"},
+    {"raw_brand": "比亚迪", "raw_model": "元 UP", "brand": "BYD", "model": "Yuan UP"},
+    {"raw_brand": "比亚迪", "raw_model": "Yuan UP", "brand": "BYD", "model": "Yuan UP"},
+    {"raw_brand": "长安", "raw_model": "糯玉米", "brand": "Changan", "model": "Lumin"},
+    {"raw_brand": "长安", "raw_model": "Lumin", "brand": "Changan", "model": "Lumin"},
+    {"raw_brand": "长安", "raw_model": "Q05", "brand": "Changan", "model": "Q05"},
+    {"raw_brand": "深蓝", "raw_model": "S05", "brand": "Deepal", "model": "S05"},
+    {"raw_brand": "深蓝", "raw_model": "S07", "brand": "Deepal", "model": "S07"},
+    {"raw_brand": "东风", "raw_model": "纳米01", "brand": "Dongfeng", "model": "Nammi 01"},
+    {"raw_brand": "东风", "raw_model": "锐骐6 EV", "brand": "Dongfeng", "model": "Rich 6 EV"},
+    {"raw_brand": "方程豹", "raw_model": "豹3", "brand": "Fangchengbao", "model": "Ti 3"},
+    {"raw_brand": "方程豹", "raw_model": "铁3", "brand": "Fangchengbao", "model": "Ti 3"},
+    {"raw_brand": "方程豹", "raw_model": "钛3", "brand": "Fangchengbao", "model": "Ti 3"},
+    {"raw_brand": "方程豹", "raw_model": "Ti 3", "brand": "Fangchengbao", "model": "Ti 3"},
+    {"raw_brand": "方程豹", "raw_model": "豹5", "brand": "Fangchengbao", "model": "Leopard 5"},
+    {"raw_brand": "方程豹", "raw_model": "Leopard 5", "brand": "Fangchengbao", "model": "Leopard 5"},
+    {"raw_brand": "方程豹", "raw_model": "豹7", "brand": "Fangchengbao", "model": "Ti 7"},
+    {"raw_brand": "方程豹", "raw_model": "钛7", "brand": "Fangchengbao", "model": "Ti 7"},
+    {"raw_brand": "方程豹", "raw_model": "TI7", "brand": "Fangchengbao", "model": "Ti 7"},
+    {"raw_brand": "方程豹", "raw_model": "Ti 7", "brand": "Fangchengbao", "model": "Ti 7"},
+    {"raw_brand": "方程豹", "raw_model": "豹8", "brand": "Fangchengbao", "model": "Leopard 8"},
+    {"raw_brand": "方程豹", "raw_model": "Leopard 8", "brand": "Fangchengbao", "model": "Leopard 8"},
+    {"raw_brand": "远程", "raw_model": "星享V", "brand": "Farizon", "model": "Xingxiang V"},
+    {"raw_brand": "广汽埃安", "raw_model": "RT", "brand": "GAC Aion", "model": "RT"},
+    {"raw_brand": "广汽埃安", "raw_model": "V", "brand": "GAC Aion", "model": "V"},
+    {"raw_brand": "广汽埃安", "raw_model": "i60", "brand": "GAC Aion", "model": "i60"},
+    {"raw_brand": "埃安", "raw_model": "Y Plus", "brand": "GAC Motor", "model": "Aion Y Plus"},
+    {"raw_brand": "长城", "raw_model": "炮 EV", "brand": "GWM", "model": "Cannon EV"},
+    {"raw_brand": "吉利", "raw_model": "银河 E5", "brand": "Geely", "model": "Galaxy E5"},
+    {"raw_brand": "吉利", "raw_model": "银河 M9", "brand": "Geely", "model": "Galaxy M9"},
+    {"raw_brand": "吉利", "raw_model": "几何", "brand": "Geely", "model": "Geome"},
+    {"raw_brand": "吉利", "raw_model": "几何C", "brand": "Geely", "model": "Geometry C"},
+    {"raw_brand": "红旗", "raw_model": "E-HS9", "brand": "Hongqi", "model": "E-HS9"},
+    {"raw_brand": "零跑", "raw_model": "D19", "brand": "Leapmotor", "model": "D19"},
+    {"raw_brand": "零跑", "raw_model": "Lafa 5", "brand": "Leapmotor", "model": "Lafa 5"},
+    {"raw_brand": "零跑", "raw_model": "T03", "brand": "Leapmotor", "model": "T03"},
+    {"raw_brand": "理想", "raw_model": "L6", "brand": "Li Auto", "model": "L6"},
+    {"raw_brand": "领徽", "raw_model": "e7", "brand": "Linghui", "model": "e7"},
+    {"raw_brand": "名爵", "raw_model": "MG4 EV", "brand": "MG", "model": "MG4 EV"},
+    {"raw_brand": "雷达", "raw_model": "RD6", "brand": "Radar", "model": "RD6"},
+    {"raw_brand": "享界", "raw_model": "S9", "brand": "Stelato", "model": "S9"},
+    {"raw_brand": "坦克", "raw_model": "500", "brand": "Tank", "model": "500 Hi4-T"},
+    {"raw_brand": "岚图", "raw_model": "泰山 X8", "brand": "Voyah", "model": "Taishan X8"},
+    {"raw_brand": "五菱", "raw_model": "缤果 Plus", "brand": "Wuling", "model": "Bingo Plus"},
+    {"raw_brand": "小鹏", "raw_model": "G9", "brand": "XPENG", "model": "G9"},
+    {"raw_brand": "小米", "raw_model": "SU7 Ultra", "brand": "Xiaomi", "model": "SU7 Ultra"},
+    {"raw_brand": "小米", "raw_model": "YU7", "brand": "Xiaomi", "model": "YU7"},
+    {"raw_brand": "山东小车", "raw_model": "卡王", "brand": "Shandong EV", "model": "KW"},
+    {"raw_brand": "山东小车", "raw_model": "卡王KW", "brand": "Shandong EV", "model": "KW"},
+    {"raw_brand": "山东小车", "raw_model": "KW", "brand": "Shandong EV", "model": "KW"},
+    {"raw_brand": "山东小车", "raw_model": "小钢炮", "brand": "Shandong EV", "model": "XGP"},
+    {"raw_brand": "山东小车", "raw_model": "小钢炮XGP", "brand": "Shandong EV", "model": "XGP"},
+    {"raw_brand": "山东小车", "raw_model": "XGP", "brand": "Shandong EV", "model": "XGP"},
+    {"raw_brand": "极氪", "raw_model": "001", "brand": "Zeekr", "model": "001"},
+    {"raw_brand": "极氪", "raw_model": "9X", "brand": "Zeekr", "model": "9X"},
+    {"raw_brand": "智己", "raw_model": "L6", "brand": "IM Motors", "model": "L6"},
+    {"raw_brand": "智己", "raw_model": "LS6", "brand": "IM Motors", "model": "LS6"},
+    {"raw_brand": "上汽", "raw_model": "智己", "brand": "IM Motors", "model": "LS6"},
+    {"raw_brand": "捷途", "raw_model": "DASHING", "brand": "Jetour", "model": "Dashing"},
+    {"raw_brand": "捷途", "raw_model": "大圣", "brand": "Jetour", "model": "Dashing"},
+    {"raw_brand": "捷途", "raw_model": "G700", "brand": "Jetour", "model": "T2"},
+    {"raw_brand": "捷途", "raw_model": "T1", "brand": "Jetour", "model": "T2"},
+    {"raw_brand": "捷途", "raw_model": "T2", "brand": "Jetour", "model": "T2"},
+    {"raw_brand": "捷途", "raw_model": "X50", "brand": "Jetour", "model": "X50"},
+    {"raw_brand": "捷途", "raw_model": "X70FL", "brand": "Jetour", "model": "X70"},
+    {"raw_brand": "捷途", "raw_model": "X70PLUS", "brand": "Jetour", "model": "X70 Plus"},
+    {"raw_brand": "丰田", "raw_model": "铂智3X", "brand": "Toyota", "model": "bZ3X"},
+    {"raw_brand": "丰田", "raw_model": "铂智3x", "brand": "Toyota", "model": "bZ3X"},
+    {"raw_brand": "奔腾小马", "raw_model": "小马", "brand": "Bestune", "model": "Xiaoma"},
+    {"raw_brand": "奔腾", "raw_model": "小马", "brand": "Bestune", "model": "Xiaoma"},
+    {"raw_brand": "吉利", "raw_model": "A7", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "A7", "raw_model": "150", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "A7", "raw_model": "探索", "brand": "Geely", "model": "Galaxy A7"},
+    {"raw_brand": "吉利", "raw_model": "牛仔", "brand": "Geely", "model": "Cowboy"},
+    {"raw_brand": "星耀6", "raw_model": "125KM", "brand": "Geely", "model": "Galaxy L6"},
+    {"raw_brand": "福瑞通", "raw_model": "V6E", "brand": "Dongfeng", "model": "Rich 6 EV"},
+    {"raw_brand": "福瑞通", "raw_model": "V8E", "brand": "Dongfeng", "model": "Rich 6 EV"},
+    {"raw_brand": "福田", "raw_model": "奥铃", "brand": "Farizon", "model": "Xingxiang V"},
+    {"raw_brand": "广汽", "raw_model": "i60", "brand": "GAC Aion", "model": "i60"},
+    {"raw_brand": "阿维塔", "raw_model": "07", "brand": "Avatr", "model": "07"},
+    {"raw_brand": "阿维塔", "raw_model": "11", "brand": "Avatr", "model": "11"},
+    {"raw_brand": "阿维塔", "raw_model": "12", "brand": "Avatr", "model": "12"},
+    {"raw_brand": "小米", "raw_model": "小米su7", "brand": "Xiaomi", "model": "SU7"},
+    {"raw_brand": "零跑", "raw_model": "小马", "brand": "Leapmotor", "model": "T03"},
+    {"raw_brand": "零跑", "raw_model": "小马奔腾", "brand": "Leapmotor", "model": "T03"},
+]
+
+
+def get_brand_model_mapping() -> dict[tuple[str, str], tuple[str, str]]:
+    """Returns (raw_brand.lower(), raw_model.lower()) -> (official_brand, official_model) dictionary.
+    Dynamically loads from config/brand_model_mapping.json if present, falling back to BRAND_MODEL_MAPPINGS.
+    """
+    import json
+    from pathlib import Path
+
+    mapping: dict[tuple[str, str], tuple[str, str]] = {}
+
+    # 1. Base built-in fallback mappings
+    for item in BRAND_MODEL_MAPPINGS:
+        mapping[(item["raw_brand"].lower(), item["raw_model"].lower())] = (item["brand"], item["model"])
+
+    # 2. Dynamic config override (supports team / Codex additions)
+    config_file = Path(__file__).resolve().parents[2] / "config" / "brand_model_mapping.json"
+    if config_file.exists():
+        try:
+            data = json.loads(config_file.read_text("utf-8"))
+            for item in data.get("mappings", []):
+                raw_b = str(item.get("raw_brand", "")).strip().lower()
+                raw_m = str(item.get("raw_model", "")).strip().lower()
+                b = str(item.get("brand", "")).strip()
+                m = str(item.get("model", "")).strip()
+                if raw_b and b and m:
+                    mapping[(raw_b, raw_m)] = (b, m)
+        except Exception:
+            pass
+    return mapping
+
+
+# ==============================================================================
+# Rule Engine & Knowledge Persistence (Schema Intelligence Platform)
+# ==============================================================================
+import copy
+import json
+
+CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
+KNOWLEDGE_BASE_PATH = CONFIG_DIR / "rules_knowledge_base.json"
+
+DEFAULT_KNOWLEDGE_BASE = {
+    "version": "1.0.0",
+    "header_aliases": {
+        "modelName": ["车型", "型号", "车系", "项目名称", "车辆名称", "子品牌", "车型描述"],
+        "trimConfig": ["配置", "版型", "版本", "配置代号", "配置版本", "电池容量", "续航"],
+        "exteriorColor": ["外观颜色", "外观色", "车色", "颜色", "外观"],
+        "interiorColor": ["内饰颜色", "内饰色", "内饰"],
+        "priceExw": ["EXW", "EXW报价", "工厂交货价", "出厂价", "裸车价"],
+        "priceFob": ["FOB", "FOB报价", "离岸价"],
+        "priceFca": ["FCA", "FCA报价", "货运承运人价"],
+        "priceCif": ["CIF", "到岸价"],
+        "supplierPriceCny": ["采购价", "批价", "底价", "优惠价", "全款裸车价", "供货价", "单价"],
+        "officialSuggestedPriceCny": ["指导价", "官方指导价", " MSRP", "厂方指导价"],
+        "stockQuantity": ["现车数量", "台数", "数量", "库存", "数量（台）", "配额"],
+        "location": ["提货地", "提货地点", "港口", "发货地", "仓库", "存放地"],
+        "steering": ["舵向", "方向盘位置", "驱动方向"],
+        "manufactureYear": ["manufacture_year", "manufactureyear", "生产年份", "年款"],
+        "manufactureMonth": ["manufacture_month", "manufacturemonth", "生产月份"],
+        "manufactureYearMonth": ["生产日期", "出厂日期"],
+        "orderWaitDays": ["等待天数", "货期", "交货期", "等待时间", "等待周数"],
+        "vinStatus": ["车架号状态", "VIN码状态", "随车手续"],
+        "notes": ["备注", "说明", "促销送充电桩", "条款"]
+    },
+    "trade_location_cleaners": [
+        "^FCA\\s*", "^EXW\\s*", "^FOB\\s*", "^CIF\\s*"
+    ],
+    "wuling_model_code_mappings": {
+        "LZW6394": "Wuling Sunshine",
+        "LZW6400": "Wuling Rongguang",
+        "LZW6430": "Wuling Hongguang",
+        "LZW7000": "Wuling Hongguang MINI EV",
+        "LZW7001": "Wuling Bingo",
+        "LZW7002": "Wuling Starlight"
+    },
+    "user_learned_rules": [],
+    "telemetry": {
+        "total_runs": 0,
+        "deterministic_hits": 0,
+        "ai_fallbacks": 0
+    }
+}
+
+
+class RuleEngine:
+    """
+    Continuous Learning Rule Engine.
+    Loads, applies, and distills deterministic normalization rules.
+    """
+
+    def __init__(self, kb_path: Path | str | None = None):
+        self.kb_path = Path(kb_path) if kb_path else KNOWLEDGE_BASE_PATH
+        self.kb_data: dict[str, Any] = {}
+        self.load_rules()
+
+    def load_rules(self) -> None:
+        """Load knowledge base rules from JSON or initialize default."""
+        if self.kb_path.exists():
+            try:
+                self.kb_data = json.loads(self.kb_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"Failed to read knowledge base at {self.kb_path}: {e}. Initializing default.")
+                self.kb_data = copy.deepcopy(DEFAULT_KNOWLEDGE_BASE)
+                self.save_rules()
+        else:
+            self.kb_data = copy.deepcopy(DEFAULT_KNOWLEDGE_BASE)
+            self.save_rules()
+
+    def save_rules(self) -> None:
+        """Persist knowledge base rules to JSON file."""
+        self.kb_path.parent.mkdir(parents=True, exist_ok=True)
+        self.kb_path.write_text(json.dumps(self.kb_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def normalize_header_cell(self, cell_value: Any) -> str | None:
+        """Map raw header cell string to standardized SSOT schema field name."""
+        if cell_value is None:
+            return None
+        cleaned = str(cell_value).strip().lower()
+        if not cleaned:
+            return None
+
+        # Ignore generic column numbers / indexes
+        if cleaned in ("行号", "源文件", "转换方式", "序号", "id", "index", "no", "no."):
+            return None
+
+        # Direct SSOT field name match (case-insensitive)
+        for field_name in self.kb_data.get("header_aliases", {}):
+            if cleaned == field_name.lower():
+                return field_name
+
+        # Check explicit user-learned header rules first
+        for rule in self.kb_data.get("user_learned_rules", []):
+            if rule.get("type") == "header_alias" and rule.get("pattern") in cleaned:
+                return rule.get("target_field")
+
+        # Check standard header aliases
+        header_aliases = self.kb_data.get("header_aliases", {})
+        for field_name, aliases in header_aliases.items():
+            for alias in aliases:
+                if alias.lower() in cleaned:
+                    return field_name
+
+        return None
+
+    def distill_rule_from_edit(self, field_name: str, raw_value: Any, new_value: Any, context: str | None = None) -> dict[str, Any] | None:
+        """
+        Distill a deterministic rule when a user manually edits a candidate via CLI 'edit'.
+        Persists rule into user_learned_rules and auto-saves to knowledge base.
+        """
+        if not field_name or new_value is None:
+            return None
+
+        rule_entry = {
+            "type": "field_override",
+            "field": field_name,
+            "raw_pattern": str(raw_value).strip() if raw_value else "",
+            "target_value": new_value,
+            "context": context or "cli_edit",
+        }
+
+        learned = self.kb_data.setdefault("user_learned_rules", [])
+        for r in learned:
+            if r.get("type") == "field_override" and r.get("field") == field_name and r.get("raw_pattern") == rule_entry["raw_pattern"]:
+                r["target_value"] = new_value
+                self.save_rules()
+                return r
+
+        learned.append(rule_entry)
+        self.save_rules()
+        logger.info(f"Distilled and persisted rule: {field_name} ('{raw_value}' -> '{new_value}')")
+        return rule_entry
+
+    def record_run_telemetry(self, deterministic_count: int, ai_count: int) -> dict[str, Any]:
+        """Record telemetry for deterministic vs AI fallback execution."""
+        telem = self.kb_data.setdefault("telemetry", {"total_runs": 0, "deterministic_hits": 0, "ai_fallbacks": 0})
+        telem["total_runs"] += 1
+        telem["deterministic_hits"] += deterministic_count
+        telem["ai_fallbacks"] += ai_count
+        self.save_rules()
+        return telem
+
+    def get_telemetry_summary(self) -> str:
+        """Generate human-readable Telemetry Dashboard report."""
+        telem = self.kb_data.get("telemetry", {"total_runs": 0, "deterministic_hits": 0, "ai_fallbacks": 0})
+        det = telem.get("deterministic_hits", 0)
+        ai = telem.get("ai_fallbacks", 0)
+        total = det + ai
+        det_pct = (det / total * 100.0) if total > 0 else 100.0
+        ai_pct = (ai / total * 100.0) if total > 0 else 0.0
+        rule_count = len(self.kb_data.get("user_learned_rules", []))
+
+        return f"""
+==================================================
+📊 Schema Intelligence Telemetry Report
+--------------------------------------------------
+Total Candidates Processed: {total}
+Deterministic Rule Fast-Path: {det} ({det_pct:.1f}%)
+AI Fallback Invoked: {ai} ({ai_pct:.1f}%)
+Active User-Learned Rules: {rule_count}
+AI Dependency Ratio: {ai_pct:.1f}% (Target: <5.0%)
+==================================================
+"""
+
+
+_rule_engine_instance: RuleEngine | None = None
+
+
+def get_rule_engine() -> RuleEngine:
+    global _rule_engine_instance
+    if _rule_engine_instance is None:
+        _rule_engine_instance = RuleEngine()
+    return _rule_engine_instance
+
