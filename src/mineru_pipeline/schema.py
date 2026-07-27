@@ -348,6 +348,12 @@ def get_pydantic_vehicle_schema():
 # BRAND & MODEL OFFICIAL MAPPING DICTIONARY (SSOT)
 # ==============================================================================
 BRAND_MODEL_MAPPINGS: list[dict[str, str]] = [
+    {"raw_brand": "Smart", "raw_model": "#1", "brand": "Smart", "model": "#1"},
+    {"raw_brand": "Smart", "raw_model": "Smart #1", "brand": "Smart", "model": "#1"},
+    {"raw_brand": "Smart", "raw_model": "#3", "brand": "Smart", "model": "#3"},
+    {"raw_brand": "Smart", "raw_model": "Smart #3", "brand": "Smart", "model": "#3"},
+    {"raw_brand": "Smart", "raw_model": "#5", "brand": "Smart", "model": "#5"},
+    {"raw_brand": "Smart", "raw_model": "Smart #5", "brand": "Smart", "model": "#5"},
     {"raw_brand": "吉利", "raw_model": "A7", "brand": "Geely", "model": "Galaxy A7"},
     {"raw_brand": "吉利", "raw_model": "a7", "brand": "Geely", "model": "Galaxy A7"},
     {"raw_brand": "吉利", "raw_model": "A7 EM-i", "brand": "Geely", "model": "Galaxy A7"},

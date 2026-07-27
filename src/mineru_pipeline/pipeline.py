@@ -274,6 +274,8 @@ CHINESE_TO_ENGLISH_BRANDS: dict[str, str] = {
     "广汽": "GAC",
     "广汽埃安": "GAC",
     "埃安": "GAC",
+    "Smart": "Smart",
+    "smart": "Smart",
 }
 
 
@@ -318,7 +320,7 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
 
     if not has_known_brand and brand_text:
         for (rb, rm), (mapped_b, mapped_m) in BRAND_MODEL_MAP.items():
-            if rm and len(rm) >= 2 and rm.lower() in brand_text.lower():
+            if rm and len(rm) >= 2 and re.search(r"\b" + re.escape(rm.lower()) + r"\b", brand_text.lower()):
                 model_text = mapped_m
                 brand_text = mapped_b
                 has_known_brand = True
@@ -449,15 +451,17 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     if cny is not None and cny <= 15000 and cny in (exw, fob, fca):
         cny = None
 
-    if exw is not None:
-        if (cny is not None and exw / cny > 0.35) or (cny is None and exw >= 25000) or exw >= 50000:
-            exw = round(exw / 6.7)
-    if fob is not None:
-        if (cny is not None and fob / cny > 0.35) or (cny is None and fob >= 25000) or fob >= 50000:
-            fob = round(fob / 6.7)
-    if fca is not None:
-        if (cny is not None and fca / cny > 0.35) or (cny is None and fca >= 25000) or fca >= 50000:
-            fca = round(fca / 6.7)
+    has_usd_symbol = bool(re.search(r"[\$]|USD", combo_text, re.IGNORECASE))
+    if not has_usd_symbol:
+        if exw is not None:
+            if (cny is not None and exw / cny > 0.35) or (cny is None and exw >= 25000) or exw >= 50000:
+                exw = round(exw / 6.7)
+        if fob is not None:
+            if (cny is not None and fob / cny > 0.35) or (cny is None and fob >= 25000) or fob >= 50000:
+                fob = round(fob / 6.7)
+        if fca is not None:
+            if (cny is not None and fca / cny > 0.35) or (cny is None and fca >= 25000) or fca >= 50000:
+                fca = round(fca / 6.7)
 
     if not exw:
         m = re.search(r"EXW[^0-9]{0,12}([0-9]{4,7})", combo_text, re.IGNORECASE)
