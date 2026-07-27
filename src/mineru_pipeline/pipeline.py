@@ -1038,7 +1038,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 FEISHU_FIELD_MAP = get_feishu_field_map()
 
 FEISHU_TABLE_ALLOWED_FIELDS = {
-    "supplier", "brand", "model", "model_id", "variant", "variant_id", "trim_config", "trim_config_id",
+    "record_id", "supplier", "brand", "model", "model_id", "variant", "variant_id", "trim_config", "trim_config_id",
     "manufacture_year", "manufacture_month", "exterior_color", "interior_color",
     "stock_quantity", "min_quantity", "max_quantity", "supplier_price_cny",
     "cost_exw_usd", "cost_fob_usd", "cost_fca_usd", "location", "steering_setup",
@@ -1055,6 +1055,9 @@ def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
         val = record.get(db_col)
         if val not in (None, ""):
             fields[feishu_col] = val
+
+    if not fields.get("record_id") and record.get("id"):
+        fields["record_id"] = str(record["id"])
 
     if record.get("version_type"):
         fields["market_region"] = [record["version_type"]]
