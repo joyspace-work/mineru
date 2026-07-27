@@ -182,26 +182,100 @@ def get_db(db_path: Path | None = None) -> sqlite3.Connection:
     if "manufacture_month" not in existing_cols:
         db.execute("ALTER TABLE source_candidates ADD COLUMN manufacture_month INTEGER")
         db.commit()
-    if "parse_raw" not in existing_cols:
-        db.execute("ALTER TABLE source_candidates ADD COLUMN parse_raw TEXT")
+    if "variant" not in existing_cols:
+        db.execute("ALTER TABLE source_candidates ADD COLUMN variant TEXT")
+        db.commit()
+    if "variant_id" not in existing_cols:
+        db.execute("ALTER TABLE source_candidates ADD COLUMN variant_id TEXT")
         db.commit()
     return db
 
 
-def load_model_index() -> dict[tuple[str, str], str]:
-    path = PROJECT_ROOT / "feishu_tables" / "vehicle_models.json"
+def fetch_feishu_table_records_readonly(table_id: str) -> list[dict[str, Any]]:
+    app_id = os.getenv("FEISHU_APP_ID", "cli_aab1f0eeb0fa9cc0")
+    app_secret = os.getenv("FEISHU_APP_SECRET")
+    base_token = os.getenv("FEISHU_BASE_TOKEN", "Is6Xb3btbazhFhsDXgFcqFG1nRc")
+    if not app_secret:
+        return []
     try:
-        data = json.loads(path.read_text("utf-8"))
-    except Exception:
-        return {}
+        token_resp = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret},
+            timeout=5,
+        ).json()
+        token = token_resp.get("tenant_access_token")
+        if not token:
+            return []
+        records = []
+        page_token = None
+        while True:
+            url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records?page_size=500"
+            if page_token:
+                url += f"&page_token={page_token}"
+            res = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5).json()
+            data = res.get("data", {})
+            items = data.get("items", [])
+            records.extend([it.get("fields", {}) for it in items])
+            page_token = data.get("page_token")
+            if not data.get("has_more"):
+                break
+        return records
+    except Exception as err:
+        logger.warning("Failed to fetch Feishu table %s read-only: %s", table_id, err)
+        return []
+
+
+def load_model_index() -> dict[tuple[str, str], str]:
+    live_records = fetch_feishu_table_records_readonly("tblxVNjP9dnJ7b3o")
+    if not live_records:
+        path = PROJECT_ROOT / "feishu_tables" / "vehicle_models.json"
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            live_records = data.get("records", [])
+        except Exception:
+            live_records = []
     index: dict[tuple[str, str], str] = {}
-    for record in data.get("records", []):
-        brand = str(record.get("brand") or "").lower()
-        model = str(record.get("model") or "").lower()
-        model_id = record.get("model_id")
-        if brand and model and model_id:
-            index[(brand, model)] = str(model_id)
+    for record in live_records:
+        brand = str(record.get("brand") or "").lower().strip()
+        model = str(record.get("model") or "").lower().strip()
+        model_id = str(record.get("model_id") or "").strip()
+        if model and model_id:
+            if brand:
+                index[(brand, model)] = model_id
+            index[("", model)] = model_id
     return index
+
+
+def load_variant_index() -> dict[tuple[str, str], str]:
+    live_records = fetch_feishu_table_records_readonly("tbl8YzkZkMxvHRoT")
+    if not live_records:
+        path = PROJECT_ROOT / "feishu_tables" / "vehicle_variants.json"
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            live_records = data.get("records", [])
+        except Exception:
+            live_records = []
+    index: dict[tuple[str, str], str] = {}
+    for record in live_records:
+        model_id = str(record.get("model_id") or "").strip()
+        variant = str(record.get("variant") or record.get("trim_config") or "").lower().strip()
+        variant_id = str(record.get("trim_config_id") or record.get("variant_id") or record.get("record_id") or "").strip()
+        if model_id and variant and variant_id:
+            index[(model_id, variant)] = variant_id
+    return index
+
+
+def resolve_variant_id(model_id: str | None, variant_text: str | None, variant_index: dict[tuple[str, str], str]) -> str | None:
+    if not model_id or not variant_text:
+        return None
+    v_clean = str(variant_text).lower().strip()
+    if (model_id, v_clean) in variant_index:
+        return variant_index[(model_id, v_clean)]
+    for (m_id, var_key), v_id in variant_index.items():
+        if m_id == model_id:
+            if var_key in v_clean or v_clean in var_key:
+                return v_id
+    return None
 
 
 NOISE_WORDS_RE = re.compile(
@@ -454,7 +528,7 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
                 break
 
     text_parts = [
-        str(row.get("trimName") or row.get("trim_config") or ""),
+        str(row.get("variant") or row.get("trimName") or row.get("trim_config") or ""),
         str(row.get("ocr_raw") or row.get("raw") or ""),
         str(row.get("_rawText") or row.get("parse_raw") or ""),
         str(row.get("_source_file") or ""),
@@ -565,7 +639,7 @@ def clean_color(color_val: Any) -> tuple[str | None, str | None, int | None]:
     return ext_col or None, int_col or None, stock_qty
 
 
-def clean_trim_config_and_extract_notes(
+def clean_variant_and_extract_notes(
     trim_val: Any,
     brand: str,
     model: str,
@@ -612,7 +686,7 @@ def clean_trim_config_and_extract_notes(
 
     clean_trim = " ".join(clean_parts) if clean_parts else (unique_lines[0] if unique_lines else "")
     if clean_trim:
-        clean_trim = clean_trim_config(clean_trim, brand, model, raw_brand, raw_model)
+        clean_trim = clean_variant(clean_trim, brand, model, raw_brand, raw_model)
 
     if clean_trim:
         tokens = clean_trim.split()
@@ -633,7 +707,7 @@ def clean_trim_config_and_extract_notes(
     return clean_trim or None, final_notes
 
 
-def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str | None:
+def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str | None:
     if trim_val is None:
         return None
     trim_str = str(trim_val).strip()
@@ -698,6 +772,7 @@ VALID_AUTOMOBILE_BRANDS: set[str] = {
 
 def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     model_index = load_model_index()
+    variant_index = load_variant_index()
     formatted: list[dict[str, Any]] = []
     for row in rows:
         brand_raw = row.get("brand")
@@ -707,7 +782,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         # Check if row represents an unstructured OCR image/text document
         is_unstructured_doc = bool(row.get("ocr_raw") or row.get("raw") or row.get("_source_file") or row.get("_rawText"))
         if not brand or not model or brand in ("未知", "unknown") or model in ("待确认车型", "未知", "unknown"):
-            fallback_text = f"{row.get('trimName') or ''} {row.get('trim_config') or ''} {row.get('ocr_raw') or ''} {row.get('raw') or ''} {row.get('_source_file') or ''}"
+            fallback_text = f"{row.get('variant') or row.get('trimName') or row.get('trim_config') or ''} {row.get('ocr_raw') or ''} {row.get('raw') or ''} {row.get('_source_file') or ''}"
             if not brand or brand in ("未知", "unknown"):
                 for b_cand in ["BYD", "Foton", "Geely", "Wuling", "Changan", "Farizon", "Dongfeng", "XPENG", "Zeekr", "Xiaomi", "AITO", "Deepal", "GAC Aion", "MG", "Radar", "Stelato", "Tank", "Voyah", "Hongqi", "Leapmotor", "GWM"]:
                     if b_cand.lower() in fallback_text.lower() or (b_cand == "BYD" and "比亚迪" in fallback_text):
@@ -744,9 +819,9 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
         final_brand = brand
         final_model = model
-        trim_val = row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+        trim_val = row.get("variant") or row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
 
-        # Wuling brand & series rule: brand MUST ALWAYS be Wuling; series keywords (荣光, 宏光, 之光, 缤果, 星光) belong in trim_config
+        # Wuling brand & series rule: brand MUST ALWAYS be Wuling; series keywords (荣光, 宏光, 之光, 缤果, 星光) belong in variant
         wuling_series_map = {
             "荣光": "荣光", "rongguang": "Rongguang",
             "宏光": "宏光", "hongguang": "Hongguang",
@@ -755,7 +830,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             "星光": "星光", "starlight": "Starlight"
         }
         wuling_tokens = ["wuling", "五菱", "sgmw", "五菱汽车"] + list(wuling_series_map.keys())
-        search_scope = f"{brand} {model} {row.get('supplierName') or ''} {row.get('trimName') or ''} {row.get('trim_config') or ''} {row.get('ocr_raw') or ''} {row.get('_source_file') or ''}".lower()
+        search_scope = f"{brand} {model} {row.get('supplierName') or ''} {row.get('variant') or row.get('trimName') or ''} {row.get('trim_config') or ''} {row.get('ocr_raw') or ''} {row.get('_source_file') or ''}".lower()
         if any(tok in search_scope for tok in wuling_tokens):
             final_brand = "Wuling"
             found_series = None
@@ -769,14 +844,14 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                     trim_val = f"{found_series} {curr_trim}".strip()
 
         wait_days = to_number(row.get("orderWaitDays") or row.get("order_wait_days")) or parse_wait_days(row.get("leadTimeText") or row.get("orderWaitingPeriod"))
-        version_raw = f"{row.get('marketRegion') or ''} {row.get('version_type') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''} {row.get('_source_file') or ''}"
+        version_raw = f"{row.get('marketRegion') or ''} {row.get('version_type') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('variant') or row.get('trimName') or ''} {row.get('_source_file') or ''}"
         version_type = None
         if "国内" in version_raw or "中规" in version_raw or "DOMESTIC" in version_raw.upper():
             version_type = "国内版"
         elif any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")) or "INTERNATIONAL" in version_raw.upper():
             version_type = "国际版"
 
-        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('trimName') or ''}".upper()
+        steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('variant') or row.get('trimName') or ''}".upper()
         if "右舵" in steering_raw or "RHD" in steering_raw:
             steering = "右舵"
         elif "左舵" in steering_raw or "LHD" in steering_raw:
@@ -793,9 +868,9 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         else:
             status_v = "无具体信息" if status_raw else None
 
-        model_id = row.get("model_id") or row.get("modelId") or model_index.get((final_brand.lower(), final_model.lower()))
+        model_id = row.get("model_id") or row.get("modelId") or model_index.get((final_brand.lower(), final_model.lower())) or model_index.get(("", final_model.lower()))
 
-        trim_val = row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+        trim_val = row.get("variant") or row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
         if model_raw and str(model_raw).strip():
             m_raw_str = str(model_raw).strip()
             if m_raw_str.lower() != str(final_model).lower() and m_raw_str.lower() != str(final_brand).lower():
@@ -827,9 +902,11 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                 trim_val = None
 
         existing_note = row.get("notes") or row.get("remark") or row.get("备注")
-        trim_val, final_notes = clean_trim_config_and_extract_notes(
+        variant_val, final_notes = clean_variant_and_extract_notes(
             trim_val, final_brand, final_model, brand_raw, model_raw, existing_notes=existing_note
         )
+
+        variant_id = row.get("variant_id") or row.get("variantId") or row.get("trim_config_id") or resolve_variant_id(model_id, variant_val, variant_index)
 
         conf_raw = row.get("confidence") or row.get("ocr_confidence") or row.get("_confidence")
         if conf_raw is not None:
@@ -841,7 +918,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                 score -= 0.15
             if not row.get("exteriorColor") and not row.get("exterior_color"):
                 score -= 0.05
-            if not trim_val:
+            if not variant_val:
                 score -= 0.05
             conf_val = round(max(0.50, score), 2)
 
@@ -858,9 +935,12 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
         item = {
             "model_id": model_id,
+            "variant_id": variant_id,
             "brand": final_brand,
             "model": final_model,
-            "trim_config": trim_val,
+            "variant": variant_val,
+            "trim_config": variant_val,
+            "trim_config_id": variant_id,
             "manufacture_year": m_year,
             "manufacture_month": m_month,
             "exterior_color": ext_col,
@@ -920,7 +1000,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         sup = item.get("supplier") or ""
         b = item.get("brand") or ""
         m = item.get("model") or ""
-        t = item.get("trim_config") or ""
+        t = item.get("variant") or item.get("trim_config") or ""
         ext = item.get("exterior_color") or ""
         inte = item.get("interior_color") or ""
         qty = item.get("stock_quantity")
@@ -958,7 +1038,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 FEISHU_FIELD_MAP = get_feishu_field_map()
 
 FEISHU_TABLE_ALLOWED_FIELDS = {
-    "supplier", "brand", "model", "model_id", "trim_config", "trim_config_id",
+    "supplier", "brand", "model", "model_id", "variant", "variant_id", "trim_config", "trim_config_id",
     "manufacture_year", "manufacture_month", "exterior_color", "interior_color",
     "stock_quantity", "min_quantity", "max_quantity", "supplier_price_cny",
     "cost_exw_usd", "cost_fob_usd", "cost_fca_usd", "location", "steering_setup",
@@ -1297,7 +1377,10 @@ def run_pipeline(args: Any) -> int:
 
 
 def list_pending(db: sqlite3.Connection) -> list[sqlite3.Row]:
-    return db.execute("SELECT id, supplier, brand, model, trim_config, manufacture_year, manufacture_month, stock_quantity, cost_exw_usd, notes, status FROM source_candidates WHERE status = 'pending'").fetchall()
+    existing_cols = {row["name"] for row in db.execute("PRAGMA table_info(source_candidates)").fetchall()}
+    v_col = "variant" if "variant" in existing_cols else "trim_config"
+    v_id_col = "variant_id" if "variant_id" in existing_cols else "trim_config_id"
+    return db.execute(f"SELECT id, supplier, brand, model, model_id, {v_col} AS variant, {v_id_col} AS variant_id, manufacture_year, manufacture_month, stock_quantity, cost_exw_usd, notes, status FROM source_candidates WHERE status = 'pending'").fetchall()
 
 
 def action_list() -> int:
@@ -1311,7 +1394,7 @@ def action_list() -> int:
         for row in rows:
             r_dict = dict(row)
             # Prioritize 'id' and 'supplier' at the very front for maximum visual clarity
-            priority = ["id", "supplier", "brand", "model", "trim_config", "stock_quantity", "cost_exw_usd", "notes", "status"]
+            priority = ["id", "supplier", "brand", "model", "model_id", "variant", "variant_id", "stock_quantity", "cost_exw_usd", "notes", "status"]
             ordered = {k: r_dict[k] for k in priority if k in r_dict}
             for k, v in r_dict.items():
                 if k not in ordered:

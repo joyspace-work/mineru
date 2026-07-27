@@ -17,7 +17,7 @@ class TestExtractionEvals:
             "supplier": "山东小车工厂",
             "brand": "山东小车",
             "model": "卡王",
-            "trim_config": "卡王KW EXW9100",
+            "variant": "卡王KW EXW9100",
             "source_file": "山东小车工厂/卡王KW EXW9100.xlsx"
         }]
         res_kw = format_candidates_for_feishu(raw_candidates_kw)
@@ -30,7 +30,7 @@ class TestExtractionEvals:
             "supplier": "山东小车工厂",
             "brand": "山东小车",
             "model": "小钢炮",
-            "trim_config": "小钢炮XGP EXW7800",
+            "variant": "小钢炮XGP EXW7800",
             "source_file": "山东小车工厂/小钢炮XGP EXW7800.xlsx"
         }]
         res_xgp = format_candidates_for_feishu(raw_candidates_xgp)
@@ -58,19 +58,19 @@ class TestExtractionEvals:
         assert meta["model"] == "海狮05"
 
     def test_eval_scenario_2_wuling_model_code_vs_common_name(self):
-        """Scenario 2: Brand for all Wuling vehicles MUST always be Wuling, series keywords (荣光, 宏光, etc.) belong in trim_config."""
+        """Scenario 2: Brand for all Wuling vehicles MUST always be Wuling, series keywords (荣光, 宏光, etc.) belong in variant."""
         raw_candidates = [{
             "supplier": "广州恩特湃",
             "brand": "五菱",
             "model": "G31A",  # Model code
-            "trim_config": "荣光新单排货车 N350 Single Cab Pickup",
+            "variant": "荣光新单排货车 N350 Single Cab Pickup",
             "supplier_price_cny": 45000,
             "source_file": "广州恩特湃/五菱/报价.xlsx"
         }]
         res = format_candidates_for_feishu(raw_candidates)
         assert len(res) == 1
         assert res[0]["brand"] == "Wuling"  # Strictly Wuling
-        assert "荣光" in res[0]["trim_config"] or "Rongguang" in res[0]["trim_config"]
+        assert "荣光" in res[0]["variant"] or "Rongguang" in res[0]["variant"]
 
     def test_eval_scenario_3_multi_color_string_splitting(self):
         """Scenario 3: Split multi-color string '3暖阳白/黑+13海域白/黑+13灰/黑' into 3 records."""
@@ -78,7 +78,7 @@ class TestExtractionEvals:
             "supplier": "温州迈卡新能源",
             "brand": "比亚迪",
             "model": "海鸥",
-            "trim_config": "300Pro",
+            "variant": "300Pro",
             "exterior_color": "3暖阳白/黑+13海域白/黑+13灰/黑",
             "supplier_price_cny": 69800,
             "source_file": "比亚迪报价.xlsx"
@@ -117,10 +117,10 @@ class TestExtractionEvals:
     def test_eval_scenario_5_usd_cost_bounds_filtering(self):
         """Scenario 5: Filter USD costs outside $1,000–$200,000 range (e.g. 3, 205, 1500000)."""
         raw_candidates = [
-            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "trim_config": "T1", "cost_exw_usd": 3},
-            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "trim_config": "T2", "cost_exw_usd": 205},
-            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "trim_config": "T3", "cost_exw_usd": 12500},
-            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "trim_config": "T4", "cost_exw_usd": 1500000},
+            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "variant": "T1", "cost_exw_usd": 3},
+            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "variant": "T2", "cost_exw_usd": 205},
+            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "variant": "T3", "cost_exw_usd": 12500},
+            {"supplier": "Test", "brand": "BYD", "model": "Dolphin", "variant": "T4", "cost_exw_usd": 1500000},
         ]
         res = format_candidates_for_feishu(raw_candidates)
         assert len(res) == 4
@@ -163,9 +163,9 @@ class TestExtractionEvals:
     def test_eval_scenario_8_deduplication_and_priceless_collapsing(self):
         """Scenario 8: Deduplicating exact duplicate rows and collapsing priceless rows."""
         raw_candidates = [
-            {"supplier": "S1", "brand": "Zeekr", "model": "001", "trim_config": "WE 100kWh", "source_file": "f1.xlsx"},
-            {"supplier": "S1", "brand": "Zeekr", "model": "001", "trim_config": "WE 100kWh", "source_file": "f1.xlsx"},
-            {"supplier": "S1", "brand": "Zeekr", "model": "001", "trim_config": "WE 100kWh", "source_file": "f1.xlsx"},
+            {"supplier": "S1", "brand": "Zeekr", "model": "001", "variant": "WE 100kWh", "source_file": "f1.xlsx"},
+            {"supplier": "S1", "brand": "Zeekr", "model": "001", "variant": "WE 100kWh", "source_file": "f1.xlsx"},
+            {"supplier": "S1", "brand": "Zeekr", "model": "001", "variant": "WE 100kWh", "source_file": "f1.xlsx"},
         ]
         res = format_candidates_for_feishu(raw_candidates)
         assert len(res) == 1

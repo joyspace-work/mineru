@@ -60,7 +60,7 @@ def test_cli_actions_db_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     candidate = {
         "brand": "BYD",
         "model": "Seagull",
-        "trim_config": "Flying Version",
+        "variant": "Flying Version",
         "exterior_color": "White",
         "cost_exw_cny": 69800,
         "supplier": "Test Supplier",

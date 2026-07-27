@@ -1,0 +1,132 @@
+{
+  "table_id": "tblnMopstEUqjMhu",
+  "table_name": "academy_vault",
+  "fields_definition": [
+    {
+      "field_id": "fldcwzQBmc",
+      "field_name": "record_id",
+      "is_extend": false,
+      "is_primary": true,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldaMNpr8Z",
+      "field_name": "title",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldwOwoQLZ",
+      "field_name": "type",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": {
+        "options": [
+          {
+            "color": 9,
+            "id": "optzvSx9ri",
+            "name": "Excel Model"
+          },
+          {
+            "color": 2,
+            "id": "opt7k1b4Jr",
+            "name": "PDF Guide"
+          },
+          {
+            "color": 0,
+            "id": "opta4TWM6Z",
+            "name": "Video Tutorial"
+          },
+          {
+            "color": 2,
+            "id": "optAtYOTJM",
+            "name": "PDF Checklist"
+          },
+          {
+            "color": 7,
+            "id": "optOtkt9jW",
+            "name": "PDF Whitepaper"
+          }
+        ]
+      },
+      "type": 3,
+      "ui_type": "SingleSelect"
+    },
+    {
+      "field_id": "fldAuPiIjb",
+      "field_name": "size",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldWAEdvcl",
+      "field_name": "download_link",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    },
+    {
+      "field_id": "fldKoA0y7j",
+      "field_name": "description",
+      "is_extend": false,
+      "is_primary": false,
+      "is_synced": false,
+      "property": null,
+      "type": 1,
+      "ui_type": "Text"
+    }
+  ],
+  "records": [
+    {
+      "record_id": "recvnRyGHzWgf8",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "description": "Plug in local electricity rates and petrol prices to instantly generate a 5-year cost comparison for your commercial clients.",
+      "download_link": "/qr",
+      "size": "2.4 MB",
+      "title": "2026 Fleet ROI Calculator",
+      "type": "Excel Model"
+    },
+    {
+      "record_id": "recvnRyGHzd9uS",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "description": "The exact Pre-Delivery Inspection checklist our engineers use in Shanghai before loading your vehicles into the container.",
+      "download_link": "/qr",
+      "size": "2.4 MB",
+      "title": "The 50-Point Factory PDI",
+      "type": "PDF Guide"
+    },
+    {
+      "record_id": "recvnRyGHzNocG",
+      "created_time": null,
+      "last_modified_time": null,
+      "created_by": null,
+      "last_modified_by": null,
+      "description": "A comprehensive breakdown of which Chinese factories are producing true Right-Hand Drive models and their export availability.",
+      "download_link": "/qr",
+      "size": "2.4 MB",
+      "title": "Africa RHD Import Guide",
+      "type": "PDF Guide"
+    }
+  ]
+}

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class VehicleCandidateModel(BaseModel):
     brand: str | None = None
     modelName: str | None = None
-    trimConfig: str | None = None
+    variant: str | None = Field(default=None, alias="trimConfig")
     exteriorColor: str | None = None
     interiorColor: str | None = None
     priceExw: float | None = None
@@ -91,13 +91,22 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
         description="对应车型表中的 model_id (如 MDL-002)",
     ),
     FieldSpec(
-        db_column="trim_config",
-        feishu_name="trim_config",
-        pydantic_name="trimName",
+        db_column="variant",
+        feishu_name="variant",
+        pydantic_name="variant",
         sql_type="TEXT",
-        excel_aliases=("主要配置描述", "配置描述", "车辆配置", "配置版本", "款型", "细分车型", "配置", "版本", "variant", "trim", "trimname", "规格", "车型版本"),
+        excel_aliases=("主要配置描述", "配置描述", "车辆配置", "配置版本", "款型", "细分车型", "配置", "版本", "variant", "trim", "trimname", "trim_config", "trimconfig", "规格", "车型版本"),
         feishu_type="text",
         description="细分车型/配置版本(对应 vehicle_variants 中的 variant 字段)",
+    ),
+    FieldSpec(
+        db_column="variant_id",
+        feishu_name="variant_id",
+        pydantic_name="variant_id",
+        sql_type="TEXT",
+        excel_aliases=("variant_id", "variantid", "trim_config_id", "trimconfigid", "配置id", "版本id"),
+        feishu_type="text",
+        description="对应配置版本表中的 variant_id (如 MDL-004-6394-2)",
     ),
     FieldSpec(
         db_column="manufacture_year",
@@ -528,7 +537,7 @@ DEFAULT_KNOWLEDGE_BASE = {
     "header_aliases": {
         "brand": ["品牌", "车辆品牌", "厂商", "brand"],
         "modelName": ["车型", "型号", "车系", "项目名称", "车辆名称", "子品牌", "车型描述"],
-        "trimConfig": ["配置", "版型", "版本"],
+        "variant": ["配置", "版型", "版本"],
         "exteriorColor": ["外观颜色", "外观色", "车色", "颜色", "外观"],
         "interiorColor": ["内饰颜色", "内饰色", "内饰"],
         "priceExw": ["EXW", "EXW报价", "工厂交货价", "出厂价", "裸车价"],

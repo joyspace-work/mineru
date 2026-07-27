@@ -16,7 +16,7 @@
       "子品牌",
       "车型描述"
     ],
-    "trimConfig": [
+    "variant": [
       "配置",
       "版型",
       "版本"
@@ -273,8 +273,8 @@
     }
   ],
   "telemetry": {
-    "total_runs": 48,
-    "deterministic_hits": 7608,
+    "total_runs": 56,
+    "deterministic_hits": 9039,
     "ai_fallbacks": 0
   }
 }

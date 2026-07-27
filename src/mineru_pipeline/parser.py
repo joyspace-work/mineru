@@ -274,7 +274,7 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
                 "location": current_loc,
                 "brand": meta["brand"],
                 "model": current_model,
-                "trimConfig": current_trim,
+                "variant": current_trim,
                 "priceExw": current_usd if current_usd else None,
                 "officialSuggestedPriceCny": current_cny if current_cny else None,
                 "notes": clean_str,
@@ -339,7 +339,7 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
         if len(model_cols) > 1:
             for idx, col in enumerate(model_cols):
                 if idx > 0:
-                    header_map[col] = "trimConfig"
+                    header_map[col] = "variant"
 
         for row in rows[last_header_index + 1 :]:
             row_text = " ".join(str(v) for v in row if v is not None).strip()
