@@ -527,7 +527,7 @@ DEFAULT_KNOWLEDGE_BASE = {
     "header_aliases": {
         "brand": ["品牌", "车辆品牌", "厂商", "brand"],
         "modelName": ["车型", "型号", "车系", "项目名称", "车辆名称", "子品牌", "车型描述"],
-        "trimConfig": ["配置", "版型", "版本", "配置代号", "配置版本", "电池容量", "续航"],
+        "trimConfig": ["配置", "版型", "版本"],
         "exteriorColor": ["外观颜色", "外观色", "车色", "颜色", "外观"],
         "interiorColor": ["内饰颜色", "内饰色", "内饰"],
         "priceExw": ["EXW", "EXW报价", "工厂交货价", "出厂价", "裸车价"],

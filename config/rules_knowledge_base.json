@@ -19,11 +19,7 @@
     "trimConfig": [
       "配置",
       "版型",
-      "版本",
-      "配置代号",
-      "配置版本",
-      "电池容量",
-      "续航"
+      "版本"
     ],
     "exteriorColor": [
       "外观颜色",
@@ -159,8 +155,8 @@
     }
   ],
   "telemetry": {
-    "total_runs": 23,
-    "deterministic_hits": 2480,
+    "total_runs": 41,
+    "deterministic_hits": 6691,
     "ai_fallbacks": 0
   }
 }
