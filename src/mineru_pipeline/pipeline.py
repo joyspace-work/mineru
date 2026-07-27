@@ -25,6 +25,7 @@ from .schema import (
     get_brand_model_mapping,
     get_create_table_sql,
     get_feishu_field_map,
+    get_rule_engine,
 )
 
 
@@ -238,52 +239,22 @@ def is_invalid_model_name(model_text: str) -> bool:
     return False
 
 
-CHINESE_TO_ENGLISH_BRANDS: dict[str, str] = {
-    "比亚迪": "BYD",
-    "吉利": "Geely",
-    "全新牛仔": "Geely",
-    "吉利牛仔": "Geely",
-    "长安": "Changan",
-    "五菱": "Wuling",
-    "东风": "Dongfeng",
-    "丰田": "Toyota",
-    "捷途": "Jetour",
-    "方程豹": "Fangchengbao",
-    "深蓝": "Deepal",
-    "启源": "Changan",
-    "长安启源": "Changan",
-    "阿维塔": "Avatr",
-    "红旗": "Hongqi",
-    "零跑": "Leapmotor",
-    "理想": "Li Auto",
-    "小鹏": "XPENG",
-    "小米": "Xiaomi",
-    "智己": "IM Motors",
-    "极氪": "Zeekr",
-    "福田": "Foton",
-    "远程": "Farizon",
-    "奇瑞": "Chery",
-    "长城": "GWM",
-    "坦克": "Tank",
-    "岚图": "Voyah",
-    "问界": "AITO",
-    "享界": "Stelato",
-    "尊界": "Maextro",
-    "尚界": "Shangjie",
-    "山东小车": "Shandong EV",
-    "奔腾": "Bestune",
-    "广汽": "GAC",
-    "广汽埃安": "GAC",
-    "埃安": "GAC",
-    "Smart": "Smart",
-    "smart": "Smart",
-}
+def get_chinese_to_english_brands() -> dict[str, str]:
+    """Fetch Chinese to English brand translation map from RuleEngine SSOT."""
+    return get_rule_engine().kb_data.get("chinese_to_english_brands", {})
 
 
 def resolve_wuling_model_code(model_code: str) -> str | None:
     if not model_code:
         return None
     mc = model_code.upper().strip()
+    
+    # 1. Check RuleEngine SSOT wuling_model_code_mappings
+    kb_mappings = get_rule_engine().kb_data.get("wuling_model_code_mappings", {})
+    for code, model_name in kb_mappings.items():
+        if mc.startswith(code) or mc == code:
+            return model_name
+
     if mc.startswith(("LZW6470", "LZW6478")):
         return "Starlight S"
     if mc.startswith(("LZW6502", "LZW6500", "LZW6521")):
@@ -312,9 +283,11 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
     if is_invalid_model_name(model_text):
         model_text = ""
 
+    brand_map = get_chinese_to_english_brands()
+
     # Check if brand_text is actually a model name (e.g. "2025款 A7", "A7", "吉利牛仔", "星耀6")
     has_known_brand = False
-    for zh_brand, en_brand in CHINESE_TO_ENGLISH_BRANDS.items():
+    for zh_brand, en_brand in brand_map.items():
         if brand_text and (brand_text == zh_brand or zh_brand in brand_text or en_brand.lower() == brand_text.lower()):
             has_known_brand = True
             break
@@ -327,36 +300,49 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
                 has_known_brand = True
                 break
 
-    if not brand_text and not model_text:
-        return None, None
+    bt_clean = brand_text.lower().replace(" ", "") if brand_text else ""
+    mt_clean = model_text.lower().replace(" ", "") if model_text else ""
 
-    bt_clean = brand_text.lower().replace(" ", "")
-    mt_clean = model_text.lower().replace(" ", "")
+    # 0. Translate Chinese brand name if present
+    for zh_brand, en_brand in brand_map.items():
+        if brand_text and (brand_text == zh_brand or zh_brand in brand_text):
+            brand_text = en_brand
+            bt_clean = brand_text.lower().replace(" ", "")
+            break
 
-    # 1. Match against BRAND_MODEL_MAP (loaded from config/brand_model_mapping.json)
+    # 1. Wuling model code resolution
+    if brand_text == "Wuling" or bt_clean == "wuling":
+        wuling_resolved = resolve_wuling_model_code(model_text)
+        if wuling_resolved:
+            return "Wuling", wuling_resolved
+
+    # 2. Match against BRAND_MODEL_MAP (loaded from config/brand_model_mapping.json)
     for (raw_brand, raw_model), mapped in BRAND_MODEL_MAP.items():
         if raw_brand:
             rb_clean = raw_brand.lower().replace(" ", "")
+            mb_clean = mapped[0].lower().replace(" ", "")
             rm_clean = raw_model.lower().replace(" ", "") if raw_model else ""
             brand_matched = (
                 rb_clean == bt_clean or
                 rb_clean in bt_clean or
+                mb_clean == bt_clean or
+                mb_clean in bt_clean or
                 (rb_clean in ("比亚迪", "byd") and ("byd" in bt_clean or "比亚迪" in bt_clean))
             )
             if len(rm_clean) <= 2:
                 model_matched = (
-                    not rm_clean or
-                    rm_clean == mt_clean or
-                    rm_clean == bt_clean or
-                    bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", mt_clean, re.IGNORECASE)) or
-                    bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", bt_clean, re.IGNORECASE))
+                    (rm_clean and rm_clean == mt_clean) or
+                    (rm_clean and rm_clean == bt_clean) or
+                    (rm_clean and bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", mt_clean, re.IGNORECASE))) or
+                    (rm_clean and bool(re.search(r"\b" + re.escape(rm_clean) + r"\b", bt_clean, re.IGNORECASE)))
                 )
             else:
                 model_matched = (
-                    not rm_clean or
-                    rm_clean in mt_clean or
-                    rm_clean in bt_clean or
-                    (rm_clean.replace("ev", "") in mt_clean if "ev" in rm_clean else False)
+                    rm_clean and (
+                        rm_clean in mt_clean or
+                        rm_clean in bt_clean or
+                        (rm_clean.replace("ev", "") in mt_clean if "ev" in rm_clean else False)
+                    )
                 )
             if brand_matched and model_matched:
                 final_brand = mapped[0]
@@ -364,7 +350,7 @@ def normalize_brand_model(brand: Any, model: Any) -> tuple[str | None, str | Non
                 return final_brand, final_model
 
     # 2. Translate Chinese brand name if present for fallback matching
-    for zh_brand, en_brand in CHINESE_TO_ENGLISH_BRANDS.items():
+    for zh_brand, en_brand in brand_map.items():
         if brand_text and (brand_text == zh_brand or zh_brand in brand_text):
             brand_text = en_brand
             bt_clean = brand_text.lower().replace(" ", "")
@@ -419,64 +405,9 @@ def _cost_cny(value: Any, currency: Any = None) -> float | None:
     return None
 
 
-INVALID_LOCATION_WORDS = {
-    "小马奔腾", "奔腾小马", "奔腾", "小马", "T03", "BYD", "长安", "阿维塔", "智己", "丰田", "东风",
-    "五菱", "吉利", "Smart", "广汽", "上汽", "埃安", "启源", "深蓝", "问界", "捷途", "红旗", "零跑",
-    "理想", "小鹏", "小米", "极氪", "福田", "远程", "奇瑞", "长城", "坦克", "岚图"
-}
-
-
-STANDARD_LOCATION_CANONICAL_MAP = {
-    "南沙": "南沙",
-    "霍尔果斯": "霍尔果斯",
-    "喀什": "喀什",
-    "上海": "上海",
-    "天津": "天津",
-    "广州": "广州",
-    "深圳": "深圳",
-    "宁波": "宁波",
-    "青岛": "青岛",
-    "厦门": "厦门",
-    "盐城": "盐城",
-    "咸阳": "咸阳",
-    "芜湖": "芜湖",
-    "武汉": "武汉",
-    "成都": "成都",
-    "重庆": "重庆",
-    "西安": "西安",
-    "太原": "太原",
-    "郑州": "郑州",
-    "合肥": "合肥",
-    "南京": "南京",
-    "杭州": "杭州",
-    "福州": "福州",
-    "大连": "大连",
-    "连云港": "连云港",
-    "钦州": "钦州",
-    "防城港": "防城港",
-    "凭祥": "凭祥",
-    "满洲里": "满洲里",
-    "二连浩特": "二连浩特",
-    "瑞丽": "瑞丽",
-    "黑河": "黑河",
-    "绥芬河": "绥芬河",
-}
-
-
 def normalize_location_cn(val: Any) -> str | None:
-    if not val:
-        return None
-    raw = str(val).strip()
-    cleaned = re.sub(r"^(FCA|FOB|EXW|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
-    if not cleaned:
-        return None
-    if cleaned in INVALID_LOCATION_WORDS or any(w.lower() == cleaned.lower() for w in INVALID_LOCATION_WORDS):
-        return None
-
-    # Standardize physical location to canonical name (e.g. 广州南沙基地 / 南沙是 / 南沙港 -> 南沙)
-    for key_city, std_name in STANDARD_LOCATION_CANONICAL_MAP.items():
-        if key_city in cleaned:
-            return std_name
+    """Normalize location using RuleEngine SSOT."""
+    return get_rule_engine().normalize_location(val)
 
     # Remove generic location suffixes like 基地, 港, 仓, 站, 口岸, 保税区, 是
     cleaned = re.sub(r"(?:基地|港口|港|仓库|仓|口岸|综合保税区|保税区|黄埔|梅山|盐田|蛇口|是)+$", "", cleaned).strip()
