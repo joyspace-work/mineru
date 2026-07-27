@@ -17,6 +17,7 @@ Excel/CSV 输入
   -> evidence: Excel 文本化证据包
   -> Codex: 根据证据人工级抽取 candidate JSON
   -> validate: 字段类型、选项、证据、价格币种/贸易术语校验
+  -> confidence: 按源证据完整度和字段风险评分
   -> final: JSON/CSV
   -> local_source.db
   -> 飞书多维表格 tblyd52cT70XrFf1
@@ -34,6 +35,7 @@ Excel/CSV 输入
 - 颜色库存组合必须拆成独立记录：`3暖阳白/黑` 表示 `stock_quantity=3`、`exterior_color=暖阳白`、`interior_color=黑`。
 - 温州迈卡类表格中的 `霍尔果斯-海狮05EV-13海域白/灰` 必须拆为 `location=霍尔果斯`、`model=海狮05EV`、`stock_quantity=13`、`exterior_color=海域白`、`interior_color=灰`。
 - 价格必须严格区分贸易术语和币种，例如 `cost_fca_usd` 必须有 FCA + USD 证据。
+- `confidence` 是工程置信度，不是模型概率。它反映字段是否被源 Excel 行、表头、路径、币种、贸易术语和拆分规则直接支撑。
 - 用户字段和不支持字段不作为普通记录写入。
 
 ## 安装
@@ -134,12 +136,34 @@ row 2: B=车型A | C=¥79,800 | D=20白/灰+10灰/灰 | E=9250
 }
 ```
 
-## 3. 校验并生成最终文件
+## 3. 批量 Excel 汇总脚本
+
+如果输入是一个包含大量 Excel 的文件夹，可以先用本项目的本地解析脚本生成 Codex 候选底稿，再转换为目标飞书表候选。
+
+```powershell
+$root = "C:\Users\HP\Downloads\车源汇总纯净 (2)\车源汇总纯净"
+
+# 读取文件夹下所有 xlsx，生成可追溯的中间候选。
+python scripts\manual_excel_summary.py
+
+# 转换为当前目标表字段，并按证据规则计算 confidence。
+python scripts\prepare_current_feishu_candidates.py `
+  --input output\final\manual_feishu_ready_20260724.json `
+  --output output\final\current_feishu_candidates_20260727.json
+```
+
+说明：
+
+- `manual_excel_summary.py` 会读取源 Excel 的 sheet、row、文件路径，并保留 `source_file/source_sheet/source_row/content_hash`。
+- `prepare_current_feishu_candidates.py` 会把中间候选转换为当前飞书表字段，切分 `model/trim_config`，拆分颜色库存，补 `_evidence`，并生成 `confidence`。
+- `content_hash` 会写入 `record_id`，用于后续读回和批量更新。
+
+## 4. 校验并生成最终文件
 
 只校验和生成 JSON/CSV，不写 SQLite：
 
 ```powershell
-python -m mineru_pipeline --action aggregate --raw-candidates output\candidates_by_codex.json --dry-run
+python -m mineru_pipeline --action aggregate --raw-candidates output\final\current_feishu_candidates_20260727.json --dry-run
 ```
 
 校验通过后会输出：
@@ -155,12 +179,14 @@ output/final/candidates_YYYY-MM-DD.csv
 output/final/invalid_candidates_YYYYMMDD_HHMMSS.json
 ```
 
-## 4. 写入本地暂存并同步飞书
+## 5. 写入本地暂存并同步飞书
 
 校验通过后写入 `local_source.db`，并在飞书配置完整时同步目标表：
 
 ```powershell
-python -m mineru_pipeline --raw-candidates output\candidates_by_codex.json
+$env:FEISHU_BITABLE_APP_TOKEN="Is6Xb3btbazhFhsDXgFcqFG1nRc"
+$env:FEISHU_BITABLE_TABLE_ID="tblyd52cT70XrFf1"
+python -m mineru_pipeline --raw-candidates output\final\current_feishu_candidates_20260727.json
 ```
 
 本地暂存记录管理：
@@ -172,6 +198,55 @@ python -m mineru_pipeline --action delete --id 3
 python -m mineru_pipeline --action sync
 python -m mineru_pipeline --action clean
 ```
+
+## 6. 置信度规则
+
+`confidence` 的定义：当前自动抽取结果被源 Excel 证据直接支撑、字段语义未错位的工程置信度，取值 `0-1`。
+
+基础分为 `0.50`。加分项：
+
+- `+0.10`：品牌来自单元格或路径，并能和车型语义匹配。
+- `+0.15`：车型来自明确车型/车系列，且已从配置、价格、地点中正确切分。
+- `+0.10`：至少有一个价格字段来自明确表头或源行。
+- `+0.10`：价格币种和贸易术语明确，没有汇率换算。
+- `+0.10`：供应商来自路径或表内明确字段。
+- `+0.05`：地点/基地来自明确单元格、文件名或路径。
+- `+0.05`：颜色/库存拆分来自明确格式。
+- `+0.05`：生产年月、舵向、市场版本等辅助字段有直接证据。
+
+扣分项：
+
+- `-0.10`：供应商仅由路径推断，表内没有重复支持。
+- `-0.10`：车型经过规则修正、切分或中英转译后才成立。
+- `-0.15`：价格表头不完整，只能根据数值区间或上下文判断。
+- `-0.15`：地点来自路径/文件名推断，而不是行级单元格。
+- `-0.15`：颜色/库存从混合文本拆分，格式存在风险。
+- `-0.20`：原行存在合并单元格、跨行继承、空白继承或 `row None`。
+- `-0.30`：源证据存在地点冲突，例如同一证据同时出现霍尔果斯和南沙。
+- `-0.30`：车型原始文本含公告代码、配置长文本或大数字，存在切分风险。
+
+建议分级：
+
+- `0.90-1.00`：高置信，可自动入库。
+- `0.75-0.89`：可用，适合自动入库但建议抽样复核。
+- `0.60-0.74`：需关注，表结构或字段推断较多。
+- `<0.60`：不建议自动入库，应人工检查。
+
+## 7. 更新已写入记录的 confidence
+
+如果已经写入飞书，但需要根据新规则刷新 `confidence`，先读取当前候选中的 `record_id -> confidence`，生成按分值分组的批量更新 payload，再调用飞书批量更新。
+
+当前项目使用 `record_id` 作为外部记录 ID，不是飞书 `_record_id`。更新时必须先从飞书读回 `_record_id`，再调用：
+
+```powershell
+lark-cli base +record-batch-update `
+  --base-token Is6Xb3btbazhFhsDXgFcqFG1nRc `
+  --table-id tblyd52cT70XrFf1 `
+  --json "@output/final/confidence_updates_YYYYMMDD/confidence_0_85_1.json" `
+  --as user
+```
+
+`lark-cli` 的 `@file` 参数必须使用当前工作目录下的相对路径，不能传绝对路径。
 
 ## 字段校验
 
