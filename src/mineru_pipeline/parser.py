@@ -315,6 +315,8 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
             row_text = " ".join(str(v) for v in row if v is not None).strip()
             if not row_text or any(row_text.startswith(w) for w in ["以上", "注：", "注:", "说明"]):
                 continue
+            if any(kw in row_text.lower() for kw in ["小计", "合计", "总计", "小结", "subtotal", "total"]):
+                continue
 
             row_dict: dict[str, Any] = {
                 "_source_file": file_path.name,

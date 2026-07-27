@@ -719,7 +719,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         if not brand or not model or brand in ("未知", "unknown") or model in ("待确认车型", "未知", "unknown"):
             continue
 
-        if any(noise in str(model) for noise in ("注：", "来源", "合计", "加价", "车型代码")) or any(noise in str(brand) for noise in ("注：", "来源")):
+        if any(noise in str(model).lower() for noise in ("注：", "来源", "合计", "小计", "总计", "小结", "加价", "车型代码", "subtotal", "total")) or any(noise in str(brand).lower() for noise in ("注：", "来源", "合计", "小计")):
             continue
 
         if brand not in VALID_AUTOMOBILE_BRANDS:
