@@ -35,6 +35,8 @@ Excel/CSV 输入
 - 颜色库存组合必须拆成独立记录：`3暖阳白/黑` 表示 `stock_quantity=3`、`exterior_color=暖阳白`、`interior_color=黑`。
 - 温州迈卡类表格中的 `霍尔果斯-海狮05EV-13海域白/灰` 必须拆为 `location=霍尔果斯`、`model=海狮05EV`、`stock_quantity=13`、`exterior_color=海域白`、`interior_color=灰`。
 - 价格必须严格区分贸易术语和币种，例如 `cost_fca_usd` 必须有 FCA + USD 证据。
+- `display_price_low` 和 `display_price_high` 是网站前台展示价，和车源数据源没有直接逻辑关系；车源导入系统必须保留这两个字段但不得从源 Excel 抓取或写入。
+- 源表中的建议零售价、人民币报价、非明确 FOB/FCA/EXW/CIF USD 外贸价格，都应写入 `supplier_price_cny`；不得写入 `display_price_low/high`。
 - `confidence` 是工程置信度，不是模型概率。它反映字段是否被源 Excel 行、表头、路径、币种、贸易术语和拆分规则直接支撑。
 - 用户字段和不支持字段不作为普通记录写入。
 
@@ -155,7 +157,7 @@ python scripts\prepare_current_feishu_candidates.py `
 说明：
 
 - `manual_excel_summary.py` 会读取源 Excel 的 sheet、row、文件路径，并保留 `source_file/source_sheet/source_row/content_hash`。
-- `prepare_current_feishu_candidates.py` 会把中间候选转换为当前飞书表字段，切分 `model/trim_config`，拆分颜色库存，补 `_evidence`，并生成 `confidence`。
+- `prepare_current_feishu_candidates.py` 会把中间候选转换为当前飞书表字段，切分 `model/trim_config`，拆分颜色库存，补 `_evidence`，并生成 `confidence`。该脚本不会从车源表填充 `display_price_low/high`。
 - `content_hash` 会写入 `record_id`，用于后续读回和批量更新。
 
 ## 4. 校验并生成最终文件
@@ -260,6 +262,8 @@ interior_color, location, steering_setup, market_region, cost_exw_usd,
 manufacture_month, display_price_low, stock_quantity, vehicle_supply_base,
 display_price_high
 ```
+
+其中 `display_price_low`、`display_price_high` 虽是目标表字段，但车源导入流程不得写入；它们由网站展示层或后续运营规则维护。
 
 跳过字段：
 

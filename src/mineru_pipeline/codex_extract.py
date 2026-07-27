@@ -35,7 +35,7 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "exterior_color": FieldSpec("exterior_color", "text", description="外观颜色。"),
     "model": FieldSpec("model", "text", description="车型主名称，不含配置、价格、备注。"),
     "trim_config": FieldSpec("trim_config", "text", description="配置/版本/款型。"),
-    "supplier_price_cny": FieldSpec("supplier_price_cny", "number", description="供应商人民币报价，只写 CNY 原始报价。"),
+    "supplier_price_cny": FieldSpec("supplier_price_cny", "number", description="车源侧人民币价格。源表中的建议零售价、人民币报价、非明确外贸 USD 成本价格都写入此字段。"),
     "cost_fca_usd": FieldSpec("cost_fca_usd", "number", description="FCA 美元成本价。"),
     "trim_config_id": FieldSpec("trim_config_id", "text", description="配置库 ID。只有匹配到配置库时写入。"),
     "cost_fob_usd": FieldSpec("cost_fob_usd", "number", description="FOB 美元成本价。"),
@@ -52,10 +52,10 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "market_region": FieldSpec("market_region", "select", options=("国内版", "国际版", "International Version"), description="市场/版本，可多选。"),
     "cost_exw_usd": FieldSpec("cost_exw_usd", "number", description="EXW 美元成本价。"),
     "manufacture_month": FieldSpec("manufacture_month", "number", description="生产月份，1-12。"),
-    "display_price_low": FieldSpec("display_price_low", "number", description="展示价格低值，只有源表或人工规则明确时写入。"),
+    "display_price_low": FieldSpec("display_price_low", "number", description="前台展示价格低值。车源导入不得从源表抓取或写入此字段。"),
     "stock_quantity": FieldSpec("stock_quantity", "number", description="库存数量。"),
     "vehicle_supply_base": FieldSpec("vehicle_supply_base", "text", description="车源供应基地。"),
-    "display_price_high": FieldSpec("display_price_high", "number", description="展示价格高值，只有源表或人工规则明确时写入。"),
+    "display_price_high": FieldSpec("display_price_high", "number", description="前台展示价格高值。车源导入不得从源表抓取或写入此字段。"),
 }
 
 WRITABLE_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.writable)

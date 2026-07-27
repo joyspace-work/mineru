@@ -227,14 +227,13 @@ def calculate_confidence(row: dict[str, Any], candidate: dict[str, Any], source_
         score += 0.10
     if candidate.get("model") and not re.search(r"\b(EXW|FCA|FOB|CIF|USD|CNY|RMB)\b|[$¥￥]\s*\d|\d{5,}", model, re.I):
         score += 0.15
-    if any(candidate.get(field) not in (None, "", []) for field in ("supplier_price_cny", "cost_exw_usd", "cost_fca_usd", "cost_fob_usd", "display_price_low")):
+    if any(candidate.get(field) not in (None, "", []) for field in ("supplier_price_cny", "cost_exw_usd", "cost_fca_usd", "cost_fob_usd")):
         score += 0.10
     if (
         ("CNY/RMB supplier price evidence" in evidence and candidate.get("supplier_price_cny"))
         or ("EXW USD evidence" in evidence and candidate.get("cost_exw_usd"))
         or ("FCA USD evidence" in evidence and candidate.get("cost_fca_usd"))
         or ("FOB USD evidence" in evidence and candidate.get("cost_fob_usd"))
-        or ("official_suggested_price_cny" in notes and candidate.get("display_price_low"))
     ):
         score += 0.10
     if candidate.get("supplier"):
@@ -304,7 +303,7 @@ def convert(row: dict[str, Any]) -> dict[str, Any] | None:
             notes_parts.append(f"{key}={row.get(key)}")
     notes_parts.append(f"source={row.get('source_file')} sheet={row.get('source_sheet')} row={row.get('source_row')}")
     notes = " | ".join(part for part in notes_parts if part)
-    supplier_cny = row.get("cost_fca_cny") or row.get("cost_fob_cny") or row.get("cost_exw_cny")
+    supplier_cny = row.get("cost_fca_cny") or row.get("cost_fob_cny") or row.get("cost_exw_cny") or row.get("official_suggested_price_cny")
     candidate = {field: None for field in CURRENT_FIELDS}
     candidate.update(
         {
@@ -329,11 +328,11 @@ def convert(row: dict[str, Any]) -> dict[str, Any] | None:
             "vehicle_supply_base": clean(row.get("location")),
             "steering_setup": clean(row.get("steering_setup")),
             "market_region": normalize_market(row.get("version_type")),
-            "display_price_low": row.get("official_suggested_price_cny"),
+            "display_price_low": None,
             "stock_quantity": qty,
         }
     )
-    if not any(candidate.get(field) not in (None, "", []) for field in ("cost_fca_usd", "cost_fob_usd", "cost_exw_usd", "supplier_price_cny", "display_price_low", "stock_quantity")):
+    if not any(candidate.get(field) not in (None, "", []) for field in ("cost_fca_usd", "cost_fob_usd", "cost_exw_usd", "supplier_price_cny", "stock_quantity")):
         return None
     candidate["confidence"] = calculate_confidence(row, candidate, source_evidence)
     evidence = {field: source_evidence for field, value in candidate.items() if value not in (None, "", [])}
