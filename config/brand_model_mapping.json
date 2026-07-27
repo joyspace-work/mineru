@@ -989,6 +989,714 @@
       "raw_model": "A00级",
       "brand": "Bestune",
       "model": "Xiaoma"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "元PLUS 智驾版510KM超越型",
+      "brand": "BYD",
+      "model": "Atto 3"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "第二代元PLUS智驾版",
+      "brand": "BYD",
+      "model": "Atto 3"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "宋L DM-i智驾版112KM领先型",
+      "brand": "BYD",
+      "model": "Song L DM-i"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "比亚迪 E7",
+      "brand": "BYD",
+      "model": "e7"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海狮06DM-i132领航版",
+      "brand": "BYD",
+      "model": "Sealion 06 DM-i"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海狮06EV 520领航版",
+      "brand": "BYD",
+      "model": "Sealion 06 EV"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海狮06EV 605领航Pro版",
+      "brand": "BYD",
+      "model": "Sealion 06 EV"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海豹05DM-i智驾版55KM豪华型",
+      "brand": "BYD",
+      "model": "Seal 05 DM-i"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海鸥智驾版",
+      "brand": "BYD",
+      "model": "Seagull"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "秦L EV",
+      "brand": "BYD",
+      "model": "Qin L EV"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "驱逐舰05荣耀版 55KM畅行版",
+      "brand": "BYD",
+      "model": "Destroyer 05"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "鲨鱼皮卡",
+      "brand": "BYD",
+      "model": "Shark"
+    },
+    {
+      "raw_brand": "Changan",
+      "raw_model": "DEEPAL 六月",
+      "brand": "Changan",
+      "model": "Deepal SL03"
+    },
+    {
+      "raw_brand": "Changan",
+      "raw_model": "启源Q07",
+      "brand": "Changan",
+      "model": "Nevo Q07"
+    },
+    {
+      "raw_brand": "Changan",
+      "raw_model": "启源Q07激光版",
+      "brand": "Changan",
+      "model": "Nevo Q07"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "125KM探索十",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "60km启航版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "60km自在版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "寻川版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "观野版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "远航家225km远航版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "逐岳版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "云海 SUV EV",
+      "brand": "Wuling",
+      "model": "Yunhai EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "云海 SUV EV",
+      "brand": "Wuling",
+      "model": "Yunhai EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "云海 SUV PHEV",
+      "brand": "Wuling",
+      "model": "Yunhai PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "云海 SUV PHEV",
+      "brand": "Wuling",
+      "model": "Yunhai PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "缤果S",
+      "brand": "Wuling",
+      "model": "Bingo S"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "缤果S",
+      "brand": "Wuling",
+      "model": "Bingo S"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "BINGO S",
+      "brand": "Wuling",
+      "model": "Bingo S"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "BINGO S",
+      "brand": "Wuling",
+      "model": "Bingo S"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光560 EV",
+      "brand": "Wuling",
+      "model": "Starlight 560 EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光560 EV",
+      "brand": "Wuling",
+      "model": "Starlight 560 EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光560 PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 560 PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光560 PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 560 PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光560 燃油版",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光560 燃油版",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光560",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光560",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "EKSION EV",
+      "brand": "Wuling",
+      "model": "Starlight 560 EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "EKSION EV",
+      "brand": "Wuling",
+      "model": "Starlight 560 EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "EKSION PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 560 PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "EKSION PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 560 PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "EKSION",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "EKSION",
+      "brand": "Wuling",
+      "model": "Starlight 560"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光730 EV",
+      "brand": "Wuling",
+      "model": "Starlight 730 EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光730 EV",
+      "brand": "Wuling",
+      "model": "Starlight 730 EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光730 PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 730 PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光730 PHEV",
+      "brand": "Wuling",
+      "model": "Starlight 730 PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光730 燃油版",
+      "brand": "Wuling",
+      "model": "Starlight 730"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光730 燃油版",
+      "brand": "Wuling",
+      "model": "Starlight 730"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光730",
+      "brand": "Wuling",
+      "model": "Starlight 730"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光730",
+      "brand": "Wuling",
+      "model": "Starlight 730"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光EV",
+      "brand": "Wuling",
+      "model": "Starlight EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光EV",
+      "brand": "Wuling",
+      "model": "Starlight EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光PHEV",
+      "brand": "Wuling",
+      "model": "Starlight PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光PHEV",
+      "brand": "Wuling",
+      "model": "Starlight PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星光L",
+      "brand": "Wuling",
+      "model": "Starlight L"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星光L",
+      "brand": "Wuling",
+      "model": "Starlight L"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "五菱之光EV",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "五菱之光EV",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "之光厢式运输车",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "之光厢式运输车",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "新之光",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "新之光",
+      "brand": "Wuling",
+      "model": "Wuling Sunshine"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "五菱扬光电卡",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "五菱扬光电卡",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "扬光厢式运输车 EV",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "扬光厢式运输车 EV",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "扬光客车 EV",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "扬光客车 EV",
+      "brand": "Wuling",
+      "model": "Yangguang EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "五菱荣光新卡",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "五菱荣光新卡",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光加长",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光加长",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光单排货车",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光单排货车",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光双排货车",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光双排货车",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光新单排",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光新单排",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光新双排",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光新双排",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "荣光新卡",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "荣光新卡",
+      "brand": "Wuling",
+      "model": "Rongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "华境S PHEV",
+      "brand": "Wuling",
+      "model": "Huajing S PHEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "华境S PHEV",
+      "brand": "Wuling",
+      "model": "Huajing S PHEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光mini EV",
+      "brand": "Wuling",
+      "model": "Hongguang MINI EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光mini EV",
+      "brand": "Wuling",
+      "model": "Hongguang MINI EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光mini",
+      "brand": "Wuling",
+      "model": "Hongguang MINI EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光mini",
+      "brand": "Wuling",
+      "model": "Hongguang MINI EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光 EV",
+      "brand": "Wuling",
+      "model": "Hongguang EV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光 EV",
+      "brand": "Wuling",
+      "model": "Hongguang EV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光 REEV",
+      "brand": "Wuling",
+      "model": "Hongguang REEV"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光 REEV",
+      "brand": "Wuling",
+      "model": "Hongguang REEV"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光PLUS",
+      "brand": "Wuling",
+      "model": "Hongguang PLUS"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光PLUS",
+      "brand": "Wuling",
+      "model": "Hongguang PLUS"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光S3",
+      "brand": "Wuling",
+      "model": "Hongguang S3"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光S3",
+      "brand": "Wuling",
+      "model": "Hongguang S3"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光V",
+      "brand": "Wuling",
+      "model": "Hongguang V"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光V",
+      "brand": "Wuling",
+      "model": "Hongguang V"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "新宏光S",
+      "brand": "Wuling",
+      "model": "Hongguang S"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "新宏光S",
+      "brand": "Wuling",
+      "model": "Hongguang S"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "宏光",
+      "brand": "Wuling",
+      "model": "Hongguang"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "宏光",
+      "brand": "Wuling",
+      "model": "Hongguang"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星驰",
+      "brand": "Wuling",
+      "model": "Xingchi"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星驰",
+      "brand": "Wuling",
+      "model": "Xingchi"
+    },
+    {
+      "raw_brand": "BYD",
+      "raw_model": "海狮06EV",
+      "brand": "BYD",
+      "model": "Sealion 06 EV"
+    },
+    {
+      "raw_brand": "长安",
+      "raw_model": "DEEPAL 六月",
+      "brand": "Changan",
+      "model": "Deepal"
+    },
+    {
+      "raw_brand": "长安",
+      "raw_model": "启源Q07激光版",
+      "brand": "Changan",
+      "model": "Nevo Q07"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "125KM探索十",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "60km启航版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "60km自在版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "寻川版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "观野版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "远航家225km远航版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "逐岳版",
+      "brand": "Geely",
+      "model": "Galaxy L6"
+    },
+    {
+      "raw_brand": "Wuling",
+      "raw_model": "星驰 SUV\n310S SUV",
+      "brand": "Wuling",
+      "model": "Xingchi"
+    },
+    {
+      "raw_brand": "五菱",
+      "raw_model": "星驰 SUV\n310S SUV",
+      "brand": "Wuling",
+      "model": "Xingchi"
     }
   ]
 }
