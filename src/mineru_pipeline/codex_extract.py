@@ -104,6 +104,8 @@ def candidate_template() -> dict[str, Any]:
         ],
         "rules": [
             "Only fill a field when the Excel evidence supports that exact field meaning.",
+            "File path and filename are valid evidence for supplier, location, vehicle_supply_base, brand, and model when those facts are encoded in folder names or filenames.",
+            "When using path evidence, cite the exact # Path or # Path parts entry in _evidence for that field.",
             "Do not put unrelated but format-compatible data into a field.",
             "model must contain only the vehicle model family, never location, color, stock quantity, price, or multiple model names.",
             "When the source row contains model + trim, put the family in model and the remaining version text in trim_config.",
@@ -209,6 +211,23 @@ def validate_model_value(model: str, candidate: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _path_or_row_evidence(evidence: str) -> bool:
+    lowered = evidence.lower()
+    return any(token in lowered for token in ("# path", "path parts", "source:", "row ", "merged:", "merged ", "sheet:"))
+
+
+def validate_source_origin_evidence(field: str, value: Any, evidence: str) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if field not in {"supplier", "vehicle_supply_base", "location", "brand", "model"}:
+        return []
+    if not evidence.strip():
+        return []
+    if not _path_or_row_evidence(evidence):
+        return [f"{field}: evidence must cite path, filename, sheet, merged range, or row"]
+    return []
+
+
 def validate_location_scope(candidate: dict[str, Any], normalized: dict[str, Any]) -> list[str]:
     location = str(normalized.get("location") or "")
     if not location:
@@ -302,6 +321,7 @@ def validate_candidate(candidate: dict[str, Any], *, require_evidence: bool = Tr
     if require_evidence:
         for field, value in normalized.items():
             errors.extend(validate_field_evidence(field, value, evidence_for(candidate, field)))
+            errors.extend(validate_source_origin_evidence(field, value, evidence_for(candidate, field)))
 
     return (None, errors) if errors else (normalized, [])
 
@@ -343,13 +363,14 @@ def write_excel_evidence_bundle(source: str | Path, output_root: str | Path) -> 
         "files": [],
     }
     for excel_file in iter_excel_files(source):
-        rendered: ExcelText = render_excel_file(excel_file)
+        rendered: ExcelText = render_excel_file(excel_file, source)
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", excel_file.stem).strip("_") or "workbook"
         evidence_path = bundle_dir / f"{safe_name}.txt"
         evidence_path.write_text(rendered.text, "utf-8")
         manifest["files"].append({
             "source": str(excel_file),
             "evidence_path": str(evidence_path),
+            "path_parts": list(rendered.path_parts),
             "sheet_count": rendered.sheet_count,
             "row_count": rendered.row_count,
         })

@@ -136,6 +136,26 @@ def test_validate_candidate_rejects_incomplete_model_when_evidence_contains_spec
     assert any("model appears incomplete" in error for error in errors)
 
 
+def test_validate_candidate_accepts_supplier_base_and_location_from_path_evidence():
+    candidate = valid_candidate()
+    candidate.update({
+        "supplier": "温州迈卡新能源",
+        "vehicle_supply_base": "霍尔果斯基地",
+        "location": "霍尔果斯基地",
+    })
+    candidate["_evidence"].update({
+        "supplier": "# Path parts: 1=温州迈卡新能源 | 2=霍尔果斯基地 | 3=报价.xlsx",
+        "vehicle_supply_base": "# Path parts: 1=温州迈卡新能源 | 2=霍尔果斯基地 | 3=报价.xlsx",
+        "location": "# Path parts: 1=温州迈卡新能源 | 2=霍尔果斯基地 | 3=报价.xlsx",
+    })
+
+    normalized, errors = validate_candidate(candidate)
+
+    assert errors == []
+    assert normalized["supplier"] == "温州迈卡新能源"
+    assert normalized["vehicle_supply_base"] == "霍尔果斯基地"
+
+
 def test_validate_candidate_records_returns_invalid_report_shape():
     valid, invalid = validate_candidate_records([valid_candidate(), {"brand": "BYD"}])
 
@@ -145,7 +165,9 @@ def test_validate_candidate_records_returns_invalid_report_shape():
 
 
 def test_write_excel_evidence_bundle_writes_manifest_and_template(tmp_path: Path):
-    source = tmp_path / "supplier.xlsx"
+    root = tmp_path / "温州迈卡新能源" / "霍尔果斯基地"
+    root.mkdir(parents=True)
+    source = root / "supplier.xlsx"
     workbook = Workbook()
     sheet = workbook.active
     sheet["A1"] = "车型"
@@ -154,11 +176,13 @@ def test_write_excel_evidence_bundle_writes_manifest_and_template(tmp_path: Path
     sheet["B2"] = 9250
     workbook.save(source)
 
-    bundle = write_excel_evidence_bundle(source, tmp_path / "out")
+    bundle = write_excel_evidence_bundle(tmp_path, tmp_path / "out")
 
     manifest = json.loads((bundle / "manifest.json").read_text("utf-8"))
     template = json.loads((bundle / "candidate_template.json").read_text("utf-8"))
     assert manifest["target"]["table_id"] == "tblyd52cT70XrFf1"
     assert manifest["files"][0]["row_count"] == 2
+    assert manifest["files"][0]["path_parts"] == ["温州迈卡新能源", "霍尔果斯基地", "supplier.xlsx"]
     assert template["records"][0]["_evidence"]["model"]
     assert any("Wenzhou Maika example" in rule for rule in template["rules"])
+    assert any("File path and filename are valid evidence" in rule for rule in template["rules"])

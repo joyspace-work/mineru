@@ -27,6 +27,7 @@ Excel/CSV 输入
 - 只处理 Excel/CSV，不处理图片、PDF、OCR 或 UI。
 - 不使用外部 LLM API；`.env` 不需要任何模型 API Key。
 - 只有源表证据明确支持某个字段时才写入该字段。
+- 文件路径和文件名也是有效证据源；供应商、基地、地点、品牌、车型等信息如果编码在目录名或文件名中，必须读取并在 `_evidence` 中引用对应 `# Path` 或 `# Path parts`。
 - 不能因为内容“格式像数字/地点/价格”就写入字段。
 - `model` 只能写车型主名称，例如 `海狮05EV`、`海狮06Dmi`、`驱逐舰`、`海狮07`；不能把地点、颜色库存、配置、价格或多个车型列表塞进 `model`。
 - 地点必须按 Excel 行或合并单元格覆盖范围写入；霍尔果斯行不能写成南沙，南沙行也不能写成霍尔果斯。
@@ -87,6 +88,8 @@ output/evidence/codex_evidence_YYYYMMDD_HHMMSS/
 
 ```text
 # Source: supplier.xlsx
+# Path: 温州迈卡新能源\霍尔果斯基地\supplier.xlsx
+# Path parts: 1=温州迈卡新能源 | 2=霍尔果斯基地 | 3=supplier.xlsx
 ## Sheet: 报价表
 merged: A2:A10=霍尔果斯基地
 row 1: A=地点 | B=车型 | C=指导价 | D=颜色库存 | E=FCA提货价 usd

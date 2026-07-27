@@ -6,7 +6,9 @@ from mineru_pipeline.excel_text import iter_excel_files, render_excel_file
 
 
 def test_render_excel_file_preserves_sheet_rows_columns_and_merged_values(tmp_path: Path):
-    path = tmp_path / "supplier.xlsx"
+    folder = tmp_path / "温州迈卡新能源" / "霍尔果斯基地"
+    folder.mkdir(parents=True)
+    path = folder / "supplier.xlsx"
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "报价表"
@@ -21,14 +23,17 @@ def test_render_excel_file_preserves_sheet_rows_columns_and_merged_values(tmp_pa
     sheet["C3"] = 9300
     workbook.save(path)
 
-    rendered = render_excel_file(path)
+    rendered = render_excel_file(path, tmp_path)
 
     assert "# Source: supplier.xlsx" in rendered.text
+    assert "# Path: 温州迈卡新能源" in rendered.text
+    assert "# Path parts: 1=温州迈卡新能源 | 2=霍尔果斯基地 | 3=supplier.xlsx" in rendered.text
     assert "## Sheet: 报价表" in rendered.text
     assert "merged: A2:A3=霍尔果斯基地" in rendered.text
     assert "row 2: A=霍尔果斯基地 | B=车型A | C=9250" in rendered.text
     assert "row 3: A=霍尔果斯基地 | B=车型B | C=9300" in rendered.text
     assert rendered.row_count == 3
+    assert rendered.path_parts == ("温州迈卡新能源", "霍尔果斯基地", "supplier.xlsx")
 
 
 def test_iter_excel_files_accepts_excel_and_csv_only(tmp_path: Path):

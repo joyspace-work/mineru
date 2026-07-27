@@ -19,6 +19,7 @@ class ExcelText:
     text: str
     sheet_count: int
     row_count: int
+    path_parts: tuple[str, ...] = ()
 
 
 def iter_excel_files(source: str | Path) -> list[Path]:
@@ -48,8 +49,24 @@ def _trim_cells(values: list[str]) -> list[str]:
     return values
 
 
-def _render_csv(path: Path) -> ExcelText:
-    lines = [f"# Source: {path.name}", "## Sheet: csv"]
+def path_evidence_lines(path: Path, root: Path | None = None) -> tuple[list[str], tuple[str, ...]]:
+    try:
+        display_path = path.relative_to(root) if root else path
+    except ValueError:
+        display_path = path
+    parts = tuple(display_path.parts)
+    lines = [
+        f"# Source: {path.name}",
+        f"# Path: {display_path}",
+    ]
+    if parts:
+        lines.append("# Path parts: " + " | ".join(f"{index + 1}={part}" for index, part in enumerate(parts)))
+    return lines, parts
+
+
+def _render_csv(path: Path, root: Path | None = None) -> ExcelText:
+    lines, parts = path_evidence_lines(path, root)
+    lines.append("## Sheet: csv")
     row_count = 0
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         for row_number, row in enumerate(csv.reader(handle), start=1):
@@ -58,16 +75,17 @@ def _render_csv(path: Path) -> ExcelText:
                 continue
             row_count += 1
             lines.append(f"row {row_number}: " + " | ".join(f"{get_column_letter(i)}={value}" for i, value in enumerate(values, start=1)))
-    return ExcelText(source=path, text="\n".join(lines), sheet_count=1, row_count=row_count)
+    return ExcelText(source=path, text="\n".join(lines), sheet_count=1, row_count=row_count, path_parts=parts)
 
 
-def render_excel_file(path: str | Path) -> ExcelText:
+def render_excel_file(path: str | Path, root: str | Path | None = None) -> ExcelText:
     source = Path(path)
+    source_root = Path(root) if root else None
     if source.suffix.lower() == ".csv":
-        return _render_csv(source)
+        return _render_csv(source, source_root)
 
     workbook = load_workbook(source, data_only=True, read_only=False)
-    lines = [f"# Source: {source.name}"]
+    lines, parts = path_evidence_lines(source, source_root)
     total_rows = 0
     try:
         for sheet in workbook.worksheets:
@@ -111,4 +129,4 @@ def render_excel_file(path: str | Path) -> ExcelText:
     finally:
         workbook.close()
 
-    return ExcelText(source=source, text="\n".join(lines), sheet_count=len(workbook.worksheets), row_count=total_rows)
+    return ExcelText(source=source, text="\n".join(lines), sheet_count=len(workbook.worksheets), row_count=total_rows, path_parts=parts)
