@@ -979,16 +979,16 @@
       "model": "SU7"
     },
     {
-      "raw_brand": "零跑",
-      "raw_model": "小马",
-      "brand": "Leapmotor",
-      "model": "T03"
+      "raw_brand": "奔腾小马",
+      "raw_model": "A00级",
+      "brand": "Bestune",
+      "model": "Xiaoma"
     },
     {
-      "raw_brand": "零跑",
-      "raw_model": "小马奔腾",
-      "brand": "Leapmotor",
-      "model": "T03"
+      "raw_brand": "小马奔腾",
+      "raw_model": "A00级",
+      "brand": "Bestune",
+      "model": "Xiaoma"
     }
   ]
 }

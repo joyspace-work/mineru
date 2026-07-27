@@ -537,7 +537,7 @@ DEFAULT_KNOWLEDGE_BASE = {
         "supplierPriceCny": ["采购价", "批价", "底价", "优惠价", "全款裸车价", "供货价", "单价"],
         "officialSuggestedPriceCny": ["指导价", "官方指导价", " MSRP", "厂方指导价"],
         "stockQuantity": ["现车数量", "台数", "数量", "库存", "数量（台）", "配额"],
-        "location": ["提货地", "提货地点", "港口", "发货地", "仓库", "存放地"],
+        "location": ["提货地", "提货地点", "港口", "发货地", "仓库", "存放地", "交付地点", "交货地点", "FOB地点", "EXW地点", "FCA地点", "FOB港口", "FCA港口", "EXW港口", "exw地点", "fob地点", "fca地点"],
         "steering": ["舵向", "方向盘位置", "驱动方向"],
         "manufactureYear": ["manufacture_year", "manufactureyear", "生产年份", "年款"],
         "manufactureMonth": ["manufacture_month", "manufacturemonth", "生产月份"],

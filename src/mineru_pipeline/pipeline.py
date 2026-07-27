@@ -418,12 +418,23 @@ def _cost_cny(value: Any, currency: Any = None) -> float | None:
     return None
 
 
+INVALID_LOCATION_WORDS = {
+    "小马奔腾", "奔腾小马", "奔腾", "小马", "T03", "BYD", "长安", "阿维塔", "智己", "丰田", "东风",
+    "五菱", "吉利", "Smart", "广汽", "上汽", "埃安", "启源", "深蓝", "问界", "捷途", "红旗", "零跑",
+    "理想", "小鹏", "小米", "极氪", "福田", "远程", "奇瑞", "长城", "坦克", "岚图"
+}
+
+
 def normalize_location_cn(val: Any) -> str | None:
     if not val:
         return None
     raw = str(val).strip()
     cleaned = re.sub(r"^(FCA|FOB|EXW|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
-    return cleaned if cleaned else None
+    if not cleaned:
+        return None
+    if cleaned in INVALID_LOCATION_WORDS or any(w.lower() == cleaned.lower() for w in INVALID_LOCATION_WORDS):
+        return None
+    return cleaned
 
 
 def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any]:
@@ -431,7 +442,39 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     fob = to_number(row.get("costFobUsd") or row.get("cost_fob_usd") or row.get("priceFob"))
     fca = to_number(row.get("costFcaUsd") or row.get("cost_fca_usd") or row.get("priceFca"))
     cny = to_number(row.get("supplierPriceCny") or row.get("supplier_price_cny") or row.get("officialPrice") or row.get("officialPriceCny") or row.get("official_suggested_price_cny") or row.get("officialSuggestedPrice"))
-    loc = normalize_location_cn(row.get("location"))
+
+    raw_loc_sources = [
+        str(row.get("FOB地点") or row.get("FOB港口") or row.get("fob_location") or ""),
+        str(row.get("FCA地点") or row.get("FCA港口") or row.get("fca_location") or ""),
+        str(row.get("EXW地点") or row.get("EXW港口") or row.get("exw_location") or ""),
+        str(row.get("交付地点") or row.get("交货地点") or row.get("location") or "")
+    ]
+    raw_loc_combo = " ".join([s for s in raw_loc_sources if s])
+
+    # If generic priceExw was assigned, but raw location/delivery text specifies FCA, FOB, or CIF (e.g. 'FCA南沙'):
+    m_term = re.search(r"(FCA|FOB|EXW|CIF)", raw_loc_combo, re.IGNORECASE)
+    if m_term and exw is not None and fca is None and fob is None:
+        term = m_term.group(1).upper()
+        if term == "FCA":
+            fca, exw = exw, None
+        elif term == "FOB":
+            fob, exw = exw, None
+
+    # Determine location prioritizing term-specific location columns
+    loc = None
+    if fob is not None and (row.get("FOB地点") or row.get("FOB港口")):
+        loc = normalize_location_cn(row.get("FOB地点") or row.get("FOB港口"))
+    elif fca is not None and (row.get("FCA地点") or row.get("FCA港口")):
+        loc = normalize_location_cn(row.get("FCA地点") or row.get("FCA港口"))
+    elif exw is not None and (row.get("EXW地点") or row.get("EXW港口")):
+        loc = normalize_location_cn(row.get("EXW地点") or row.get("EXW港口"))
+
+    if not loc:
+        for loc_src in [row.get("location"), row.get("交付地点"), row.get("交货地点"), row.get("提货地"), row.get("提货地点")]:
+            clean_l = normalize_location_cn(loc_src)
+            if clean_l:
+                loc = clean_l
+                break
 
     text_parts = [
         str(row.get("trimName") or row.get("trim_config") or ""),

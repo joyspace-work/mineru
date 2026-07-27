@@ -46,8 +46,38 @@ KNOWN_BRANDS_PATH_SET = {
     "理想", "Li Auto", "小鹏", "XPENG", "小米", "Xiaomi", "智己", "IM Motors",
     "极氪", "Zeekr", "福田", "Foton", "远程", "Farizon", "奇瑞", "Chery",
     "长城", "GWM", "坦克", "Tank", "岚图", "Voyah", "问界", "AITO", "山东小车",
-    "奔腾", "广汽", "GAC", "埃安", "Smart", "蔚来", "NIO"
+    "奔腾", "奔腾小马", "小马奔腾", "小马", "广汽", "GAC", "埃安", "Smart", "蔚来", "NIO", "上汽", "SAIC"
 }
+
+KNOWN_MODELS_PATH_SET = {
+    "T03", "t03", "小马奔腾", "奔腾小马", "ATTO3", "atto3", "阿维塔", "智己", "智己L6", "智己LS6",
+    "铂智3X", "i60", "V8E", "海狮05", "A7", "星耀6", "牛仔", "新V系列", "SV系列", "奥铃"
+}
+
+KNOWN_LOCATIONS = {
+    "南沙", "广州", "天津", "上海", "深圳", "宁波", "青岛", "厦门", "霍尔果斯", "霍尔果斯基地",
+    "喀什", "喀什综合保税区", "盐城", "咸阳", "芜湖", "成都", "重庆", "西安", "太原", "武汉",
+    "郑州", "合肥", "南京", "杭州", "福州", "大连", "连云港", "钦州", "防城港", "凭祥",
+    "满洲里", "二连浩特", "瑞丽", "黑河", "绥芬河"
+}
+
+
+def is_physical_location_path(text: str) -> str | None:
+    if not text:
+        return None
+    raw = text.strip()
+    clean = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
+    if clean in KNOWN_BRANDS_PATH_SET or clean in KNOWN_MODELS_PATH_SET:
+        return None
+    if any(b.lower() == clean.lower() for b in KNOWN_BRANDS_PATH_SET) or any(m.lower() == clean.lower() for m in KNOWN_MODELS_PATH_SET):
+        return None
+    if re.search(r"^(FCA|EXW|FOB|CIF)", raw, re.IGNORECASE):
+        return clean
+    if clean in KNOWN_LOCATIONS or any(loc in clean for loc in KNOWN_LOCATIONS):
+        return clean
+    if clean.endswith(("港", "仓", "基地", "保税区", "关", "口岸")):
+        return clean
+    return None
 
 
 def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
@@ -58,31 +88,27 @@ def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
     else:
         rel_parts = parts[-4:]
 
-    file_stem = file_path.stem
     supplier = rel_parts[0] if len(rel_parts) >= 1 else None
+    location = None
+    brand = None
+    model = None
 
-    if len(rel_parts) == 3:
-        p1 = rel_parts[1]
-        if p1 in KNOWN_BRANDS_PATH_SET or any(b.lower() == p1.lower() for b in KNOWN_BRANDS_PATH_SET):
-            brand = p1
-            location = None
+    mid_parts = rel_parts[1:-1]
+    for part in mid_parts:
+        loc = is_physical_location_path(part)
+        if loc:
+            location = loc
+        elif part in KNOWN_BRANDS_PATH_SET or any(b.lower() == part.lower() for b in KNOWN_BRANDS_PATH_SET):
+            if not brand:
+                brand = part
+            else:
+                model = part
         else:
-            location = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", p1, flags=re.IGNORECASE)
-            brand = None
-        model = file_stem
-    elif len(rel_parts) >= 4:
-        raw_loc = rel_parts[1]
-        location = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw_loc, flags=re.IGNORECASE)
-        brand = rel_parts[2]
-        model = rel_parts[3]
-    else:
-        location = None
-        brand = None
-        model = file_stem
+            if not model:
+                model = part
 
-    if model and file_path.name in (model, f"{model}.xlsx", f"{model}.pdf"):
-        model = file_stem
-    elif not model and file_stem not in ("价格表", "车源", "报价表", "库存"):
+    file_stem = file_path.stem
+    if not model and file_stem not in ("价格表", "车源", "报价表", "库存", "价格", "报价"):
         model = file_stem
 
     return {
@@ -283,6 +309,7 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
         header_index = -1
         last_header_index = -1
         header_map: dict[int, str] = {}
+        raw_header_map: dict[int, str] = {}
 
         for index, row in enumerate(rows[:10]):
             row_text = " ".join(str(v) for v in row if v is not None).strip()
@@ -299,6 +326,9 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
                 last_header_index = index
                 for col, field in mapped.items():
                     header_map[col] = field
+                for col, val in enumerate(row):
+                    if val is not None:
+                        raw_header_map[col] = str(val).strip()
 
         if header_index < 0:
             text_candidates = parse_unstructured_text_rows(rows, sheet_name, meta, file_path)
@@ -329,9 +359,14 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
             }
 
             for col_idx, cell_value in enumerate(row):
-                if cell_value is not None and col_idx in header_map:
-                    field = header_map[col_idx]
-                    row_dict[field] = cell_value
+                if cell_value is not None:
+                    if col_idx in header_map:
+                        field = header_map[col_idx]
+                        row_dict[field] = cell_value
+                    if col_idx in raw_header_map:
+                        r_head = raw_header_map[col_idx]
+                        if r_head not in row_dict:
+                            row_dict[r_head] = cell_value
 
             if any(row_dict.get(k) for k in ("modelName", "model", "priceExw", "priceFob", "priceFca", "supplierPriceCny", "officialSuggestedPriceCny", "stockQuantity", "exteriorColor")):
                 all_rows.append(row_dict)
