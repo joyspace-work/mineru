@@ -1007,7 +1007,7 @@ def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dic
 
             json_out_path = parsed_dir / rel_path.with_suffix(".json")
             json_out_path.parent.mkdir(parents=True, exist_ok=True)
-            json_out_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+            json_out_path.write_text(json.dumps(rows, default=str, ensure_ascii=False, indent=2), encoding="utf-8")
 
             results.append({"source": str(file_path), "outputPath": str(json_out_path), "rowCount": len(rows), "rows": rows})
             _mark_processed(db, file_path.name, content_hash, dry_run)

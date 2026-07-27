@@ -39,6 +39,17 @@ def normalize_header_cell(cell_value: Any) -> str | None:
     return get_rule_engine().normalize_header_cell(cell_value)
 
 
+KNOWN_BRANDS_PATH_SET = {
+    "比亚迪", "BYD", "吉利", "Geely", "长安", "Changan", "五菱", "Wuling",
+    "东风", "Dongfeng", "丰田", "Toyota", "捷途", "Jetour", "方程豹", "Fangchengbao",
+    "深蓝", "Deepal", "启源", "阿维塔", "Avatr", "红旗", "Hongqi", "零跑", "Leapmotor",
+    "理想", "Li Auto", "小鹏", "XPENG", "小米", "Xiaomi", "智己", "IM Motors",
+    "极氪", "Zeekr", "福田", "Foton", "远程", "Farizon", "奇瑞", "Chery",
+    "长城", "GWM", "坦克", "Tank", "岚图", "Voyah", "问界", "AITO", "山东小车",
+    "奔腾", "广汽", "GAC", "埃安", "Smart", "蔚来", "NIO"
+}
+
+
 def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
     parts = [p for p in file_path.parts if p not in (".", "..")]
     if "input" in parts:
@@ -48,12 +59,26 @@ def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
         rel_parts = parts[-4:]
 
     file_stem = file_path.stem
-
     supplier = rel_parts[0] if len(rel_parts) >= 1 else None
-    raw_loc = rel_parts[1] if len(rel_parts) >= 2 else None
-    location = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw_loc, flags=re.IGNORECASE) if raw_loc else None
-    brand = rel_parts[2] if len(rel_parts) >= 3 else None
-    model = rel_parts[3] if len(rel_parts) >= 4 else None
+
+    if len(rel_parts) == 3:
+        p1 = rel_parts[1]
+        if p1 in KNOWN_BRANDS_PATH_SET or any(b.lower() == p1.lower() for b in KNOWN_BRANDS_PATH_SET):
+            brand = p1
+            location = None
+        else:
+            location = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", p1, flags=re.IGNORECASE)
+            brand = None
+        model = file_stem
+    elif len(rel_parts) >= 4:
+        raw_loc = rel_parts[1]
+        location = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw_loc, flags=re.IGNORECASE)
+        brand = rel_parts[2]
+        model = rel_parts[3]
+    else:
+        location = None
+        brand = None
+        model = file_stem
 
     if model and file_path.name in (model, f"{model}.xlsx", f"{model}.pdf"):
         model = file_stem
@@ -181,9 +206,9 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
 
         clean_str = re.sub(r"(\d),(\d{3})", r"\1\2", row_str)
 
-        m_loc = re.search(r"(FCA|EXW|FOB|CIF)\s*([\u4e00-\u9fa5/]+)", clean_str, re.IGNORECASE)
+        m_loc = re.search(r"(?:EXW|FOB|FCA|CIF)\s*([\u4e00-\u9fa5]{2,6})", clean_str, re.IGNORECASE)
         if m_loc:
-            current_loc = m_loc.group(2)
+            current_loc = m_loc.group(1)
 
         m_smart = re.search(r"(Smart\s*#?\d+)\s*([A-Za-z0-9\+\s]*)", clean_str, re.IGNORECASE)
         m_im = re.search(r"(智己\s*L6|L6)\s*([A-Za-z0-9\+\s]*\+?)", clean_str, re.IGNORECASE)
@@ -194,18 +219,25 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
         elif m_im:
             current_model = "L6"
             current_trim = m_im.group(1).strip() if "MAX" in m_im.group(1) else (m_im.group(2).strip() or None)
+        else:
+            m_trim = re.search(r"(\d{3,4}\s*[\u4e00-\u9fa5A-Za-z0-9]+)", clean_str)
+            if m_trim:
+                current_trim = m_trim.group(1).strip()
 
         m_cny = re.search(r"(?:指导价|售价|RMB|¥)\s*(\d{5,6})", clean_str, re.IGNORECASE)
         if m_cny:
             current_cny = float(m_cny.group(1))
 
         m_dollar = re.search(r"\$\s*(\d{4,6})", clean_str)
-        m_exw = re.search(r"(\d{4,6})\s*(?:EXW|FOB|FCA|CIF)", clean_str, re.IGNORECASE)
+        m_exw = re.search(r"(\d{4,6})\s*(?:EXW|FOB|FCA|CIF|USD)", clean_str, re.IGNORECASE)
+        m_after_exw = re.search(r"(?:EXW|FOB|FCA|CIF)\s*(?:[^\d]*)\s*(\d{4,6})", clean_str, re.IGNORECASE)
 
         if m_dollar:
             current_usd = float(m_dollar.group(1))
         elif m_exw:
             current_usd = float(m_exw.group(1))
+        elif m_after_exw:
+            current_usd = float(m_after_exw.group(1))
 
         if current_model and (current_cny or current_usd):
             cand: dict[str, Any] = {
