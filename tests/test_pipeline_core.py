@@ -81,3 +81,10 @@ def test_normalize_brand_model_handles_model_in_brand_column():
     b2, m2 = normalize_brand_model("吉利牛仔", "2026款观野版")
     assert b2 == "Geely"
     assert m2 == "Cowboy"
+def test_normalize_location_cn_canonicalization():
+    from mineru_pipeline.pipeline import normalize_location_cn
+    assert normalize_location_cn("广州南沙基地") == "南沙"
+    assert normalize_location_cn("南沙是") == "南沙"
+    assert normalize_location_cn("FCA南沙港") == "南沙"
+    assert normalize_location_cn("霍尔果斯综合保税区") == "霍尔果斯"
+    assert normalize_location_cn("小马奔腾") is None

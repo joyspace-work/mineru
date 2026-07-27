@@ -425,6 +425,43 @@ INVALID_LOCATION_WORDS = {
 }
 
 
+STANDARD_LOCATION_CANONICAL_MAP = {
+    "南沙": "南沙",
+    "霍尔果斯": "霍尔果斯",
+    "喀什": "喀什",
+    "上海": "上海",
+    "天津": "天津",
+    "广州": "广州",
+    "深圳": "深圳",
+    "宁波": "宁波",
+    "青岛": "青岛",
+    "厦门": "厦门",
+    "盐城": "盐城",
+    "咸阳": "咸阳",
+    "芜湖": "芜湖",
+    "武汉": "武汉",
+    "成都": "成都",
+    "重庆": "重庆",
+    "西安": "西安",
+    "太原": "太原",
+    "郑州": "郑州",
+    "合肥": "合肥",
+    "南京": "南京",
+    "杭州": "杭州",
+    "福州": "福州",
+    "大连": "大连",
+    "连云港": "连云港",
+    "钦州": "钦州",
+    "防城港": "防城港",
+    "凭祥": "凭祥",
+    "满洲里": "满洲里",
+    "二连浩特": "二连浩特",
+    "瑞丽": "瑞丽",
+    "黑河": "黑河",
+    "绥芬河": "绥芬河",
+}
+
+
 def normalize_location_cn(val: Any) -> str | None:
     if not val:
         return None
@@ -434,7 +471,15 @@ def normalize_location_cn(val: Any) -> str | None:
         return None
     if cleaned in INVALID_LOCATION_WORDS or any(w.lower() == cleaned.lower() for w in INVALID_LOCATION_WORDS):
         return None
-    return cleaned
+
+    # Standardize physical location to canonical name (e.g. 广州南沙基地 / 南沙是 / 南沙港 -> 南沙)
+    for key_city, std_name in STANDARD_LOCATION_CANONICAL_MAP.items():
+        if key_city in cleaned:
+            return std_name
+
+    # Remove generic location suffixes like 基地, 港, 仓, 站, 口岸, 保税区, 是
+    cleaned = re.sub(r"(?:基地|港口|港|仓库|仓|口岸|综合保税区|保税区|黄埔|梅山|盐田|蛇口|是)+$", "", cleaned).strip()
+    return cleaned if cleaned else None
 
 
 def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any]:
