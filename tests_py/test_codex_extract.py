@@ -79,6 +79,63 @@ def test_validate_candidate_rejects_unknown_field_and_invalid_select():
     assert "steering_setup: invalid option 中舵" in errors
 
 
+def test_validate_candidate_rejects_model_with_location_and_color_stock():
+    candidate = valid_candidate()
+    candidate["model"] = "霍尔果斯-海狮05EV-3暖阳白/黑"
+    candidate["_evidence"]["model"] = "row 2 B=霍尔果斯-海狮05EV-3暖阳白/黑"
+
+    normalized, errors = validate_candidate(candidate)
+
+    assert normalized is None
+    assert "model must not contain location text" in errors
+    assert "model must not contain color/stock text" in errors
+
+
+def test_validate_candidate_rejects_horgos_row_written_as_nansha():
+    candidate = valid_candidate()
+    candidate["location"] = "南沙"
+    candidate["_evidence"]["location"] = "merged A2:A10=霍尔果斯基地"
+
+    normalized, errors = validate_candidate(candidate)
+
+    assert normalized is None
+    assert "location scope mismatch: Horgos evidence cannot be written as Nansha" in errors
+
+
+def test_validate_candidate_rejects_color_stock_mismatch_for_maika_horgos_case():
+    candidate = valid_candidate()
+    candidate.update({
+        "model": "海狮05EV",
+        "stock_quantity": 13,
+        "exterior_color": "海域白",
+        "interior_color": "黑",
+        "location": "霍尔果斯基地",
+    })
+    candidate["_evidence"].update({
+        "model": "row 2 B=海狮05EV",
+        "stock_quantity": "row 2 D=13海域白/灰",
+        "exterior_color": "row 2 D=13海域白/灰",
+        "interior_color": "row 2 D=13海域白/灰",
+        "location": "merged A2:A10=霍尔果斯基地",
+    })
+
+    normalized, errors = validate_candidate(candidate)
+
+    assert normalized is None
+    assert "interior_color mismatch: evidence implies 灰" in errors
+
+
+def test_validate_candidate_rejects_incomplete_model_when_evidence_contains_specific_model():
+    candidate = valid_candidate()
+    candidate["model"] = "海狮07"
+    candidate["_evidence"]["model"] = "row 2 B=霍尔果斯-海狮05EV-3暖阳白/黑"
+
+    normalized, errors = validate_candidate(candidate)
+
+    assert normalized is None
+    assert any("model appears incomplete" in error for error in errors)
+
+
 def test_validate_candidate_records_returns_invalid_report_shape():
     valid, invalid = validate_candidate_records([valid_candidate(), {"brand": "BYD"}])
 
@@ -104,3 +161,4 @@ def test_write_excel_evidence_bundle_writes_manifest_and_template(tmp_path: Path
     assert manifest["target"]["table_id"] == "tblyd52cT70XrFf1"
     assert manifest["files"][0]["row_count"] == 2
     assert template["records"][0]["_evidence"]["model"]
+    assert any("Wenzhou Maika example" in rule for rule in template["rules"])

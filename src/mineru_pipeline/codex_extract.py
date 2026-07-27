@@ -63,6 +63,21 @@ NUMBER_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_t
 TEXT_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_type == "text")
 SELECT_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_type == "select")
 PRICE_FIELDS = ("supplier_price_cny", "cost_exw_usd", "cost_fca_usd", "cost_fob_usd", "display_price_low", "display_price_high")
+KNOWN_MODEL_TOKENS = (
+    "驱逐舰",
+    "海狮05EV",
+    "海狮06Dmi",
+    "海狮06DMI",
+    "海狮06 DMI",
+    "海狮07",
+    "海狮 07",
+    "海鸥",
+    "海豚",
+    "Sealion",
+    "Destroyer",
+)
+KNOWN_LOCATION_TOKENS = ("霍尔果斯", "南沙", "广州南沙", "宁波", "上海", "天津", "深圳")
+COLOR_STOCK_PATTERN = re.compile(r"\d+\s*[\u4e00-\u9fffA-Za-z]+(?:/[\u4e00-\u9fffA-Za-z]+)")
 
 
 def field_schema_for_codex() -> list[dict[str, Any]]:
@@ -90,6 +105,12 @@ def candidate_template() -> dict[str, Any]:
         "rules": [
             "Only fill a field when the Excel evidence supports that exact field meaning.",
             "Do not put unrelated but format-compatible data into a field.",
+            "model must contain only the vehicle model family, never location, color, stock quantity, price, or multiple model names.",
+            "When the source row contains model + trim, put the family in model and the remaining version text in trim_config.",
+            "Merged location cells apply only to the rows covered by that merged range. Do not copy Nansha to Horgos rows or Horgos to Nansha rows.",
+            "Split color-stock cells like 3暖阳白/黑, 13海域白/灰, 13灰/黑 into separate records with stock_quantity, exterior_color, and interior_color.",
+            "Wenzhou Maika example: 霍尔果斯-海狮05EV-3暖阳白/黑 means location=霍尔果斯, model=海狮05EV, stock_quantity=3, exterior_color=暖阳白, interior_color=黑.",
+            "Wenzhou Maika example: 霍尔果斯-海狮05EV-13海域白/灰 means location=霍尔果斯, model=海狮05EV, stock_quantity=13, exterior_color=海域白, interior_color=灰.",
             "Put leftover source facts in notes only when they do not belong to a more specific field.",
             "Do not write user fields or unsupported fields.",
         ],
@@ -167,6 +188,65 @@ def validate_field_evidence(field: str, value: Any, evidence: str) -> list[str]:
     return errors
 
 
+def validate_model_value(model: str, candidate: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    normalized_model = model.strip()
+    if any(token in normalized_model for token in KNOWN_LOCATION_TOKENS):
+        errors.append("model must not contain location text")
+    if COLOR_STOCK_PATTERN.search(normalized_model):
+        errors.append("model must not contain color/stock text")
+    if re.search(r"\b(EXW|FCA|FOB|CIF|USD|CNY|RMB)\b|[$¥￥]\s*\d|\d{4,}", normalized_model, re.I):
+        errors.append("model must not contain price, trade term, or large numeric text")
+    if any(separator in normalized_model for separator in ("、", "\n", ";", "；")):
+        hits = [token for token in KNOWN_MODEL_TOKENS if token.lower() in normalized_model.lower()]
+        if len(hits) >= 2:
+            errors.append("model must be one vehicle family, not a list of multiple models")
+
+    evidence = evidence_for(candidate, "model")
+    evidence_hits = [token for token in KNOWN_MODEL_TOKENS if token.lower() in evidence.lower()]
+    if evidence_hits and not any(token.lower() in normalized_model.lower() for token in evidence_hits):
+        errors.append(f"model appears incomplete; evidence contains {', '.join(evidence_hits)}")
+    return errors
+
+
+def validate_location_scope(candidate: dict[str, Any], normalized: dict[str, Any]) -> list[str]:
+    location = str(normalized.get("location") or "")
+    if not location:
+        return []
+    evidence = evidence_for(candidate, "location")
+    combined = " ".join(str(value or "") for value in (evidence, candidate.get("notes"), normalized.get("vehicle_supply_base")))
+    errors: list[str] = []
+    if "霍尔果斯" in combined and "南沙" in location:
+        errors.append("location scope mismatch: Horgos evidence cannot be written as Nansha")
+    if "南沙" in combined and "霍尔果斯" in location:
+        errors.append("location scope mismatch: Nansha evidence cannot be written as Horgos")
+    if any(token in evidence for token in KNOWN_LOCATION_TOKENS) and location not in evidence:
+        errors.append("location value must match the row or merged-cell evidence")
+    return errors
+
+
+def validate_color_stock_split(candidate: dict[str, Any], normalized: dict[str, Any]) -> list[str]:
+    evidence_text = " | ".join(evidence_for(candidate, field) for field in ("stock_quantity", "exterior_color", "interior_color"))
+    match = COLOR_STOCK_PATTERN.search(evidence_text)
+    if not match:
+        return []
+    raw = match.group(0).replace(" ", "")
+    parsed = re.match(r"(?P<qty>\d+)(?P<exterior>[^/]+)/(?P<interior>[^+|;；,，\s]+)", raw)
+    if not parsed:
+        return []
+    errors: list[str] = []
+    qty = int(parsed.group("qty"))
+    exterior = parsed.group("exterior")
+    interior = parsed.group("interior")
+    if normalized.get("stock_quantity") != qty:
+        errors.append(f"stock_quantity mismatch: evidence implies {qty}")
+    if str(normalized.get("exterior_color") or "") != exterior:
+        errors.append(f"exterior_color mismatch: evidence implies {exterior}")
+    if str(normalized.get("interior_color") or "") != interior:
+        errors.append(f"interior_color mismatch: evidence implies {interior}")
+    return errors
+
+
 def validate_candidate(candidate: dict[str, Any], *, require_evidence: bool = True) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     normalized: dict[str, Any] = {}
@@ -214,6 +294,10 @@ def validate_candidate(candidate: dict[str, Any], *, require_evidence: bool = Tr
         errors.append("brand is required")
     if "model" not in normalized:
         errors.append("model is required")
+    else:
+        errors.extend(validate_model_value(str(normalized["model"]), candidate))
+    errors.extend(validate_location_scope(candidate, normalized))
+    errors.extend(validate_color_stock_split(candidate, normalized))
 
     if require_evidence:
         for field, value in normalized.items():
