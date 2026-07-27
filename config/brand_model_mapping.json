@@ -1697,6 +1697,54 @@
       "raw_model": "星驰 SUV\n310S SUV",
       "brand": "Wuling",
       "model": "Xingchi"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "趣野版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "趣野版",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "Geely",
+      "raw_model": "趣野版+AT胎",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "吉利",
+      "raw_model": "趣野版+AT胎",
+      "brand": "Geely",
+      "model": "Cowboy"
+    },
+    {
+      "raw_brand": "Changan",
+      "raw_model": "阿维塔 06",
+      "brand": "Avatr",
+      "model": "06"
+    },
+    {
+      "raw_brand": "长安",
+      "raw_model": "阿维塔 06",
+      "brand": "Avatr",
+      "model": "06"
+    },
+    {
+      "raw_brand": "Changan",
+      "raw_model": "阿维塔 12",
+      "brand": "Avatr",
+      "model": "12"
+    },
+    {
+      "raw_brand": "长安",
+      "raw_model": "阿维塔 12",
+      "brand": "Avatr",
+      "model": "12"
     }
   ]
 }

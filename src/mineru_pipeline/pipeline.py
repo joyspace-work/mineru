@@ -648,7 +648,8 @@ def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = No
         trim_str = re.sub(r"[（\(][^）\)]*[）\)]", "", trim_str).strip()
         trim_str = re.sub(r"\s+[A-Za-z\s/,\-–\(\)]+$", "", trim_str).strip()
 
-    # 1. Filter out technical parameter / dimension / chassis noise
+    # 1. Filter out technical parameter / dimension / chassis noise and trade term price suffixes
+    trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA|CIF)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\d{3,5}\s*[*xX×]\s*\d{3,5}\s*[*xX×]\s*\d{3,5}", "", trim_str)
     trim_str = re.sub(r"(?:长宽高|尺寸|外形尺寸|车身尺寸|整车尺寸|轮距|轴距|长\*宽\*高)[：:\s]*[0-9*xX×]*", "", trim_str)
 
