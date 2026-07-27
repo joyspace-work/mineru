@@ -603,8 +603,8 @@ class RuleEngine:
         if not cleaned:
             return None
 
-        # Ignore generic column numbers / indexes
-        if cleaned in ("行号", "源文件", "转换方式", "序号", "id", "index", "no", "no."):
+        # Ignore generic column numbers / indexes and summary headers
+        if cleaned in ("行号", "源文件", "转换方式", "序号", "id", "index", "no", "no.") or any(kw in cleaned for kw in ("小计", "合计", "总计", "小结", "subtotal", "total")):
             return None
 
         # Direct SSOT field name match (case-insensitive)
