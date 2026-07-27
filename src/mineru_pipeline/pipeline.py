@@ -665,6 +665,16 @@ def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = No
     return trim_str
 
 
+VALID_AUTOMOBILE_BRANDS: set[str] = {
+    "BYD", "Geely", "Changan", "Wuling", "Dongfeng", "Toyota", "Jetour", "Fangchengbao",
+    "Deepal", "Avatr", "Hongqi", "Leapmotor", "Li Auto", "XPENG", "Xiaomi", "IM Motors",
+    "Zeekr", "Foton", "Farizon", "Chery", "GWM", "Tank", "Voyah", "AITO", "Stelato",
+    "Maextro", "Shangjie", "Shandong EV", "Bestune", "GAC", "Audi", "BMW", "Mercedes-Benz",
+    "Volkswagen", "Nissan", "Honda", "Volvo", "Hyundai", "Kia", "Radar", "MG", "Denza",
+    "Yangwang", "Baojun", "FAW", "Forthing", "Maxus", "JMC", "Arcfox", "Smart", "NIO"
+}
+
+
 def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     model_index = load_model_index()
     formatted: list[dict[str, Any]] = []
@@ -706,6 +716,9 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             continue
 
         if any(noise in str(model) for noise in ("注：", "来源", "合计", "加价", "车型代码")) or any(noise in str(brand) for noise in ("注：", "来源")):
+            continue
+
+        if brand not in VALID_AUTOMOBILE_BRANDS:
             continue
 
         final_brand = brand

@@ -265,7 +265,11 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
     meta = extract_path_metadata(file_path)
     all_rows: list[dict[str, Any]] = []
 
-    for sheet_name, rows in _read_rows(file_path).items():
+    raw_sheets = _read_rows(file_path)
+    summary_sheets = {k: v for k, v in raw_sheets.items() if k.strip().lower() in ("汇总", "summary", "stock", "全系报价", "报价汇总")}
+    sheets_to_process = summary_sheets if (summary_sheets and len(raw_sheets) > 1) else raw_sheets
+
+    for sheet_name, rows in sheets_to_process.items():
         if not rows or sheet_name in ("来源", "说明", "Trace", "Record"):
             continue
 
