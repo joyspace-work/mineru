@@ -640,15 +640,11 @@ def clean_trim_config(trim_val: Any, brand: str, model: str, raw_brand: Any = No
     if not trim_str:
         return None
 
-    # 0. Strip parenthetical equipment detail lists and trailing English descriptions
-    m_lv = re.match(r"^(LV\d(?:\s*[\u4e00-\u9fa5]+)?).*$", trim_str, re.IGNORECASE)
-    if m_lv:
-        trim_str = m_lv.group(1).strip()
-    else:
-        trim_str = re.sub(r"[（\(][^）\)]*[）\)]", "", trim_str).strip()
-        trim_str = re.sub(r"\s+[A-Za-z\s/,\-–\(\)]+$", "", trim_str).strip()
+    # 0. Strip parenthetical equipment detail lists
+    trim_str = re.sub(r"[（\(][^）\)]*[）\)]", "", trim_str).strip()
 
     # 1. Filter out technical parameter / dimension / chassis noise and trade term price suffixes
+    trim_str = re.sub(r"\b(LV\d+)\s+\1\b", r"\1", trim_str, flags=re.IGNORECASE)
     trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA|CIF)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\d{3,5}\s*[*xX×]\s*\d{3,5}\s*[*xX×]\s*\d{3,5}", "", trim_str)
     trim_str = re.sub(r"(?:长宽高|尺寸|外形尺寸|车身尺寸|整车尺寸|轮距|轴距|长\*宽\*高)[：:\s]*[0-9*xX×]*", "", trim_str)
@@ -800,6 +796,15 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         model_id = row.get("model_id") or row.get("modelId") or model_index.get((final_brand.lower(), final_model.lower()))
 
         trim_val = row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+        if model_raw and str(model_raw).strip():
+            m_raw_str = str(model_raw).strip()
+            if m_raw_str.lower() != str(final_model).lower() and m_raw_str.lower() != str(final_brand).lower():
+                if trim_val:
+                    t_str = str(trim_val).strip()
+                    if m_raw_str not in t_str and t_str not in m_raw_str:
+                        trim_val = f"{m_raw_str} {t_str}"
+                else:
+                    trim_val = m_raw_str
         
         # Enhanced price & location extraction
         price_info = extract_trade_term_prices_and_location(row)
