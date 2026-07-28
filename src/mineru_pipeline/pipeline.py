@@ -1136,7 +1136,11 @@ def run_excel_parsing(db: sqlite3.Connection, dry_run: bool = False) -> list[dic
                 print(f"Skipping already processed file: {file_path.name}")
                 continue
 
-            rows = parse_excel_file(file_path)
+            try:
+                rows = parse_excel_file(file_path)
+            except Exception as e:
+                print(f"Warning: Skipping unparseable Excel file {file_path.name}: {e}")
+                continue
             for row in rows:
                 row["_content_hash"] = content_hash
                 row["_source_file"] = file_path.name
