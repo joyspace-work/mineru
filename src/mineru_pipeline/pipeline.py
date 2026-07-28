@@ -212,7 +212,7 @@ def fetch_feishu_table_records_readonly(table_id: str) -> list[dict[str, Any]]:
             url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records?page_size=500"
             if page_token:
                 url += f"&page_token={page_token}"
-            res = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=5).json()
+            res = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15).json()
             data = res.get("data", {})
             items = data.get("items", [])
             records.extend([it.get("fields", {}) for it in items])
@@ -221,7 +221,7 @@ def fetch_feishu_table_records_readonly(table_id: str) -> list[dict[str, Any]]:
                 break
         return records
     except Exception as err:
-        logger.warning("Failed to fetch Feishu table %s read-only: %s", table_id, err)
+        print(f"Warning: Failed to fetch Feishu table {table_id} read-only: {err}")
         return []
 
 
