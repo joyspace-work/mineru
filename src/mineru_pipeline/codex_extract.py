@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from .excel_text import ExcelText, iter_excel_files, render_excel_file
+from .field_semantics import lint_candidate_semantics
 
 
 TARGET_BASE_TOKEN = "Is6Xb3btbazhFhsDXgFcqFG1nRc"
@@ -27,14 +28,14 @@ class FieldSpec:
 FIELD_SPECS: dict[str, FieldSpec] = {
     "model_id": FieldSpec("model_id", "text", description="车型库 ID。只有匹配到车型库时写入。"),
     "confidence": FieldSpec("confidence", "number", description="Codex 对该候选行的抽取置信度，0-1。"),
-    "brand": FieldSpec("brand", "text", description="品牌。必须来自源表或车型库匹配。"),
+    "brand": FieldSpec("brand", "select", options=("Wuling", "Geely", "BYD", "Leapmotor", "山东小车工厂", "Smart", "Bestune", "Toyota", "Farizon", "Changan", "Deepal", "AVATR", "Xiaomi", "Dongfeng", "GAC Aion", "IM Motors"), description="品牌。必须使用目标表单选项中的规范品牌。"),
     "developer": FieldSpec("developer", "user", writable=False, description="用户字段，普通批量写入跳过。"),
     "supplier": FieldSpec("supplier", "text", description="供应商名称，来自文件路径、表头或源表。"),
     "reviewer": FieldSpec("reviewer", "user", writable=False, description="多用户字段，普通批量写入跳过。"),
     "max_quantity": FieldSpec("max_quantity", "number", description="阶梯价格订购数量上限。"),
     "exterior_color": FieldSpec("exterior_color", "text", description="外观颜色。"),
-    "model": FieldSpec("model", "text", description="车型主名称，不含配置、价格、备注。"),
-    "trim_config": FieldSpec("trim_config", "text", description="配置/版本/款型。"),
+    "model": FieldSpec("model", "text", description="车型主名称，不含配置、续航、版本、价格、备注。例如 Galaxy M9。"),
+    "variant": FieldSpec("variant", "text", description="配置/版本/款型。例如 210km AWD Black Gold Smart Shine Edition。"),
     "supplier_price_cny": FieldSpec("supplier_price_cny", "number", description="车源侧人民币价格。源表中的建议零售价、人民币报价、非明确外贸 USD 成本价格都写入此字段。"),
     "cost_fca_usd": FieldSpec("cost_fca_usd", "number", description="FCA 美元成本价。"),
     "trim_config_id": FieldSpec("trim_config_id", "text", description="配置库 ID。只有匹配到配置库时写入。"),
@@ -47,14 +48,14 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "min_quantity": FieldSpec("min_quantity", "number", description="阶梯价格订购数量下限。"),
     "record_id": FieldSpec("record_id", "text", description="外部源记录 ID，不是飞书 record_id。"),
     "interior_color": FieldSpec("interior_color", "text", description="内饰颜色。"),
-    "location": FieldSpec("location", "text", description="提车地、港口、仓库或基地。"),
+    "location": FieldSpec("location", "text", description="出货地点/提车地/港口。不得写供应基地；不得带 EXW/FCA/FOB/CIF 前缀。"),
     "steering_setup": FieldSpec("steering_setup", "select", options=("左舵", "右舵"), description="舵向。"),
     "market_region": FieldSpec("market_region", "select", options=("国内版", "国际版", "International Version"), description="市场/版本，可多选。"),
     "cost_exw_usd": FieldSpec("cost_exw_usd", "number", description="EXW 美元成本价。"),
     "manufacture_month": FieldSpec("manufacture_month", "number", description="生产月份，1-12。"),
     "display_price_low": FieldSpec("display_price_low", "number", description="前台展示价格低值。车源导入不得从源表抓取或写入此字段。"),
     "stock_quantity": FieldSpec("stock_quantity", "number", description="库存数量。"),
-    "vehicle_supply_base": FieldSpec("vehicle_supply_base", "text", description="车源供应基地。"),
+    "vehicle_supply_base": FieldSpec("vehicle_supply_base", "text", description="车源供应基地。不得写出货地点或港口。"),
     "display_price_high": FieldSpec("display_price_high", "number", description="前台展示价格高值。车源导入不得从源表抓取或写入此字段。"),
 }
 
@@ -63,6 +64,9 @@ NUMBER_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_t
 TEXT_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_type == "text")
 SELECT_FIELDS = tuple(name for name, spec in FIELD_SPECS.items() if spec.field_type == "select")
 PRICE_FIELDS = ("supplier_price_cny", "cost_exw_usd", "cost_fca_usd", "cost_fob_usd", "display_price_low", "display_price_high")
+FIELD_ALIASES = {
+    "trim_config": "variant",
+}
 KNOWN_MODEL_TOKENS = (
     "驱逐舰",
     "海狮05EV",
@@ -75,9 +79,27 @@ KNOWN_MODEL_TOKENS = (
     "海豚",
     "Sealion",
     "Destroyer",
+    "Galaxy M9",
+    "Galaxy E5",
 )
+MODEL_EVIDENCE_ALIASES = {
+    "海鸥": ("Seagull",),
+    "海狮05EV": ("Sealion 05 EV",),
+    "海狮06Dmi": ("Sealion 06 DMI", "Sealion 06 DM-i"),
+    "海狮06DMI": ("Sealion 06 DMI", "Sealion 06 DM-i"),
+    "海狮06 DMI": ("Sealion 06 DMI", "Sealion 06 DM-i"),
+    "海狮07": ("Sealion 7",),
+    "海狮 07": ("Sealion 7",),
+}
 KNOWN_LOCATION_TOKENS = ("霍尔果斯", "南沙", "广州南沙", "宁波", "上海", "天津", "深圳")
+KNOWN_PORT_LOCATION_TOKENS = ("南沙", "广州南沙", "宁波", "上海", "天津", "深圳", "港", "口岸")
+BASE_MARKER_TOKENS = ("基地",)
 COLOR_STOCK_PATTERN = re.compile(r"\d+\s*[\u4e00-\u9fffA-Za-z]+(?:/[\u4e00-\u9fffA-Za-z]+)")
+SUBTOTAL_TOKENS = ("小计", "合计", "subtotal", "total")
+MODEL_VARIANT_PATTERN = re.compile(
+    r"\b\d+\s*km\b|\b(AWD|RWD|FWD|Edition|版本|版|款|配置|Smart Shine|Black Gold)\b",
+    re.I,
+)
 
 
 def field_schema_for_codex() -> list[dict[str, Any]]:
@@ -104,11 +126,15 @@ def candidate_template() -> dict[str, Any]:
         ],
         "rules": [
             "Only fill a field when the Excel evidence supports that exact field meaning.",
-            "File path and filename are valid evidence for supplier, location, vehicle_supply_base, brand, and model when those facts are encoded in folder names or filenames.",
+            "Supplier, vehicle_supply_base, and location may appear in folder path, filename, sheet name, merged cells, title rows, notes, or price headers.",
+            "Prefer in-table evidence first: row cells, merged cells, title/header rows, notes, price headers, and sheet names. Use folder path or filename only when the table itself does not specify the field.",
             "When using path evidence, cite the exact # Path or # Path parts entry in _evidence for that field.",
+            "vehicle_supply_base only stores base text such as 霍尔果斯基地. location only stores shipping place or port such as 南沙, 宁波, 上海, 深圳. Do not copy one into the other by inference.",
+            "Price headers like FCA南沙 or FOB深圳 provide both the trade term for the price field and a location value after removing the trade term prefix.",
             "Do not put unrelated but format-compatible data into a field.",
             "model must contain only the vehicle model family, never location, color, stock quantity, price, or multiple model names.",
-            "When the source row contains model + trim, put the family in model and the remaining version text in trim_config.",
+            "When the source row contains model + variant, put the family in model and the remaining version text in variant.",
+            "Example: brand=Geely, model=Galaxy M9, variant=210km AWD Black Gold Smart Shine Edition.",
             "Merged location cells apply only to the rows covered by that merged range. Do not copy Nansha to Horgos rows or Horgos to Nansha rows.",
             "Split color-stock cells like 3暖阳白/黑, 13海域白/灰, 13灰/黑 into separate records with stock_quantity, exterior_color, and interior_color.",
             "Wenzhou Maika example: 霍尔果斯-海狮05EV-3暖阳白/黑 means location=霍尔果斯, model=海狮05EV, stock_quantity=3, exterior_color=暖阳白, interior_color=黑.",
@@ -155,8 +181,28 @@ def normalize_market_region(value: Any) -> list[str] | None:
 def evidence_for(candidate: dict[str, Any], field: str) -> str:
     evidence = candidate.get("_evidence") or candidate.get("evidence") or {}
     if isinstance(evidence, dict):
-        return str(evidence.get(field) or "")
+        if evidence.get(field):
+            return str(evidence[field])
+        for old, new in FIELD_ALIASES.items():
+            if new == field and evidence.get(old):
+                return str(evidence[old])
     return ""
+
+
+def normalize_candidate_aliases(candidate: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(candidate)
+    evidence = normalized.get("_evidence")
+    if isinstance(evidence, dict):
+        normalized["_evidence"] = dict(evidence)
+    for old, new in FIELD_ALIASES.items():
+        if old in normalized and new not in normalized:
+            normalized[new] = normalized[old]
+        normalized.pop(old, None)
+        if isinstance(normalized.get("_evidence"), dict) and old in normalized["_evidence"] and new not in normalized["_evidence"]:
+            normalized["_evidence"][new] = normalized["_evidence"][old]
+        if isinstance(normalized.get("_evidence"), dict):
+            normalized["_evidence"].pop(old, None)
+    return normalized
 
 
 def _has_currency(text: str, currency: str) -> bool:
@@ -187,18 +233,26 @@ def validate_field_evidence(field: str, value: Any, evidence: str) -> list[str]:
         errors.append("supplier_price_cny requires CNY/RMB evidence")
     if field == "location" and re.search(r"\b(EXW|FCA|FOB|CIF)\b", str(value), re.I):
         errors.append("location must be a physical place without trade term prefix")
+    if field == "location" and any(token in str(value) for token in BASE_MARKER_TOKENS):
+        errors.append("location must not contain vehicle supply base text")
+    if field == "vehicle_supply_base" and any(token in str(value) for token in KNOWN_PORT_LOCATION_TOKENS) and not any(token in str(value) for token in BASE_MARKER_TOKENS):
+        errors.append("vehicle_supply_base must not contain shipping place or port text")
     return errors
 
 
 def validate_model_value(model: str, candidate: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     normalized_model = model.strip()
+    if normalized_model.lower() in SUBTOTAL_TOKENS or any(token in normalized_model for token in SUBTOTAL_TOKENS):
+        errors.append("model must not be subtotal/total text")
     if any(token in normalized_model for token in KNOWN_LOCATION_TOKENS):
         errors.append("model must not contain location text")
     if COLOR_STOCK_PATTERN.search(normalized_model):
         errors.append("model must not contain color/stock text")
     if re.search(r"\b(EXW|FCA|FOB|CIF|USD|CNY|RMB)\b|[$¥￥]\s*\d|\d{4,}", normalized_model, re.I):
         errors.append("model must not contain price, trade term, or large numeric text")
+    if MODEL_VARIANT_PATTERN.search(normalized_model):
+        errors.append("model must not contain variant/version text")
     if any(separator in normalized_model for separator in ("、", "\n", ";", "；")):
         hits = [token for token in KNOWN_MODEL_TOKENS if token.lower() in normalized_model.lower()]
         if len(hits) >= 2:
@@ -206,9 +260,46 @@ def validate_model_value(model: str, candidate: dict[str, Any]) -> list[str]:
 
     evidence = evidence_for(candidate, "model")
     evidence_hits = [token for token in KNOWN_MODEL_TOKENS if token.lower() in evidence.lower()]
-    if evidence_hits and not any(token.lower() in normalized_model.lower() for token in evidence_hits):
+    def evidence_hit_matches_model(token: str) -> bool:
+        if token.lower() in normalized_model.lower():
+            return True
+        return any(alias.lower() in normalized_model.lower() for alias in MODEL_EVIDENCE_ALIASES.get(token, ()))
+
+    if evidence_hits and not any(evidence_hit_matches_model(token) for token in evidence_hits):
         errors.append(f"model appears incomplete; evidence contains {', '.join(evidence_hits)}")
     return errors
+
+
+def validate_variant_value(variant: str) -> list[str]:
+    normalized_variant = variant.strip()
+    if not normalized_variant:
+        return []
+    errors: list[str] = []
+    if normalized_variant.lower() in SUBTOTAL_TOKENS or any(token in normalized_variant for token in SUBTOTAL_TOKENS):
+        errors.append("variant must not be subtotal/total text")
+    if re.search(r"(?:宁德|智芯)?\s*\d+(?:\.\d+)?\s*kwh\b", normalized_variant, re.I):
+        errors.append("variant must not contain battery capacity text")
+    if re.search(r"(?:^|\s|\|)\d{5,}(?:\.\d+)?(?:\s|\||$)", normalized_variant):
+        errors.append("variant must not contain standalone price text")
+    return errors
+
+
+def validate_candidate_semantics(normalized: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for issue in lint_candidate_semantics(normalized):
+        if issue.code.startswith("bad_"):
+            errors.append(f"{issue.field}: {issue.message}")
+    return errors
+
+
+def validate_price_relationships(normalized: dict[str, Any]) -> list[str]:
+    exw = normalized.get("cost_exw_usd")
+    fob = normalized.get("cost_fob_usd")
+    if exw in (None, "") or fob in (None, ""):
+        return []
+    if float(fob) < float(exw):
+        return ["cost_fob_usd must not be lower than cost_exw_usd on the same source row"]
+    return []
 
 
 def _path_or_row_evidence(evidence: str) -> bool:
@@ -233,7 +324,7 @@ def validate_location_scope(candidate: dict[str, Any], normalized: dict[str, Any
     if not location:
         return []
     evidence = evidence_for(candidate, "location")
-    combined = " ".join(str(value or "") for value in (evidence, candidate.get("notes"), normalized.get("vehicle_supply_base")))
+    combined = " ".join(str(value or "") for value in (evidence, candidate.get("notes")))
     errors: list[str] = []
     if "霍尔果斯" in combined and "南沙" in location:
         errors.append("location scope mismatch: Horgos evidence cannot be written as Nansha")
@@ -267,6 +358,7 @@ def validate_color_stock_split(candidate: dict[str, Any], normalized: dict[str, 
 
 
 def validate_candidate(candidate: dict[str, Any], *, require_evidence: bool = True) -> tuple[dict[str, Any] | None, list[str]]:
+    candidate = normalize_candidate_aliases(candidate)
     errors: list[str] = []
     normalized: dict[str, Any] = {}
     unknown = sorted(key for key in candidate if not key.startswith("_") and key not in FIELD_SPECS)
@@ -315,6 +407,10 @@ def validate_candidate(candidate: dict[str, Any], *, require_evidence: bool = Tr
         errors.append("model is required")
     else:
         errors.extend(validate_model_value(str(normalized["model"]), candidate))
+    if "variant" in normalized:
+        errors.extend(validate_variant_value(str(normalized["variant"])))
+    errors.extend(validate_candidate_semantics(normalized))
+    errors.extend(validate_price_relationships(normalized))
     errors.extend(validate_location_scope(candidate, normalized))
     errors.extend(validate_color_stock_split(candidate, normalized))
 

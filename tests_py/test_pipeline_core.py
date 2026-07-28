@@ -65,6 +65,8 @@ def test_sqlite_schema_has_target_fields(tmp_path: Path):
 
     assert "manufacture_year" in columns
     assert "cost_fca_usd" in columns
+    assert "variant" in columns
+    assert "trim_config" not in columns
     assert "review_progress" not in columns
 
 

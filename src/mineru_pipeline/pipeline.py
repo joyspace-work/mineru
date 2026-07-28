@@ -284,7 +284,7 @@ def action_aggregate(args: Any) -> int:
 
 
 def list_pending(db: sqlite3.Connection) -> list[sqlite3.Row]:
-    return db.execute("SELECT id, brand, model, trim_config, stock_quantity, cost_fca_usd, status FROM source_candidates WHERE status = 'pending'").fetchall()
+    return db.execute("SELECT id, brand, model, variant, stock_quantity, cost_fca_usd, status FROM source_candidates WHERE status = 'pending'").fetchall()
 
 
 def action_list() -> int:

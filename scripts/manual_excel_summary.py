@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -113,7 +114,25 @@ def source_row(row: dict[str, Any], path: Path, sheet: str, row_number: int | No
     row["source_sheet"] = sheet
     if row_number is not None:
         row["source_row"] = row_number
-    identity = "|".join(str(row.get(key) or "") for key in ("source_file", "source_sheet", "source_row", "model", "trim_config"))
+    identity_keys = (
+        "source_file",
+        "source_sheet",
+        "source_row",
+        "brand",
+        "model",
+        "trim_config",
+        "stock_quantity",
+        "exterior_color",
+        "interior_color",
+        "location",
+        "cost_exw_cny",
+        "cost_fca_cny",
+        "cost_fob_cny",
+        "cost_exw_usd",
+        "cost_fca_usd",
+        "cost_fob_usd",
+    )
+    identity = "|".join(str(row.get(key) or "") for key in identity_keys)
     row["content_hash"] = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return row
 
@@ -161,6 +180,10 @@ def column_kind(header: str, context: str) -> str | None:
         return "cost_fca_usd" if contains_any(header, ["usd", "美金", "美元", "$"]) else "cost_fca_cny"
     if "fob" in header_lower:
         return "cost_fob_usd" if contains_any(header, ["usd", "美金", "美元", "$"]) else "cost_fob_cny"
+    if contains_any(header, ["公告型号", "公告编号", "公告", "车型代码", "发动机代码"]):
+        return "notes"
+    if contains_any(header, ["英文车型", "英文车名", "english model"]):
+        return "trim_config"
     if contains_any(header, ["车型名称", "车辆名称", "车型及配置信息", "car model", "型号 / model", "model name", "车系", "系列 / series", "车型", "型号"]):
         return "model"
     if contains_any(header, ["配置", "版本", "款型", "config", "vehicle series", "车型版本", "动力+座椅布局", "车辆类型", "电池", "发动机代码", "车型代码", "动力engine"]):
@@ -269,7 +292,7 @@ def parse_table_sheet(path: Path, sheet: str, rows: list[list[Any]]) -> list[dic
     headers = []
     for col in range(max_cols):
         parts = []
-        for row_index in range(max(0, header_index - 2), min(len(rows), header_index + 3)):
+        for row_index in range(max(0, header_index - 2), header_index + 1):
             value = clean(rows[row_index][col]) if col < len(rows[row_index]) else None
             if value and value not in parts:
                 parts.append(value)
@@ -311,6 +334,11 @@ def parse_table_sheet(path: Path, sheet: str, rows: list[list[Any]]) -> list[dic
                 record["trim_config"] = f"{record['trim_config']} {value}"
             else:
                 record[kind] = value
+        location_text = str(record.get("location") or "")
+        if re.search(r"^FOB\s*", location_text, re.I) and record.get("cost_exw_cny") is not None and not record.get("cost_fob_cny"):
+            record["cost_fob_cny"] = record.pop("cost_exw_cny")
+        elif re.search(r"^FCA\s*", location_text, re.I) and record.get("cost_exw_cny") is not None and not record.get("cost_fca_cny"):
+            record["cost_fca_cny"] = record.pop("cost_exw_cny")
         record.setdefault("supplier", supplier_hint)
         record["brand"] = normalize_brand(record.get("brand") or brand_hint, record.get("model"))
         if not record.get("brand") and (contains_any(str(record.get("model") or ""), ["V6E", "V7E", "V8E", "SV"]) or contains_any(str(record.get("trim_config") or ""), ["V6E", "V7E", "V8E", "SV"])):
@@ -332,6 +360,7 @@ def parse_table_sheet(path: Path, sheet: str, rows: list[list[Any]]) -> list[dic
                 child["exterior_color"] = exterior
                 if interior:
                     child["interior_color"] = interior
+                source_row(child, path, sheet, row_number)
                 output.append(child)
         else:
             output.append(base)
@@ -378,6 +407,18 @@ def repair_path_brand(row: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    global ROOT, OUT, SUMMARY, EXCLUDE
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=str(ROOT))
+    parser.add_argument("--exclude", default=EXCLUDE)
+    parser.add_argument("--out", default=str(OUT))
+    parser.add_argument("--summary", default=str(SUMMARY))
+    args = parser.parse_args()
+    ROOT = Path(args.root)
+    EXCLUDE = args.exclude
+    OUT = Path(args.out)
+    SUMMARY = Path(args.summary)
+
     rows: list[dict[str, Any]] = []
     per_file = []
     files = sorted(path for path in ROOT.rglob("*.xlsx") if path.name != EXCLUDE)
