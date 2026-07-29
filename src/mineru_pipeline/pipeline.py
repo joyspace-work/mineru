@@ -32,6 +32,7 @@ from .schema import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INPUT_DIR = PROJECT_ROOT / "input"
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", PROJECT_ROOT / "output"))
+SNAPSHOT_DIR = PROJECT_ROOT / "feishu_snapshots"
 
 
 def load_brand_model_map() -> dict[tuple[str, str], tuple[str, str]]:
@@ -518,7 +519,13 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     exw = to_number(row.get("costExwUsd") or row.get("cost_exw_usd") or row.get("priceExw"))
     fob = to_number(row.get("costFobUsd") or row.get("cost_fob_usd") or row.get("priceFob"))
     fca = to_number(row.get("costFcaUsd") or row.get("cost_fca_usd") or row.get("priceFca"))
-    cny = to_number(row.get("supplierPriceCny") or row.get("supplier_price_cny") or row.get("officialPrice") or row.get("officialPriceCny") or row.get("official_suggested_price_cny") or row.get("officialSuggestedPrice"))
+    cny = to_number(
+        row.get("supplierPriceCny") or row.get("supplier_price_cny")
+        or row.get("officialPrice") or row.get("officialPriceCny")
+        or row.get("official_suggested_price_cny") or row.get("officialSuggestedPrice")
+        or row.get("officialSuggestedPriceCny") or row.get("指导价") or row.get("报价")
+        or row.get("国内指导价") or row.get("市场指导价") or row.get("建议零售价")
+    )
 
     raw_loc_sources = [
         str(row.get("FOB地点") or row.get("FOB港口") or row.get("fob_location") or ""),
@@ -546,10 +553,13 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     elif exw is not None and (row.get("EXW地点") or row.get("EXW港口")):
         loc = normalize_location_cn(row.get("EXW地点") or row.get("EXW港口"))
 
+    if loc in ("可指定发运", "发运", "未知地点", "未知"):
+        loc = None
+
     if not loc:
         for loc_src in [row.get("location"), row.get("交付地点"), row.get("交货地点"), row.get("提货地"), row.get("提货地点")]:
             clean_l = normalize_location_cn(loc_src)
-            if clean_l:
+            if clean_l and clean_l not in ("可指定发运", "发运", "未知地点", "未知"):
                 loc = clean_l
                 break
 
@@ -575,12 +585,18 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     if not has_usd_symbol:
         if exw is not None:
             if (cny is not None and exw / cny > 0.35) or (cny is None and exw >= 25000) or exw >= 50000:
+                if cny is None and exw >= 10000:
+                    cny = exw
                 exw = round(exw / 6.7)
         if fob is not None:
             if (cny is not None and fob / cny > 0.35) or (cny is None and fob >= 25000) or fob >= 50000:
+                if cny is None and fob >= 10000:
+                    cny = fob
                 fob = round(fob / 6.7)
         if fca is not None:
             if (cny is not None and fca / cny > 0.35) or (cny is None and fca >= 25000) or fca >= 50000:
+                if cny is None and fca >= 10000:
+                    cny = fca
                 fca = round(fca / 6.7)
 
     if not exw:
@@ -777,7 +793,7 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
                 continue
             if trim_str.lower() == target.lower() or trim_str.lower() == f"{target.lower()}新款" or trim_str == f"{target}+":
                 return None
-            pattern = re.compile(rf"^{re.escape(target)}\s*[\+\-款]?\s*", re.IGNORECASE)
+            pattern = re.compile(rf"^{re.escape(target)}(?:\b[\+\-款]?\s*|\s+)", re.IGNORECASE)
             trim_str = pattern.sub("", trim_str).strip()
 
     if not trim_str or trim_str in ("新款", "老款", "标准版", "默认", "+", "型", "款"):
@@ -1070,12 +1086,13 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 FEISHU_FIELD_MAP = get_feishu_field_map()
 
 FEISHU_TABLE_ALLOWED_FIELDS = {
-    "record_id", "supplier", "brand", "model", "model_id", "variant", "variant_id", "trim_config", "trim_config_id",
+    "record_id", "supplier", "brand", "model", "model_id", "variant", "variant_id",
     "manufacture_year", "manufacture_month", "exterior_color", "interior_color",
     "stock_quantity", "min_quantity", "max_quantity", "supplier_price_cny",
     "cost_exw_usd", "cost_fob_usd", "cost_fca_usd", "location", "steering_setup",
-    "market_region", "confidence", "notes", "order_wait_days", "display_price_low",
-    "display_price_high", "review_progress", "reviewer", "ai_importer", "developer"
+    "version_type", "status_vehicle", "confidence", "notes", "order_wait_days",
+    "lead_time", "display_price_low", "display_price_high",
+    "source_file", "sync_batch_id",
 }
 
 
@@ -1091,8 +1108,11 @@ def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
     if not fields.get("record_id") and record.get("id"):
         fields["record_id"] = str(record["id"])
 
-    if record.get("version_type"):
-        fields["market_region"] = [record["version_type"]]
+    # Pass through extra fields not in VEHICLE_FIELDS but needed for Feishu
+    for extra_key in ("source_file", "sync_batch_id"):
+        val = record.get(extra_key)
+        if val not in (None, ""):
+            fields[extra_key] = val
 
     if "brand" in fields and isinstance(fields["brand"], list):
         fields["brand"] = fields["brand"][0] if fields["brand"] else None
@@ -1492,6 +1512,182 @@ def action_clean() -> int:
         db.close()
 
 
+# ── Harvest: Feishu Snapshot Diff Learning ──────────────────────────────────
+
+DIFF_FIELDS = {
+    "supplier", "brand", "model", "variant",
+    "exterior_color", "interior_color",
+    "stock_quantity", "min_quantity", "max_quantity",
+    "supplier_price_cny", "cost_exw_usd", "cost_fob_usd", "cost_fca_usd",
+    "location", "steering_setup", "version_type", "status_vehicle",
+    "notes", "manufacture_year", "manufacture_month", "order_wait_days",
+}
+
+
+def _get_feishu_credentials() -> tuple[str, str, str] | None:
+    """Returns (access_token, app_token, table_id) or None if not configured."""
+    app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
+    app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
+    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN")
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES")
+    if not all([app_id, app_secret, app_token, table_id]):
+        return None
+    try:
+        token_data = fetch_with_retry(
+            "POST",
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret},
+            headers={"Content-Type": "application/json"},
+        )
+    except RuntimeError:
+        return None
+    if token_data.get("code") != 0:
+        return None
+    return (token_data["tenant_access_token"], app_token, table_id)
+
+
+def pull_feishu_table_records(access_token: str, app_token: str, table_id: str) -> list[dict[str, Any]]:
+    """Pull all records from a Feishu Bitable table with pagination."""
+    records: list[dict[str, Any]] = []
+    page_token: str | None = None
+    headers = {"Authorization": f"Bearer {access_token}"}
+    while True:
+        url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records?page_size=500"
+        if page_token:
+            url += f"&page_token={page_token}"
+        data = fetch_with_retry("GET", url, headers=headers)
+        items = data.get("data", {}).get("items", [])
+        for item in items:
+            flat: dict[str, Any] = {"_feishu_record_id": item.get("record_id")}
+            fields = item.get("fields", {})
+            for k, v in fields.items():
+                # Unwrap SingleSelect [{"text": "val"}] -> "val"
+                if isinstance(v, list) and len(v) == 1 and isinstance(v[0], dict) and "text" in v[0]:
+                    flat[k] = v[0]["text"]
+                elif isinstance(v, dict) and "text" in v:
+                    flat[k] = v["text"]
+                else:
+                    flat[k] = v
+            records.append(flat)
+        if not data.get("data", {}).get("has_more"):
+            break
+        page_token = data.get("data", {}).get("page_token")
+    return records
+
+
+def save_snapshot(records: list[dict[str, Any]], snapshot_type: str = "post_sync") -> Path:
+    """Save a snapshot of Feishu table records to feishu_snapshots/ directory."""
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    filename = f"{snapshot_type}_{ts}.json"
+    path = SNAPSHOT_DIR / filename
+    # Index by record_id for O(1) matching during diff
+    indexed: dict[str, dict[str, Any]] = {}
+    for rec in records:
+        rid = rec.get("record_id") or rec.get("_feishu_record_id")
+        if rid:
+            indexed[str(rid)] = rec
+    snapshot = {
+        "snapshot_type": snapshot_type,
+        "timestamp": datetime.now().isoformat(),
+        "record_count": len(indexed),
+        "records": indexed,
+    }
+    path.write_text(json.dumps(snapshot, default=str, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\U0001f4f8 Snapshot saved: {filename} ({len(indexed)} records)")
+    return path
+
+
+def load_latest_snapshot() -> dict[str, Any] | None:
+    """Load the most recent snapshot file from feishu_snapshots/."""
+    if not SNAPSHOT_DIR.exists():
+        return None
+    snapshots = sorted(SNAPSHOT_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not snapshots:
+        return None
+    path = snapshots[0]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    print(f"\U0001f4f8 Loaded baseline snapshot: {path.name} ({data.get('record_count', '?')} records)")
+    return data
+
+
+def diff_and_harvest(baseline: dict[str, Any], current_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Diff current Feishu records against a baseline snapshot, distill rules from changes."""
+    baseline_records = baseline.get("records", {})
+    engine = get_rule_engine()
+    changes: list[dict[str, Any]] = []
+    for rec in current_records:
+        rid = str(rec.get("record_id") or rec.get("_feishu_record_id") or "")
+        if not rid or rid not in baseline_records:
+            continue
+        old = baseline_records[rid]
+        for field in DIFF_FIELDS:
+            old_val = old.get(field)
+            new_val = rec.get(field)
+            # Normalize for comparison
+            old_str = str(old_val).strip() if old_val not in (None, "") else None
+            new_str = str(new_val).strip() if new_val not in (None, "") else None
+            if old_str != new_str:
+                change: dict[str, Any] = {"record_id": rid, "field": field, "old": old_val, "new": new_val}
+                changes.append(change)
+                rule = engine.distill_rule_from_edit(field, old_val, new_val, context=f"feishu_harvest_{rid}")
+                change["rule_distilled"] = rule is not None
+    return changes
+
+
+def action_harvest() -> int:
+    """Pull latest Feishu data, diff against last snapshot, distill rules from human edits."""
+    init_environment()
+    creds = _get_feishu_credentials()
+    if not creds:
+        print("\u274c Feishu credentials not configured. Cannot harvest.")
+        return 1
+    access_token, app_token, table_id = creds
+
+    # 1. Load baseline snapshot
+    baseline = load_latest_snapshot()
+    if not baseline:
+        print("\u274c No baseline snapshot found in feishu_snapshots/.")
+        print("\U0001f4a1 Run 'python -m mineru_pipeline sync' first to create a baseline.")
+        return 1
+
+    # 2. Pull current Feishu data
+    print("\u231b Pulling current Feishu table data...")
+    current_records = pull_feishu_table_records(access_token, app_token, table_id)
+    print(f"\U0001f4e5 Pulled {len(current_records)} records from Feishu.")
+
+    # 3. Diff and distill
+    changes = diff_and_harvest(baseline, current_records)
+
+    # 4. Save new snapshot as new baseline
+    save_snapshot(current_records, snapshot_type="harvest")
+
+    # 5. Report
+    if not changes:
+        print("\n\u2705 No human modifications detected since last snapshot.")
+        return 0
+
+    print(f"\n\U0001f50d Harvest: 检测到 {len(changes)} 处人工修改")
+    print("\u2501" * 50)
+
+    # Group by record_id
+    by_record: dict[str, list[dict[str, Any]]] = {}
+    for c in changes:
+        by_record.setdefault(c["record_id"], []).append(c)
+
+    distilled_count = 0
+    for rid, field_changes in by_record.items():
+        print(f"\n  #{rid}:")
+        for c in field_changes:
+            status = "\u2705 已蒸馏规则" if c.get("rule_distilled") else "\U0001f4dd 已记录"
+            print(f"    {c['field']}: \"{c['old']}\" \u2192 \"{c['new']}\"  {status}")
+            if c.get("rule_distilled"):
+                distilled_count += 1
+
+    print(f"\n\U0001f4be 已蒸馏 {distilled_count}/{len(changes)} 条规则到 rules_knowledge_base.json")
+    return 0
+
+
 def action_sync(dry_run: bool = False) -> int:
     init_environment()
     db = get_db()
@@ -1500,8 +1696,19 @@ def action_sync(dry_run: bool = False) -> int:
         if not rows:
             print("No pending records to sync in local_source.db.")
             return 0
+        # Stamp sync_batch_id on each record for traceability
+        batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for row in rows:
+            row["sync_batch_id"] = batch_id
         if sync_to_feishu(rows, dry_run) and not dry_run:
             mark_candidates_synced(db, [int(row["id"]) for row in rows])
+            # Auto-snapshot after successful sync (baseline for next harvest)
+            creds = _get_feishu_credentials()
+            if creds:
+                access_token, app_token, table_id = creds
+                print("\u231b Taking post-sync snapshot...")
+                snapshot_records = pull_feishu_table_records(access_token, app_token, table_id)
+                save_snapshot(snapshot_records, snapshot_type="post_sync")
         return 0
     finally:
         db.close()
@@ -1513,8 +1720,8 @@ import sys
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MinerU vehicle source recognition pipeline")
-    parser.add_argument("positional_action", nargs="?", help="Optional action: run/list/edit/delete/sync/clean")
-    parser.add_argument("--action", choices=["run", "list", "edit", "delete", "sync", "clean"], help="Pipeline action")
+    parser.add_argument("positional_action", nargs="?", help="Optional action: run/list/edit/delete/sync/clean/harvest")
+    parser.add_argument("--action", choices=["run", "list", "edit", "delete", "sync", "clean", "harvest"], help="Pipeline action")
     parser.add_argument("--dry-run", action="store_true", help="Generate outputs without SQLite staging or Feishu upload")
     parser.add_argument("--id", dest="record_id", help="Record id for edit/delete")
     parser.add_argument("--key", help="Column key for edit")
@@ -1542,6 +1749,8 @@ def main(argv: list[str] | None = None) -> int:
         return action_sync(args.dry_run)
     if action == "clean":
         return action_clean()
+    if action == "harvest":
+        return action_harvest()
     parser.error(f"Unknown action: {action}")
     return 1
 

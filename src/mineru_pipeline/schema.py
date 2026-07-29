@@ -804,7 +804,6 @@ AI Dependency Ratio: {ai_pct:.1f}% (Target: <5.0%)
             if key_city in cleaned:
                 return canonical_map[key_city]
 
-        cleaned = re.sub(r"(?:基地|港口|港|仓库|仓|口岸|综合保税区|保税区|黄埔|梅山|盐田|蛇口|是)+$", "", cleaned).strip()
         return cleaned or None
 
     def validate_trade_term_prices(

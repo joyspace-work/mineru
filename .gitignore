@@ -42,3 +42,4 @@ magic-pdf.json
 # Excluded directories
 superpowers/
 feishu_tables/
+feishu_snapshots/

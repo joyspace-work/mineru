@@ -58,7 +58,7 @@ KNOWN_LOCATIONS = {
     "南沙", "广州", "天津", "上海", "深圳", "宁波", "青岛", "厦门", "霍尔果斯", "霍尔果斯基地",
     "喀什", "喀什综合保税区", "盐城", "咸阳", "芜湖", "成都", "重庆", "西安", "太原", "武汉",
     "郑州", "合肥", "南京", "杭州", "福州", "大连", "连云港", "钦州", "防城港", "凭祥",
-    "满洲里", "二连浩特", "瑞丽", "黑河", "绥芬河"
+    "满洲里", "二连浩特", "瑞丽", "黑河", "绥芬河", "湘潭", "北京", "山东", "广东"
 }
 
 
@@ -67,6 +67,8 @@ def is_physical_location_path(text: str) -> str | None:
         return None
     raw = text.strip()
     clean = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
+    if clean in ("未知地点", "未知", "unknown", "None", "null"):
+        return None
     if clean in KNOWN_BRANDS_PATH_SET or clean in KNOWN_MODELS_PATH_SET:
         return None
     if any(b.lower() == clean.lower() for b in KNOWN_BRANDS_PATH_SET) or any(m.lower() == clean.lower() for m in KNOWN_MODELS_PATH_SET):
@@ -76,6 +78,9 @@ def is_physical_location_path(text: str) -> str | None:
     if clean in KNOWN_LOCATIONS or any(loc in clean for loc in KNOWN_LOCATIONS):
         return clean
     if clean.endswith(("港", "仓", "基地", "保税区", "关", "口岸")):
+        return clean
+    # Fallback for 2nd level catalog folder names
+    if len(clean) >= 2 and not any(kw in clean for kw in ["表", "车源", "价格", "配置", "xlsx", "csv", "doc"]):
         return clean
     return None
 
@@ -93,19 +98,26 @@ def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
     brand = None
     model = None
 
-    mid_parts = rel_parts[1:-1]
-    for part in mid_parts:
-        loc = is_physical_location_path(part)
-        if loc:
-            location = loc
-        elif part in KNOWN_BRANDS_PATH_SET or any(b.lower() == part.lower() for b in KNOWN_BRANDS_PATH_SET):
-            if not brand:
-                brand = part
-            else:
-                model = part
-        else:
-            if not model:
-                model = part
+    # Strict 4-level catalog structure: input / <Supplier> / <Location> / <Brand> / <Model> / <file>.xlsx
+    if len(rel_parts) >= 2:
+        loc_candidate = rel_parts[1].strip()
+        if loc_candidate not in ("未知地点", "未知", "unknown", "None", "null"):
+            location = re.sub(r"^(FCA|FOB|EXW|CIF)\s*", "", loc_candidate, flags=re.IGNORECASE).strip()
+
+    if len(rel_parts) >= 3:
+        brand = rel_parts[2]
+
+    if len(rel_parts) >= 4:
+        model = rel_parts[3]
+
+    # Fallback matching if catalog structure was partial
+    if not location:
+        mid_parts = rel_parts[1:-1]
+        for part in mid_parts:
+            loc = is_physical_location_path(part)
+            if loc:
+                location = loc
+                break
 
     file_stem = file_path.stem
     if not model and file_stem not in ("价格表", "车源", "报价表", "库存", "价格", "报价"):
