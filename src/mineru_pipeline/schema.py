@@ -807,12 +807,60 @@ AI Dependency Ratio: {ai_pct:.1f}% (Target: <5.0%)
         cleaned = re.sub(r"(?:基地|港口|港|仓库|仓|口岸|综合保税区|保税区|黄埔|梅山|盐田|蛇口|是)+$", "", cleaned).strip()
         return cleaned or None
 
-    def get_brand_translation(self, brand_text: str) -> str | None:
-        """Get official English/Pinyin brand name from RuleEngine dictionary."""
-        if not brand_text:
-            return None
-        brand_map = self.kb_data.get("chinese_to_english_brands", {})
-        return brand_map.get(brand_text.strip())
+    def validate_trade_term_prices(
+        self, exw_usd: float | int | None, fca_usd: float | int | None, fob_usd: float | int | None
+    ) -> list[str]:
+        """Validate foreign trade term USD price differentials against benchmark rules.
+        
+        Rules:
+        - EXW -> FCA: Baseline +$500 USD, float ±$400 USD (Range: $100 ~ $900 USD)
+        - FCA -> FOB: Baseline +$500 USD, float ±$400 USD (Range: $100 ~ $900 USD)
+        - EXW -> FOB: Baseline +$1000 USD, float ±$400 USD (Range: $600 ~ $1400 USD)
+        If difference is outside range or price is inverted (FOB <= FCA <= EXW), flag warning.
+        """
+        warnings: list[str] = []
+        benchmarks = self.kb_data.get("trade_term_price_benchmarks", {})
+        exw_to_fca_base = benchmarks.get("exw_to_fca_usd", 500)
+        fca_to_fob_base = benchmarks.get("fca_to_fob_usd", 500)
+        exw_to_fob_base = benchmarks.get("exw_to_fob_usd", 1000)
+        tol = benchmarks.get("tolerance_usd", 400)
+
+        # Convert to float safely
+        exw = float(exw_usd) if exw_usd is not None else None
+        fca = float(fca_usd) if fca_usd is not None else None
+        fob = float(fob_usd) if fob_usd is not None else None
+
+        # 1. EXW -> FCA
+        if exw is not None and fca is not None:
+            diff = fca - exw
+            min_diff = exw_to_fca_base - tol
+            max_diff = exw_to_fca_base + tol
+            if diff < min_diff or diff > max_diff:
+                warnings.append(
+                    f"外贸价格异常(EXW->FCA差价${diff:.0f}, 需在${min_diff:.0f}~${max_diff:.0f}区间)"
+                )
+
+        # 2. FCA -> FOB
+        if fca is not None and fob is not None:
+            diff = fob - fca
+            min_diff = fca_to_fob_base - tol
+            max_diff = fca_to_fob_base + tol
+            if diff < min_diff or diff > max_diff:
+                warnings.append(
+                    f"外贸价格异常(FCA->FOB差价${diff:.0f}, 需在${min_diff:.0f}~${max_diff:.0f}区间)"
+                )
+
+        # 3. EXW -> FOB
+        if exw is not None and fob is not None:
+            diff = fob - exw
+            min_diff = exw_to_fob_base - tol
+            max_diff = exw_to_fob_base + tol
+            if diff < min_diff or diff > max_diff:
+                warnings.append(
+                    f"外贸价格异常(EXW->FOB差价${diff:.0f}, 需在${min_diff:.0f}~${max_diff:.0f}区间)"
+                )
+
+        return warnings
 
 
 _rule_engine_instance: RuleEngine | None = None

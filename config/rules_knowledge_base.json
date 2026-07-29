@@ -276,11 +276,12 @@
   "trade_term_price_benchmarks": {
     "exw_to_fca_usd": 500,
     "fca_to_fob_usd": 500,
-    "exw_to_fob_usd": 1000
+    "exw_to_fob_usd": 1000,
+    "tolerance_usd": 400
   },
   "telemetry": {
-    "total_runs": 69,
-    "deterministic_hits": 11477,
+    "total_runs": 70,
+    "deterministic_hits": 11478,
     "ai_fallbacks": 0
   }
 }

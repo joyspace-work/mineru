@@ -797,6 +797,7 @@ VALID_AUTOMOBILE_BRANDS: set[str] = {
 
 
 def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rule_engine = get_rule_engine()
     model_index = load_model_index()
     variant_index = load_variant_index()
     formatted: list[dict[str, Any]] = []
@@ -931,6 +932,11 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         variant_val, final_notes = clean_variant_and_extract_notes(
             trim_val, final_brand, final_model, brand_raw, model_raw, existing_notes=existing_note
         )
+
+        price_warns = rule_engine.validate_trade_term_prices(exw_usd, fca_usd, fob_usd)
+        if price_warns:
+            warn_str = "; ".join(price_warns)
+            final_notes = f"{final_notes}; {warn_str}" if final_notes else warn_str
 
         variant_id = row.get("variant_id") or row.get("variantId") or row.get("trim_config_id") or resolve_variant_id(model_id, variant_val, variant_index)
 

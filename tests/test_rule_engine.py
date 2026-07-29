@@ -43,3 +43,23 @@ def test_rule_engine_telemetry_reporting(tmp_path: Path):
     assert "Schema Intelligence Telemetry Report" in summary
     assert "102" in summary
     assert "98.0%" in summary or "100" in summary
+
+
+def test_rule_engine_trade_term_price_validation(tmp_path: Path):
+    kb_file = tmp_path / "test_kb.json"
+    engine = RuleEngine(kb_path=kb_file)
+
+    # 1. Normal reasonable EXW -> FCA difference ($500 base ± 400 => $100 ~ $900)
+    warns = engine.validate_trade_term_prices(exw_usd=10000, fca_usd=10500, fob_usd=11000)
+    assert len(warns) == 0
+
+    # 2. Anomalous EXW -> FCA difference ($50 => below $100 lower bound)
+    warns_low = engine.validate_trade_term_prices(exw_usd=10000, fca_usd=10050, fob_usd=None)
+    assert len(warns_low) == 1
+    assert "EXW->FCA" in warns_low[0]
+
+    # 3. Inverted price (FCA < EXW)
+    warns_inv = engine.validate_trade_term_prices(exw_usd=10000, fca_usd=9500, fob_usd=None)
+    assert len(warns_inv) == 1
+    assert "EXW->FCA" in warns_inv[0]
+
