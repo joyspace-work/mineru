@@ -273,9 +273,14 @@
       "context": "record_1"
     }
   ],
+  "trade_term_price_benchmarks": {
+    "exw_to_fca_usd": 500,
+    "fca_to_fob_usd": 500,
+    "exw_to_fob_usd": 1000
+  },
   "telemetry": {
-    "total_runs": 68,
-    "deterministic_hits": 11476,
+    "total_runs": 69,
+    "deterministic_hits": 11477,
     "ai_fallbacks": 0
   }
 }
