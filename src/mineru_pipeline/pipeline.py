@@ -730,15 +730,15 @@ def clean_variant_and_extract_notes(
             if detail not in equipment_details:
                 equipment_details.append(detail)
             c_line = re.sub(r"[（\(][^）\)]+[）\)]", "", line).strip()
-            if c_line and c_line not in clean_parts:
+            if c_line and not LV_LEVEL_ONLY_RE.fullmatch(c_line) and c_line not in clean_parts:
                 clean_parts.append(c_line)
         elif any(kw in line for kw in ["空调", "EPS", "ABS", "显示屏", "扬声器", "悬挂", "悬架", "铝合金", "雷达", "天窗", "快充", "座椅", "退税", "关税", "内饰", "座", "门"]):
             if line not in equipment_details:
                 equipment_details.append(line)
-            m_short = re.match(r"^(LV\d+(?:\s*[\u4e00-\u9fa5]+)?|[^\s,，、；;]+)", line, re.IGNORECASE)
+            m_short = re.match(r"^([^\s,，、；;]+)", line, re.IGNORECASE)
             if m_short:
                 c_part = m_short.group(1).strip()
-                if c_part and c_part not in clean_parts:
+                if c_part and not LV_LEVEL_ONLY_RE.fullmatch(c_part) and VARIANT_KEEP_RE.search(c_part) and c_part not in clean_parts:
                     clean_parts.append(c_part)
         else:
             if line not in clean_parts:
@@ -746,6 +746,10 @@ def clean_variant_and_extract_notes(
 
     clean_trim = " ".join(clean_parts) if clean_parts else (unique_lines[0] if unique_lines else "")
     if clean_trim:
+        clean_trim, noise_details = _remove_variant_noise_segments(clean_trim)
+        for detail in noise_details:
+            if detail not in equipment_details:
+                equipment_details.append(detail)
         clean_trim = clean_variant(clean_trim, brand, model, raw_brand, raw_model)
 
     if clean_trim:
@@ -758,13 +762,151 @@ def clean_variant_and_extract_notes(
         notes_list.append(str(existing_notes).strip())
 
     if equipment_details:
-        zh_details = [d for d in equipment_details if re.search(r"[\u4e00-\u9fa5]", d)]
-        note_text = "; ".join(zh_details if zh_details else equipment_details)
+        note_text = "; ".join(equipment_details)
         if note_text not in notes_list:
             notes_list.append(f"配置详情: {note_text}")
 
     final_notes = "; ".join(notes_list) if notes_list else None
     return clean_trim or None, final_notes
+
+
+VARIANT_KEEP_RE = re.compile(
+    r"(版|型|款|Pro|Max|MAX|Ultra|ULTRA|Plus|PLUS|Premium|Luxury|Flagship|"
+    r"Leading|Smart|Edition|Version|Laser|AWD|RWD|4WD|行动派|行镖版|客版|货版|旗舰|领先|尊贵|豪华|舒享|智驾|探索)",
+    re.IGNORECASE,
+)
+
+LV_LEVEL_RE = re.compile(r"\bLV\s*\d+\+?\b", re.IGNORECASE)
+LV_LEVEL_ONLY_RE = re.compile(r"(?:LV\s*\d+\+?\s*)+", re.IGNORECASE)
+
+VARIANT_NOISE_RE = re.compile(
+    r"(EXW|FCA|FOB|CIF|USD|RMB|CNY|人民币|美元|美金|指导价|建议零售价|售价|价格|报价|"
+    r"库存|数量|台|现车|车源|供应商|来源|Sheet|工作表|备注|配置详情|宁德|弗迪|刀片电池|磷酸铁锂|三元锂|电池包)",
+    re.IGNORECASE,
+)
+
+VARIANT_TECH_ONLY_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)?\s*(?:kwh|度|km|公里|kw|千瓦)|"
+    r"(?:中轴|短轴|长轴)?(?:低顶|中顶|高顶)(?:[-_/ ]?(?:明窗|盲窗))?|"
+    r"(?:明窗|盲窗|明窗盲窗|盲窗明窗)|(?:客车|货车)|(?:续航|里程|电池|电量|电机|容量).*)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _remove_variant_noise_segments(text: str) -> tuple[str, list[str]]:
+    details: list[str] = []
+    raw_segments = [seg.strip() for seg in re.split(r"\s*(?:\||｜|；|;|，|,|\n)\s*", text) if seg.strip()]
+    if len(raw_segments) <= 1:
+        return text, details
+
+    kept: list[str] = []
+    for segment in raw_segments:
+        has_price_number = bool(re.search(r"\b\d{5,7}\b", segment))
+        is_noise = bool(VARIANT_NOISE_RE.search(segment) or has_price_number)
+        if is_noise and not VARIANT_KEEP_RE.search(segment):
+            details.append(segment)
+            continue
+        if VARIANT_TECH_ONLY_RE.match(segment):
+            details.append(segment)
+            continue
+        kept.append(segment)
+    return " ".join(kept), details
+
+
+def _strip_model_prefix_from_variant(trim_str: str, brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str:
+    aliases = [brand, model, str(raw_brand or ""), str(raw_model or "")]
+    if model:
+        aliases.extend([
+            model.replace(" ", ""),
+            model.replace("-", " "),
+            model.replace("Qiyuan ", ""),
+            model.replace("Changan ", ""),
+        ])
+    for (mapped_raw_brand, mapped_raw_model), (mapped_brand, mapped_model) in BRAND_MODEL_MAP.items():
+        if mapped_brand == brand and mapped_model == model:
+            aliases.extend([mapped_raw_brand, mapped_raw_model])
+    aliases.extend(["吉利", "银河", "长安启源", "启源", "Qiyuan", "Changan", "比亚迪", "BYD"])
+
+    cleaned = trim_str
+    for target in sorted({a.strip() for a in aliases if a and len(a.strip()) >= 2}, key=len, reverse=True):
+        pattern = re.compile(
+            rf"^\s*{re.escape(target)}(?:\s+|[-_/：:]+|(?=20\d{{2}}|\d{{3,4}}|款|版|型|Plus|Pro|Max|Ultra|PLUS|PRO|MAX|ULTRA))",
+            re.IGNORECASE,
+        )
+        cleaned = pattern.sub("", cleaned).strip()
+    return cleaned
+
+
+def _compact_variant_key(value: str) -> str:
+    return re.sub(r"[\s_\-_/：:]+", "", value or "").lower()
+
+
+def _known_model_family_keys() -> dict[str, set[str]]:
+    keys: dict[str, set[str]] = {}
+    for (raw_brand, raw_model), (mapped_brand, mapped_model) in BRAND_MODEL_MAP.items():
+        brand_keys = {
+            _compact_variant_key(raw_brand),
+            _compact_variant_key(mapped_brand),
+        }
+        model_values = (raw_model, mapped_model)
+        for brand_key in {b for b in brand_keys if b}:
+            bucket = keys.setdefault(brand_key, set())
+            for value in model_values:
+                if value and len(value.strip()) >= 2:
+                    bucket.add(_compact_variant_key(value))
+    return keys
+
+
+KNOWN_MODEL_FAMILY_KEYS = _known_model_family_keys()
+
+
+def is_known_model_family_text(text: str, brand: str | None = None, model: str | None = None) -> bool:
+    cleaned = _compact_variant_key(text)
+    if not cleaned:
+        return False
+    if re.fullmatch(r"(?:Galaxy\s+(?:Xingyao\s+)?[A-Z]?\d+|Sealion\s+\d+(?:\s*(?:EV|DM-?i))?)", text.strip(), re.IGNORECASE):
+        return True
+    if model and cleaned == _compact_variant_key(model):
+        return True
+    if model:
+        model_key = _compact_variant_key(model)
+        if cleaned and model_key.startswith(cleaned) and model_key[len(cleaned):] in {"ev", "dmi", "dm-i", "phev", "bev"}:
+            return True
+    brand_keys = {_compact_variant_key(str(brand or ""))}
+    if brand:
+        for (raw_brand, _raw_model), (mapped_brand, _mapped_model) in BRAND_MODEL_MAP.items():
+            if mapped_brand == brand or raw_brand.lower() == str(brand).lower():
+                brand_keys.add(_compact_variant_key(raw_brand))
+                brand_keys.add(_compact_variant_key(mapped_brand))
+    return any(cleaned in KNOWN_MODEL_FAMILY_KEYS.get(brand_key, set()) for brand_key in brand_keys if brand_key)
+
+
+def derive_variant_from_context(row: dict[str, Any], brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str | None:
+    candidates: list[Any] = [
+        row.get("modelName"),
+        row.get("model"),
+        row.get("车型"),
+        row.get("型号"),
+        row.get("车型名称"),
+        row.get("车辆名称"),
+        row.get("产品名称"),
+        row.get("项目名称"),
+        row.get("_source_file"),
+        row.get("source_file"),
+    ]
+    for candidate in candidates:
+        if candidate in (None, ""):
+            continue
+        text = str(candidate).strip()
+        if not text:
+            continue
+        if text.lower().endswith((".xlsx", ".xls", ".csv")):
+            text = Path(text).stem
+        text = re.sub(r"[_]+", " ", text).strip()
+        variant = clean_variant(text, brand, model, raw_brand, raw_model)
+        if variant:
+            return variant
+    return None
 
 
 def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, raw_model: Any = None) -> str | None:
@@ -776,10 +918,17 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
 
     # 0. Strip parenthetical equipment detail lists
     trim_str = re.sub(r"[（\(][^）\)]*[）\)]", "", trim_str).strip()
+    trim_str, _ = _remove_variant_noise_segments(trim_str)
+    if LV_LEVEL_ONLY_RE.fullmatch(trim_str):
+        return None
 
     # 1. Filter out technical parameter / dimension / chassis noise and trade term price suffixes
     trim_str = re.sub(r"\b(LV\d+)\s+\1\b", r"\1", trim_str, flags=re.IGNORECASE)
+    trim_str = LV_LEVEL_RE.sub("", trim_str).strip()
     trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA|CIF)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
+    trim_str = re.sub(r"\b(?:EXW|FOB|FCA|CIF)\b.*$", "", trim_str, flags=re.IGNORECASE).strip()
+    trim_str = re.sub(r"[$￥¥]?\s*\b\d{5,7}\b\s*(?:元|人民币|RMB|CNY|USD|美元|美金)?", "", trim_str, flags=re.IGNORECASE).strip()
+    trim_str = re.sub(r"\b\d+(?:\.\d+)?\s*(?:kwh|度|kw|千瓦)\b", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\d{3,5}\s*[*xX×]\s*\d{3,5}\s*[*xX×]\s*\d{3,5}", "", trim_str)
     trim_str = re.sub(r"(?:长宽高|尺寸|外形尺寸|车身尺寸|整车尺寸|轮距|轴距|长\*宽\*高)[：:\s]*[0-9*xX×]*", "", trim_str)
 
@@ -792,10 +941,34 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
         trim_str = re.sub(noise, "", trim_str)
 
     trim_str = trim_str.strip(" -_/+,;:*")
+    trim_str = _strip_model_prefix_from_variant(trim_str, brand, model, raw_brand, raw_model)
+    trim_str = re.sub(
+        r"[-_/：:\s]*(?:(?:国际|国内|出口|海外|欧标|美规|中规)版?)?(?:出口车型|国内车型|海外车型|欧标车型|美规车型|中规车型|车型)$",
+        "",
+        trim_str,
+        flags=re.IGNORECASE,
+    ).strip()
+    trim_str = re.sub(r"\s{2,}", " ", trim_str).strip(" -_/+,;:*")
+    if not trim_str or LV_LEVEL_ONLY_RE.fullmatch(trim_str):
+        return None
+    if is_known_model_family_text(trim_str, brand, model):
+        return None
+    if re.fullmatch(r"T\d", trim_str, re.IGNORECASE):
+        return trim_str.upper()
 
     # 2. Check for summary / header / invalid words
     invalid_keywords = ["合计", "小计", "指导价", "不含税", "售价", "价格", "汇总", "参数", "单位", "数量", "小结", "总计", "配置表", "参数表", "型号", "规格"]
     if any(trim_str == kw or trim_str.startswith(kw) for kw in invalid_keywords):
+        return None
+    if VARIANT_TECH_ONLY_RE.match(trim_str):
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*(?:km|公里|kwh|度|kw|千瓦)?", trim_str, re.IGNORECASE):
+        return None
+    if len(trim_str) >= 3 and re.fullmatch(r"(?:[A-Z]{1,5}\d{1,5}[A-Z]?|\d{2,5}[A-Z]{1,3})(?:[-_/]?[A-Z0-9]{1,5})?", trim_str, re.IGNORECASE):
+        return None
+    if re.fullmatch(r"[A-Z]{3,5}", trim_str) and trim_str.upper() not in {"PRO", "MAX", "PLUS", "ULTRA"}:
+        return None
+    if re.fullmatch(r"[A-Z0-9]{3,6}", trim_str, re.IGNORECASE) and not VARIANT_KEEP_RE.search(trim_str):
         return None
 
     # 3. Strip redundant brand / model / raw names
@@ -815,6 +988,12 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
             trim_str = pattern.sub("", trim_str).strip()
 
     if not trim_str or trim_str in ("新款", "老款", "标准版", "默认", "+", "型", "款"):
+        return None
+    if is_known_model_family_text(trim_str, brand, model):
+        return None
+    if not VARIANT_KEEP_RE.search(trim_str) and (
+        VARIANT_NOISE_RE.search(trim_str) or re.search(r"\d{5,7}|\d+(?:\.\d+)?\s*(?:kwh|度|km|公里|kw)", trim_str, re.IGNORECASE)
+    ):
         return None
 
     return trim_str
@@ -966,6 +1145,8 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         variant_val, final_notes = clean_variant_and_extract_notes(
             trim_val, final_brand, final_model, brand_raw, model_raw, existing_notes=existing_note
         )
+        if not variant_val:
+            variant_val = derive_variant_from_context(row, final_brand, final_model, brand_raw, model_raw)
         if price_info.get("price_notes"):
             final_notes = f"{final_notes}; {price_info['price_notes']}" if final_notes else price_info["price_notes"]
 

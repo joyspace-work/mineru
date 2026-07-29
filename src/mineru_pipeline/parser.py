@@ -299,7 +299,11 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
 
 
 def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
-    file_path = Path(file_path).resolve()
+    # Preserve the caller path instead of resolving symlinks/junctions. The
+    # import pipeline may mount an external source folder under project/input;
+    # resolving the path would drop the standard supplier/location/brand/model
+    # catalog context and shift metadata columns.
+    file_path = Path(file_path).absolute()
     meta = extract_path_metadata(file_path)
     all_rows: list[dict[str, Any]] = []
 

@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from mineru_pipeline.excel_parser import normalize_header_cell
+from mineru_pipeline.parser import extract_path_metadata
 from mineru_pipeline.pipeline import (
+    clean_variant,
+    clean_variant_and_extract_notes,
+    derive_variant_from_context,
     format_candidates_for_feishu,
     get_db,
     record_to_feishu_fields,
@@ -77,6 +81,90 @@ def test_record_to_feishu_fields_never_writes_display_prices():
     assert "display_price_high" not in fields
 
 
+def test_variant_strips_model_prefix_prices_and_battery_details():
+    variant, notes = clean_variant_and_extract_notes(
+        "Qiyuan A07 730旗舰型 | 220000 | 宁德83kWh",
+        "Changan",
+        "Qiyuan A07",
+    )
+
+    assert variant == "730旗舰型"
+    assert "220000" in notes
+    assert "宁德83kWh" in notes
+
+
+def test_variant_keeps_real_named_van_edition_but_rejects_axis_only_specs():
+    assert clean_variant("中轴高顶-行动派 | 220000 | 宁德83kWh", "Farizon", "Xingxiang V") == "中轴高顶-行动派"
+    assert clean_variant("短轴低顶-行镖版", "Farizon", "Xingxiang V") == "短轴低顶-行镖版"
+    assert clean_variant("中轴低顶", "Farizon", "Xingxiang V") is None
+    assert clean_variant("明窗盲窗", "Farizon", "Xingxiang V") is None
+
+
+def test_variant_rejects_pure_range_battery_price_and_trade_terms():
+    assert clean_variant("430km", "BYD", "Yuan PLUS") is None
+    assert clean_variant("49.92kWh", "BYD", "Yuan PLUS") is None
+    assert clean_variant("FOB 14700", "Geely", "Galaxy A7") is None
+    assert clean_variant("220000", "Wuling", "Rongguang") is None
+    assert clean_variant("LV2", "Wuling", "Hongguang") is None
+    assert clean_variant("LV0 LV1", "Wuling", "Hongguang") is None
+
+
+def test_variant_keeps_sales_edition_without_repeating_model():
+    assert clean_variant("Qiyuan A07 730旗舰型", "Changan", "Qiyuan A07") == "730旗舰型"
+    assert clean_variant("560ULTRA Laser", "Avatr", "07") == "560ULTRA Laser"
+    assert clean_variant("49.92kwh 第二代元PLUS智驾版 433KM领先型 Second Generation Yuan PLUS Smart Drive Edition 430km Leading Edition", "BYD", "Yuan PLUS") is not None
+
+
+def test_variant_keeps_lv_equipment_level_in_notes_not_variant():
+    variant, notes = clean_variant_and_extract_notes(
+        "LV2（6座、空调H、EPS、ESC、前后碟刹、铝合金轮）",
+        "Wuling",
+        "Hongguang",
+    )
+
+    assert variant is None
+    assert "LV2" in notes
+    assert "EPS" in notes
+
+
+def test_variant_strips_lv_suffix_from_real_version_text():
+    assert clean_variant("N510M REEV Chinese Version LV0", "Wuling", "Hongguang EV") == "N510M REEV Chinese Version"
+
+
+def test_variant_derives_from_compact_model_text_and_filename():
+    assert clean_variant("T032025款310舒享版", "Leapmotor", "T03") == "2025款310舒享版"
+
+    byd_variant = derive_variant_from_context(
+        {"_source_file": "海狮05EV 520智驾版-国际版出口车型.xlsx"},
+        "BYD",
+        "Sealion 7",
+    )
+    assert byd_variant == "520智驾版"
+
+    ti3_variant = derive_variant_from_context(
+        {"_source_file": "钛3 2025款501KM 智驾Ultra版-国际版出口车型.xlsx"},
+        "Fangchengbao",
+        "Ti 3",
+    )
+    assert ti3_variant == "2025款501KM 智驾Ultra版"
+
+
+def test_variant_does_not_derive_from_wuling_model_codes():
+    assert derive_variant_from_context({"_source_file": "AS45.xlsx"}, "Wuling", "Hongguang S3") is None
+    assert derive_variant_from_context({"_source_file": "261G.xlsx"}, "Wuling", "Bingo S") is None
+    assert derive_variant_from_context({"_source_file": "AGMC.xlsx"}, "Wuling", "Rongguang") is None
+    assert derive_variant_from_context({"_source_file": "0R03.xlsx"}, "Wuling", "Starlight 730") is None
+
+
+def test_variant_rejects_known_model_family_names():
+    assert clean_variant("Cowboy", "Geely", "Galaxy L6") is None
+    assert clean_variant("海狮05EV", "BYD", "Seal") is None
+    assert clean_variant("Hongguang", "Wuling", "Hongguang") is None
+    assert clean_variant("Qin Plus", "BYD", "Qin PLUS EV") is None
+    assert clean_variant("Galaxy Xingyao 6", "Geely", "Galaxy L6") is None
+    assert clean_variant("Sealion 05 EV", "BYD", "Seal") is None
+
+
 def test_format_candidates_resolves_model_id_and_manufacture_year_month():
     formatted = format_candidates_for_feishu([
         {"brand": "BYD", "modelName": "Dolphin", "manufactureDate": "2026-07-03"},
@@ -113,6 +201,17 @@ def test_excel_header_aliases_include_manufacture_year_month():
 
 
 
+
+
+def test_path_metadata_uses_input_catalog_context():
+    path = Path("project/input/APT/南沙/Leapmotor/T03/T032025款310舒享版.xlsx")
+
+    assert extract_path_metadata(path) == {
+        "supplier": "APT",
+        "location": "南沙",
+        "brand": "Leapmotor",
+        "model": "T03",
+    }
 
 
 def test_sqlite_schema_has_manufacture_year_month(tmp_path: Path):
