@@ -7,7 +7,7 @@ name = "mineru-vehicle-pipeline"
 version = "0.2.0"
 description = "MinerU-first vehicle source recognition and Feishu Base sync pipeline"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
   "mineru==3.4.4",
   "paddleocr==3.7.0",
@@ -17,6 +17,7 @@ dependencies = [
   "python-docx==1.2.0",
   "python-pptx==1.0.2",
   "accelerate==1.14.0",
+  "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -31,5 +32,5 @@ mineru-pipeline = "mineru_pipeline.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests_py"]
+testpaths = ["tests"]
 pythonpath = ["src"]

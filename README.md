@@ -1,179 +1,211 @@
-# MinerU 车源导入与结构化解析流水线
+# vehicle_sources 车源 Excel 导入流程
 
-将供应商发来的图片、PDF、PPT、DOCX、Excel、TXT 等车源资料，按 MinerU-first 路线识别、结构化提取，输出 JSON/CSV，暂存本地 SQLite，并可同步到飞书多维表格。
+当前 `main` 以 `feat/mineru-sdk` 的 `e76d130` 为基线，成果表是飞书多维表格中的 `vehicle_sources`。项目主流程已经收敛为 **Excel/CSV 原生解析 -> RuleEngine 规范化 -> SQLite 暂存 -> 飞书 vehicle_sources 写入**。
 
-## 架构
-
-```text
-input/
-  -> python -m mineru_pipeline classify
-  -> input/classified/
-  -> 识别层: MinerU Python SDK 生成 output/recognized/mineru/
-  -> 转化层: LLM 对 MinerU Markdown/HTML table 做事实提取
-  -> 汇总层: Python 规则规范化、JSON/CSV、SQLite 暂存、飞书同步
-  -> output/final/candidates_YYYY-MM-DD.json
-  -> output/final/candidates_YYYY-MM-DD.csv
-  -> local_source.db
-  -> 飞书多维表格
-```
-
-## 三层边界
-
-| 层 | 职责 | 产物 |
-|---|---|---|
-| 识别 Recognition | 只负责文件读取、OCR/版面分析、表格结构还原。默认直接调用 MinerU Python SDK，不走 CLI 子进程。 | `output/recognized/mineru/manifest.json` 与 MinerU Markdown/JSON |
-| 转化 Transformation | 只负责把 MinerU 的 Markdown/HTML table 按事实抽取为候选 JSON。长文档按 table/段落语义切片，不硬截断。 | LLM raw response 与 raw candidates |
-| 汇总 Aggregation | 只负责业务规则规范化、车型 ID 匹配、本地 SQLite 暂存、人工审核、飞书同步。 | `output/final/candidates_*.json/csv`、`local_source.db`、飞书记录 |
-
-业务映射不放在 LLM Prompt 里。LLM 只做事实提取，品牌/车型规范化和字段修正由汇总层 Python 规则处理。
-
-## 安装
-
-```powershell
-python -m pip install -U pip
-python -m pip install -e .[dev]
-```
-
-`pyproject.toml` 已固定当前查询到的最新关键依赖版本，包括：
+默认生产路径不再依赖外部大模型，也不把图片/PDF OCR 作为主入口。供应商、基地、出货地点、品牌、车型等上下文既可能来自单元格，也可能来自 4 级目录：
 
 ```text
-mineru==3.4.4
-paddleocr==3.7.0
-openpyxl==3.1.5
-python-dotenv==1.2.2
-requests==2.34.2
-python-docx==1.2.0
-python-pptx==1.0.2
-accelerate==1.14.0
-pytest==9.1.1
+input/<供应商>/<地点或基地>/<品牌>/<车型>/<Excel 文件>
 ```
 
-## 配置
+关键规则：
 
-复制模板并填写 `.env`：
+- `model` 只写车型主名称，不能重复 brand，也不能塞版本、价格、电池、地点。
+- `variant` 只写销售版本/配置名，不能写价格、电池包、地点、长配置清单或重复车型名。
+- `location` 只写出货地点/港口；基地只归基地语义，不跨字段联想。
+- `display_price_low` / `display_price_high` 是网站前台展示价，车源导入链路不得从源 Excel 抓取或写入。
+- 只要表头、价格列名、地点列或文本上下文出现 `EXW`、`FCA`、`FOB`，默认就是美元外贸价，分别进入 `cost_exw_usd`、`cost_fca_usd`、`cost_fob_usd`。
+- 只有源表明确写出 `人民币`、`RMB`、`CNY`、`¥` 时，EXW/FCA/FOB 价格才按人民币处理；当前 vehicle_sources 没有独立人民币外贸价字段，程序会保留到 `supplier_price_cny` 和 `notes`，不会自行汇率换算。
+- 多个外贸价格必须同时保留，不能在 EXW/FCA/FOB 中“三选一”。
+- 同一车源出现多个 USD 外贸价时，会用 RuleEngine 校验 `EXW -> FCA -> FOB` 的合理差价，异常写入 `notes`。
 
-```powershell
-Copy-Item .env.example .env
-```
-
-至少需要。当前默认优先走 OpenRouter/NVIDIA；Gemini 保留为可切换备选：
-
-```text
-AI_PROVIDER=openrouter
-OPENROUTER_API_KEY=你的 OpenRouter Key
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_SOURCE_IMPORT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
-
-GEMINI_API_KEY=你的 Gemini Key
-GEMINI_SOURCE_IMPORT_MODEL=gemini-3.5-flash
-GEMINI_EMPTY_RETRIES=2
-GEMINI_RAW_OUTPUT_DIR=
-
-FEISHU_APP_ID=你的飞书 app id
-FEISHU_APP_SECRET=你的飞书 app secret
-FEISHU_BITABLE_APP_TOKEN=Is6Xb3btbazhFhsDXgFcqFG1nRc
-FEISHU_BITABLE_TABLE_ID=tblAfMQdjhSV4Wd4
-```
-
-MinerU 可调参数：
-
-```text
-MINERU_METHOD=auto
-MINERU_BACKEND=pipeline
-MINERU_EFFORT=medium
-MINERU_LANG=ch
-MINERU_TABLE=true
-MINERU_FORMULA=true
-MINERU_IMAGE_ANALYSIS=false
-MINERU_CLI_FALLBACK=false
-MINERU_TIMEOUT_SECONDS=300
-```
-
-默认使用 `pipeline` 后端以减少启动和推理时间；遇到复杂图片表格或版面理解不足时，再临时设置 `MINERU_BACKEND=hybrid-engine` 重跑单文件。识别层默认通过 MinerU Python SDK 调用；只有显式设置 `MINERU_CLI_FALLBACK=true` 时才允许 SDK 失败后回退到 CLI。
-
-Gemini 每次结构化响应会保存到 `output/final/gemini_raw/`；如果模型返回空 candidates，会按 `GEMINI_EMPTY_RETRIES` 自动重试。
-
-LLM 抽取层只负责从 MinerU Markdown/HTML table 中做事实提取，不在 Prompt 中硬编码品牌/车型业务映射。品牌别名、车型库匹配、日期/币种等规范化由 Python 后处理完成。
-
-长文档不会再直接 `text[:18000]` 硬截断；进入 LLM 前会按 MinerU `<table>...</table>`、Markdown 段落等语义块切片，避免在表格中间截断。
-
-## 常用命令
-
-第一轮建议只跑 dry-run，不写本地库、不上传飞书：
-
-```powershell
-python -m mineru_pipeline --dry-run --force-ocr
-```
-
-正式完整流程：
-
-```powershell
-python -m mineru_pipeline --force-ocr
-```
-
-临时覆盖 MinerU 后端，不需要修改 `.env`：
-
-```powershell
-python -m mineru_pipeline --dry-run --force-ocr --backend hybrid-engine --effort medium --method ocr
-```
-
-跳过已完成的 OCR：
-
-```powershell
-python -m mineru_pipeline --skip-ocr
-```
-
-只查看本地待同步记录：
-
-```powershell
-python -m mineru_pipeline --action list
-```
-
-编辑或删除本地暂存记录：
-
-```powershell
-python -m mineru_pipeline --action edit --id 3 --key cost_exw_cny --val 70700
-python -m mineru_pipeline --action delete --id 3
-```
-
-手动同步本地 pending 记录到飞书：
-
-```powershell
-python -m mineru_pipeline --action sync
-```
-
-清空本地暂存：
-
-```powershell
-python -m mineru_pipeline --action clean
-```
-
-## 输入覆盖
-
-| 类别 | 扩展名 | 处理路径 |
-|---|---|---|
-| 图片 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.tiff`, `.svg` | MinerU 专业识别，失败后可显式启用视觉兜底 |
-| PDF | `.pdf` | MinerU 专业识别 |
-| PPT | `.pptx`, `.ppt` | MinerU / 文本提取 |
-| Documents | `.docx`, `.doc`, `.rtf` | 文本提取或 MinerU |
-| Excel | `.xlsx`, `.xls`, `.csv` | Python `openpyxl` / CSV 直接解析 |
-| TXT | `.txt`, `.md` | 直接读取文本后进入结构化抽取 |
-
-未知类型会进入 `input/classified/other/`，不会被删除。
-
-## 输出位置
-
-```text
-output/recognized/mineru/manifest.json
-output/recognized/mineru/errors.json
-output/final/candidates_YYYY-MM-DD.json
-output/final/candidates_YYYY-MM-DD.csv
-local_source.db
-```
-
-## 测试
+## 标准运行
 
 ```powershell
 python -m pytest
-python -m py_compile scripts\ocr_process.py scripts\parse_document.py
+python -m mineru_pipeline run
+python -m mineru_pipeline list
+python -m mineru_pipeline sync
 ```
+
+需要指定飞书表时，在 `.env` 中配置：
+
+```env
+FEISHU_APP_ID=...
+FEISHU_APP_SECRET=...
+FEISHU_BITABLE_APP_TOKEN=Is6Xb3btbazhFhsDXgFcqFG1nRc
+FEISHU_BITABLE_TABLE_ID=<vehicle_sources table id>
+```
+
+人工修改必须走 CLI，不能直接改 SQLite：
+
+```powershell
+python -m mineru_pipeline edit --id <id> --key <field> --val <value>
+python -m mineru_pipeline harvest
+```
+
+`edit` 和 `harvest` 会把人工纠错沉淀到 `config/rules_knowledge_base.json`，这是项目成长机制。
+
+## 历史架构说明
+
+下面保留早期 MinerU/LLM 管线图作为历史参考；当前默认生产路径以本文件开头描述的 Excel 确定性流程为准。
+
+# 历史新流程
+                 用户上传文件
+
+                       │
+
+              文件类型识别 Router
+
+                       │
+
+        ┌──────────────┼──────────────┐
+        │              │              │
+
+      PDF等            excel等        markdown/Text等
+        │              │              │
+
+        │              │              │
+
+    MinerU SDK      结构化精准提取    转化为结构化
+        │              │              │
+
+        └──────────────┼──────────────┘
+
+                       │
+
+              统一中间格式层
+
+        Markdown + Table + Metadata
+
+                       │
+
+          文档结构分析 / Semantic Chunking
+
+        （按表格、章节、段落切，不硬截断）
+
+                       │
+
+              LLM Structured Extraction
+
+        JSON Schema / Function Calling
+
+                       │
+
+              Pydantic 数据校验
+
+        ┌──────────────┴──────────────┐
+        │                             │
+
+      成功                          失败
+
+        │                             │
+
+        │                       自动修复/重试
+
+        │
+
+              Business Rule Engine
+
+        （业务规则，不放 Prompt）
+
+        ├─ 品牌标准化
+        ├─ 车型映射
+        ├─ 单位转换
+        ├─ 字段补全
+        └─ 去重合并
+
+
+                       │
+
+              Data Quality Check
+
+        ├─ 必填字段检查
+        ├─ 异常价格检查
+        ├─ 重复车型检查
+        └─ 人工审核（可选）
+
+
+                       │
+
+              最终业务数据库
+
+              🚗 结构化车辆表
+
+
+
+
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["1. 文件摄取与分类 (Ingestion & Classification)"]
+        A["📁 原始车源文件 input/"] --> B["python -m mineru_pipeline run"]
+        B --> C["按类型自动分桶 input/classified/<br/>(pdfs / images / xlsxs / txts / docxs)"]
+    end
+
+    subgraph Mining["2. MinerU 专业版面识别与置信度检测 (MinerU Layout & OCR)"]
+        C -->|"PDF / 图片 / DOCX"| D["MinerU Layout Analysis & OCR<br/>(Hybrid / High Precision Mode)"]
+        D -->|"SHA-256 哈希校验"| E["生成 Markdown 文本与 middle.json"]
+        E --> F{"MinerU 平均置信度<br/>Confidence < 0.6?"}
+        F -->|"低置信度"| G["标记 _needs_human_review = True"]
+        F -->|"高置信度"| H["传递 Markdown 文本"]
+        G --> H
+    end
+
+    subgraph DirectExtract["特殊分流: 表格与纯文本"]
+        C -->|"Excel / CSV"| X["openpyxl / csv 提取结构化数据"]
+        C -->|"TXT / MD"| Y["直接读取纯文本"]
+    end
+
+    subgraph LLM_Pydantic["3. 原生结构化抽取与 Pydantic 校验闭环 (LLM & Validation)"]
+        H --> I["LLM (Ollama / Gemini / OpenRouter)"]
+        Y --> I
+        I -->|"原生 response_schema 约束"| J["生成 Raw JSON Payload"]
+        J --> K{"Pydantic 模型校验<br/>ExtractionPayloadSchema"}
+        K -->|"校验失败 ValidationError"| L["捕获具体错误字段<br/>构造 Error Feedback Prompt"]
+        L -->|"自我纠错重试 Loop (Max 3次)"| I
+        K -->|"校验通过"| M["输出 Validated Candidates"]
+    end
+
+    subgraph Cleaning["4. 规则引擎与品牌/车型对齐 (Rule Engine)"]
+        X --> N["确定性规则引擎"]
+        M --> N
+        N --> O["读取 schema.py (SSOT)<br/>自动标准化中英文品牌与车型"]
+        O --> P["阶梯报价拆分与多配色方案拆分"]
+    end
+
+    subgraph Staging["5. SQLite 暂存与飞书同步 (Staging & Sync)"]
+        P --> Q["保存至 local_source.db<br/>(status: pending)"]
+        Q --> R{"人工核对与操作"}
+        R -->|"python -m mineru_pipeline list"| S["查看待核对列表"]
+        R -->|"python -m mineru_pipeline edit"| T["人工微调字段"]
+        R -->|"python -m mineru_pipeline sync"| U["批量上传飞书 Bitable 表格<br/>(status -> synced)"]
+        R -->|"导出最终文件"| V["输出 final/candidates_YYYY-MM-DD.json / .csv"]
+    end
+
+    style Ingestion fill:#f0f4f8,stroke:#1e88e5,stroke-width:1px
+    style Mining fill:#e1f5fe,stroke:#0288d1,stroke-width:1px
+    style LLM_Pydantic fill:#fff3e0,stroke:#f57c00,stroke-width:1px
+    style Cleaning fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
+    style Staging fill:#e8f5e9,stroke:#388e3c,stroke-width:1px
+```
+
+## 核心演进亮点
+
+1. **原生的结构化输出 (`response_schema`)**：
+   透传 Pydantic 生成的 JSON Schema 给 Gemini API，在 Token 解码阶段直接锁定语法树，实现 100% 格式确定性。
+2. **Pydantic 校验与智能重试闭环 (Self-Correction Loop)**：
+   如果 LLM 输出的 JSON 未通过 Pydantic 类型或范围校验，系统会自动捕获 `ValidationError` 详细报错，反向注入下一次 Prompt 进行自我修复，而非直接写入数据库。
+3. **MinerU OCR 置信度感知 (Confidence Thresholding)**：
+   自动读取 MinerU 导出的 `middle.json`，若文字/表格平均置信度低于 0.6，自动标记 `_needs_human_review = True`，防止隐形脏数据污染。
+4. **断点续跑与缓存复用 (SHA-256 Checkpoint)**：
+   利用文件 SHA-256 哈希比对，已处理的文件自动跳过，支持海量文档大批次解析时的断点续跑。
+
+## 安装与使用
+
+```bash
+pip install -e .
+export MINERU_BACKEND=pipeline
+python -m mineru_pipeline
+```
+

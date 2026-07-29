@@ -13,8 +13,8 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# Classified input files (generated, not tracked)
-input/classified/
+# input files (not tracked)
+input/
 
 # n8n local data
 .n8n/
@@ -32,8 +32,14 @@ CLAUDE.md
 *.sqlite
 local_source.db
 feishu.db
+magic-pdf.json
 
 # Learning data (keep corrections & rules in git for portability)
 # data/corrections.json — tracked
 # data/rules.json — tracked
 # data/rules_pending.json — tracked
+
+# Excluded directories
+superpowers/
+feishu_tables/
+feishu_snapshots/
