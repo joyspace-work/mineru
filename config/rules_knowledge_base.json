@@ -141,6 +141,7 @@
     "霍尔果斯": "霍尔果斯",
     "喀什": "喀什",
     "上海": "上海",
+    "涓婃捣": "上海",
     "天津港": "天津",
     "天津": "天津",
     "广州": "广州",
@@ -273,8 +274,8 @@
     }
   ],
   "telemetry": {
-    "total_runs": 64,
-    "deterministic_hits": 10272,
+    "total_runs": 68,
+    "deterministic_hits": 11476,
     "ai_fallbacks": 0
   }
 }

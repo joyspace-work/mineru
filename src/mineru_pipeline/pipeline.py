@@ -265,17 +265,43 @@ def load_variant_index() -> dict[tuple[str, str], str]:
     return index
 
 
-def resolve_variant_id(model_id: str | None, variant_text: str | None, variant_index: dict[tuple[str, str], str]) -> str | None:
-    if not model_id or not variant_text:
+_max_model_id_num = 64
+_dynamic_model_map: dict[tuple[str, str], str] = {}
+_dynamic_variant_map: dict[tuple[str, str], str] = {}
+
+
+def get_or_create_model_id(brand: str | None, model: str | None, model_index: dict[tuple[str, str], str]) -> str | None:
+    global _max_model_id_num
+    if not model or not str(model).strip():
         return None
-    v_clean = str(variant_text).lower().strip()
+    b_clean = str(brand or "").strip().lower()
+    m_clean = str(model).strip().lower()
+
+    if (b_clean, m_clean) in model_index:
+        return model_index[(b_clean, m_clean)]
+    if ("", m_clean) in model_index:
+        return model_index[("", m_clean)]
+
+    if (b_clean, m_clean) not in _dynamic_model_map:
+        _max_model_id_num += 1
+        _dynamic_model_map[(b_clean, m_clean)] = f"MDL-{_max_model_id_num:03d}"
+    return _dynamic_model_map[(b_clean, m_clean)]
+
+
+def resolve_variant_id(model_id: str | None, variant_text: str | None, variant_index: dict[tuple[str, str], str]) -> str | None:
+    if not model_id:
+        return None
+    v_clean = str(variant_text or "").lower().strip()
     if (model_id, v_clean) in variant_index:
         return variant_index[(model_id, v_clean)]
     for (m_id, var_key), v_id in variant_index.items():
-        if m_id == model_id:
-            if var_key in v_clean or v_clean in var_key:
-                return v_id
-    return None
+        if m_id == model_id and var_key and (var_key in v_clean or v_clean in var_key):
+            return v_id
+
+    if (model_id, v_clean) not in _dynamic_variant_map:
+        seq = len([k for k in _dynamic_variant_map.keys() if k[0] == model_id]) + 1
+        _dynamic_variant_map[(model_id, v_clean)] = f"{model_id}-V{seq:02d}"
+    return _dynamic_variant_map[(model_id, v_clean)]
 
 
 NOISE_WORDS_RE = re.compile(
@@ -868,7 +894,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         else:
             status_v = "无具体信息" if status_raw else None
 
-        model_id = row.get("model_id") or row.get("modelId") or model_index.get((final_brand.lower(), final_model.lower())) or model_index.get(("", final_model.lower()))
+        model_id = row.get("model_id") or row.get("modelId") or get_or_create_model_id(final_brand, final_model, model_index)
 
         trim_val = row.get("variant") or row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
         if model_raw and str(model_raw).strip():
