@@ -774,10 +774,19 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
         trim_str = re.sub(noise, "", trim_str)
 
     trim_str = trim_str.strip(" -_/+,;:*")
+    trim_str = re.sub(
+        r"[-_/：:\s]*(?:(?:国际|国内|出口|海外|欧标|美规|中规)版?)?(?:出口车型|国内车型|海外车型|欧标车型|美规车型|中规车型|车型)$",
+        "",
+        trim_str,
+        flags=re.IGNORECASE,
+    ).strip()
 
-    # 2. Check for summary / header / invalid words
+    # 2. Check for summary / header / invalid words or pure range/battery specs
     invalid_keywords = ["合计", "小计", "指导价", "不含税", "售价", "价格", "汇总", "参数", "单位", "数量", "小结", "总计", "配置表", "参数表", "型号", "规格"]
     if any(trim_str == kw or trim_str.startswith(kw) for kw in invalid_keywords):
+        return None
+
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*(?:km|公里|kwh|度|kw|千瓦)?", trim_str, re.IGNORECASE):
         return None
 
     # 3. Strip redundant brand / model / raw names
