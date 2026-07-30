@@ -17,7 +17,6 @@ class VehicleCandidateModel(BaseModel):
     priceExw: float | None = None
     priceFob: float | None = None
     priceFca: float | None = None
-    priceCif: float | None = None
     supplierPriceCny: float | None = None
     officialSuggestedPriceCny: float | None = None
     stockQuantity: int | None = None
@@ -543,7 +542,6 @@ DEFAULT_KNOWLEDGE_BASE = {
         "priceExw": ["EXW", "EXW报价", "工厂交货价", "出厂价", "裸车价"],
         "priceFob": ["FOB", "FOB报价", "离岸价"],
         "priceFca": ["FCA", "FCA报价", "货运承运人价"],
-        "priceCif": ["CIF", "到岸价"],
         "supplierPriceCny": ["采购价", "批价", "底价", "优惠价", "全款裸车价", "供货价", "单价"],
         "officialSuggestedPriceCny": ["指导价", "官方指导价", " MSRP", "厂方指导价"],
         "stockQuantity": ["现车数量", "台数", "数量", "库存", "数量（台）", "配额"],
@@ -557,7 +555,7 @@ DEFAULT_KNOWLEDGE_BASE = {
         "notes": ["备注", "说明", "促销送充电桩", "条款"]
     },
     "trade_location_cleaners": [
-        "^FCA\\s*", "^EXW\\s*", "^FOB\\s*", "^CIF\\s*"
+        "^FCA\\s*", "^EXW\\s*", "^FOB\\s*"
     ],
     "location_canonical_map": {
         "广州南沙": "南沙",
@@ -789,7 +787,7 @@ AI Dependency Ratio: {ai_pct:.1f}% (Target: <5.0%)
         if not val:
             return None
         raw = str(val).strip()
-        cleaned = re.sub(r"^(FCA|FOB|EXW|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"^(FCA|FOB|EXW)\s*", "", raw, flags=re.IGNORECASE).strip()
         if not cleaned:
             return None
 

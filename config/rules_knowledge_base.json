@@ -50,10 +50,6 @@
       "FCA报价",
       "货运承运人价"
     ],
-    "priceCif": [
-      "CIF",
-      "到岸价"
-    ],
     "supplierPriceCny": [
       "采购价",
       "批价",
@@ -127,8 +123,7 @@
   "trade_location_cleaners": [
     "^FCA\\s*",
     "^EXW\\s*",
-    "^FOB\\s*",
-    "^CIF\\s*"
+    "^FOB\\s*"
   ],
   "location_canonical_map": {
     "广州南沙基地": "南沙",
@@ -284,8 +279,8 @@
     "tolerance_usd": 400
   },
   "telemetry": {
-    "total_runs": 74,
-    "deterministic_hits": 13906,
+    "total_runs": 75,
+    "deterministic_hits": 14515,
     "ai_fallbacks": 0
   }
 }

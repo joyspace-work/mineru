@@ -567,8 +567,8 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
     ]
     raw_loc_combo = " ".join([s for s in raw_loc_sources if s])
 
-    # If generic priceExw was assigned, but raw location/delivery text specifies FCA, FOB, or CIF (e.g. 'FCA南沙'):
-    m_term = re.search(r"(FCA|FOB|EXW|CIF)", raw_loc_combo, re.IGNORECASE)
+    # If generic priceExw was assigned, but raw location/delivery text specifies FCA or FOB (e.g. 'FCA南沙'):
+    m_term = re.search(r"(FCA|FOB|EXW)", raw_loc_combo, re.IGNORECASE)
     if m_term and exw is not None and fca is None and fob is None:
         term = m_term.group(1).upper()
         if term == "FCA":
@@ -780,7 +780,7 @@ LV_LEVEL_RE = re.compile(r"\bLV\s*\d+\+?\b", re.IGNORECASE)
 LV_LEVEL_ONLY_RE = re.compile(r"(?:LV\s*\d+\+?\s*)+", re.IGNORECASE)
 
 VARIANT_NOISE_RE = re.compile(
-    r"(EXW|FCA|FOB|CIF|USD|RMB|CNY|人民币|美元|美金|指导价|建议零售价|售价|价格|报价|"
+    r"(EXW|FCA|FOB|USD|RMB|CNY|人民币|美元|美金|指导价|建议零售价|售价|价格|报价|"
     r"库存|数量|台|现车|车源|供应商|来源|Sheet|工作表|备注|配置详情|宁德|弗迪|刀片电池|磷酸铁锂|三元锂|电池包)",
     re.IGNORECASE,
 )
@@ -925,8 +925,8 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
     # 1. Filter out technical parameter / dimension / chassis noise and trade term price suffixes
     trim_str = re.sub(r"\b(LV\d+)\s+\1\b", r"\1", trim_str, flags=re.IGNORECASE)
     trim_str = LV_LEVEL_RE.sub("", trim_str).strip()
-    trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA|CIF)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
-    trim_str = re.sub(r"\b(?:EXW|FOB|FCA|CIF)\b.*$", "", trim_str, flags=re.IGNORECASE).strip()
+    trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
+    trim_str = re.sub(r"\b(?:EXW|FOB|FCA)\b.*$", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"[$￥¥]?\s*\b\d{5,7}\b\s*(?:元|人民币|RMB|CNY|USD|美元|美金)?", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\b\d+(?:\.\d+)?\s*(?:kwh|度|kw|千瓦)\b", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\d{3,5}\s*[*xX×]\s*\d{3,5}\s*[*xX×]\s*\d{3,5}", "", trim_str)

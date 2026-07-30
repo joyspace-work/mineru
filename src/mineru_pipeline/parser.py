@@ -66,14 +66,14 @@ def is_physical_location_path(text: str) -> str | None:
     if not text:
         return None
     raw = text.strip()
-    clean = re.sub(r"^(FCA|EXW|FOB|CIF)\s*", "", raw, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"^(FCA|EXW|FOB)\s*", "", raw, flags=re.IGNORECASE).strip()
     if clean in ("未知地点", "未知", "unknown", "None", "null"):
         return None
     if clean in KNOWN_BRANDS_PATH_SET or clean in KNOWN_MODELS_PATH_SET:
         return None
     if any(b.lower() == clean.lower() for b in KNOWN_BRANDS_PATH_SET) or any(m.lower() == clean.lower() for m in KNOWN_MODELS_PATH_SET):
         return None
-    if re.search(r"^(FCA|EXW|FOB|CIF)", raw, re.IGNORECASE):
+    if re.search(r"^(FCA|EXW|FOB)", raw, re.IGNORECASE):
         return clean
     if clean in KNOWN_LOCATIONS or any(loc in clean for loc in KNOWN_LOCATIONS):
         return clean
@@ -102,7 +102,7 @@ def extract_path_metadata(file_path: Path) -> dict[str, str | None]:
     if len(rel_parts) >= 2:
         loc_candidate = rel_parts[1].strip()
         if loc_candidate not in ("未知地点", "未知", "unknown", "None", "null"):
-            location = re.sub(r"^(FCA|FOB|EXW|CIF)\s*", "", loc_candidate, flags=re.IGNORECASE).strip()
+            location = re.sub(r"^(FCA|FOB|EXW)\s*", "", loc_candidate, flags=re.IGNORECASE).strip()
 
     if len(rel_parts) >= 3:
         brand = rel_parts[2]
@@ -244,7 +244,7 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
 
         clean_str = re.sub(r"(\d),(\d{3})", r"\1\2", row_str)
 
-        m_loc = re.search(r"(?:EXW|FOB|FCA|CIF)\s*([\u4e00-\u9fa5]{2,6})", clean_str, re.IGNORECASE)
+        m_loc = re.search(r"(?:EXW|FOB|FCA)\s*([\u4e00-\u9fa5]{2,6})", clean_str, re.IGNORECASE)
         if m_loc:
             current_loc = m_loc.group(1)
 
@@ -267,8 +267,8 @@ def parse_unstructured_text_rows(rows: list[list[Any]], sheet_name: str, meta: d
             current_cny = float(m_cny.group(1))
 
         m_dollar = re.search(r"\$\s*(\d{4,6})", clean_str)
-        m_exw = re.search(r"(\d{4,6})\s*(?:EXW|FOB|FCA|CIF|USD)", clean_str, re.IGNORECASE)
-        m_after_exw = re.search(r"(?:EXW|FOB|FCA|CIF)\s*(?:[^\d]*)\s*(\d{4,6})", clean_str, re.IGNORECASE)
+        m_exw = re.search(r"(\d{4,6})\s*(?:EXW|FOB|FCA|USD)", clean_str, re.IGNORECASE)
+        m_after_exw = re.search(r"(?:EXW|FOB|FCA)\s*(?:[^\d]*)\s*(\d{4,6})", clean_str, re.IGNORECASE)
 
         if m_dollar:
             current_usd = float(m_dollar.group(1))
