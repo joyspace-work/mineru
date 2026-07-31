@@ -112,7 +112,7 @@
   * `app_secret`: (详见本地 .env 文件中的 FEISHU_APP_SECRET)
 * **目标位置**:
   * Base Token: `Is6Xb3btbazhFhsDXgFcqFG1nRc`
-  * Table ID: `tblAfMQdjhSV4Wd4`
+  * Table ID: `tblgSRsRQ3zFr0fz`
 
 ---
 
