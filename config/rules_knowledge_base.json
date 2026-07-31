@@ -1,5 +1,17 @@
 {
   "version": "1.0.0",
+  "approved_option_ids": [
+    "optQeQTAuY"
+  ],
+  "approved_keywords": [
+    "通过",
+    "已通过",
+    "审核通过",
+    "完成",
+    "已完成",
+    "approved",
+    "pass"
+  ],
   "header_aliases": {
     "brand": [
       "品牌",

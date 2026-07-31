@@ -782,6 +782,37 @@ AI Dependency Ratio: {ai_pct:.1f}% (Target: <5.0%)
 ==================================================
 """
 
+    def is_approved_status(self, record_or_val: Any) -> bool:
+        """
+        Check if a Feishu record is in 'Approved / 审核通过' status.
+        Matches against Option ID 'optQeQTAuY' (the minority approved status) 
+        or keywords like '已通过', '通过', '完成', 'Approved', 'Pass'.
+        """
+        val = record_or_val
+        if isinstance(record_or_val, dict):
+            val = record_or_val.get("审核流程API状态") or record_or_val.get("审核流程")
+        
+        if val is None:
+            return False
+
+        # If val is a list like ['optQeQTAuY']
+        if isinstance(val, list):
+            val_strs = [str(x).strip() for x in val if x]
+        else:
+            val_strs = [str(val).strip()]
+
+        approved_option_ids = set(self.kb_data.get("approved_option_ids", ["optQeQTAuY"]))
+        approved_keywords = set(self.kb_data.get("approved_keywords", ["通过", "已通过", "审核通过", "完成", "已完成", "approved", "pass"]))
+
+        for v in val_strs:
+            if v in approved_option_ids:
+                return True
+            v_lower = v.lower()
+            if any(kw in v_lower for kw in approved_keywords):
+                return True
+
+        return False
+
     def normalize_location(self, val: Any) -> str | None:
         """Normalize and canonicalize physical location using RuleEngine rules."""
         if not val:

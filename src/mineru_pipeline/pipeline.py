@@ -1812,15 +1812,27 @@ def load_latest_snapshot() -> dict[str, Any] | None:
 
 
 def diff_and_harvest(baseline: dict[str, Any], current_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Diff current Feishu records against a baseline snapshot, distill rules from changes."""
+    """Diff current Feishu records against a baseline snapshot, distill rules ONLY from Approved human edits."""
     baseline_records = baseline.get("records", {})
     engine = get_rule_engine()
     changes: list[dict[str, Any]] = []
+
+    approved_count = 0
+    skipped_unapproved = 0
+
     for rec in current_records:
         rid = str(rec.get("record_id") or rec.get("_feishu_record_id") or "")
         if not rid or rid not in baseline_records:
             continue
+
+        # Check if record has been approved by human reviewer in Feishu
+        if not engine.is_approved_status(rec):
+            skipped_unapproved += 1
+            continue
+
+        approved_count += 1
         old = baseline_records[rid]
+
         for field in DIFF_FIELDS:
             old_val = old.get(field)
             new_val = rec.get(field)
@@ -1828,10 +1840,21 @@ def diff_and_harvest(baseline: dict[str, Any], current_records: list[dict[str, A
             old_str = str(old_val).strip() if old_val not in (None, "") else None
             new_str = str(new_val).strip() if new_val not in (None, "") else None
             if old_str != new_str:
-                change: dict[str, Any] = {"record_id": rid, "field": field, "old": old_val, "new": new_val}
+                change: dict[str, Any] = {
+                    "record_id": rid,
+                    "field": field,
+                    "old": old_val,
+                    "new": new_val,
+                    "supplier": rec.get("supplier") or rec.get("供应商"),
+                    "brand": rec.get("brand") or rec.get("品牌"),
+                    "model": rec.get("model") or rec.get("型号"),
+                }
                 changes.append(change)
+                # Distill rule into knowledge base
                 rule = engine.distill_rule_from_edit(field, old_val, new_val, context=f"feishu_harvest_{rid}")
                 change["rule_distilled"] = rule is not None
+
+    print(f"📊 Harvest Filter: 扫描记录 {len(current_records)} 条 | 审核通过记录: {approved_count} 条 | 跳过未审核记录: {skipped_unapproved} 条")
     return changes
 
 
