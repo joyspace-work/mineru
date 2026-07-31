@@ -55,7 +55,7 @@ class FieldSpec:
 VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         db_column="supplier",
-        feishu_name="supplier",
+        feishu_name="供应商",
         pydantic_name="supplierName",
         sql_type="TEXT",
         excel_aliases=("供应商", "经销商", "报价方", "supplier", "suppliername"),
@@ -64,7 +64,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="brand",
-        feishu_name="brand",
+        feishu_name="品牌",
         pydantic_name="brand",
         sql_type="TEXT",
         excel_aliases=("品牌", "车辆品牌", "厂商", "brand"),
@@ -73,7 +73,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="model",
-        feishu_name="model",
+        feishu_name="型号",
         pydantic_name="model",
         sql_type="TEXT",
         excel_aliases=("车型", "型号", "车款", "产品名称", "产品", "车辆名称", "车型名称", "系列", "车系", "子品牌", "项目名称", "model", "modelname", "series", "modelcode"),
@@ -91,7 +91,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="variant",
-        feishu_name="variant",
+        feishu_name="细分型号",
         pydantic_name="variant",
         sql_type="TEXT",
         excel_aliases=("主要配置描述", "配置描述", "车辆配置", "配置版本", "款型", "细分车型", "配置", "版本", "variant", "trim", "trimname", "trim_config", "trimconfig", "规格", "车型版本"),
@@ -109,7 +109,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="manufacture_year",
-        feishu_name="manufacture_year",
+        feishu_name="生产年份",
         pydantic_name="manufactureYear",
         sql_type="INTEGER",
         excel_aliases=("生产年份", "制造年份", "出厂年份", "年份", "年款", "year", "manufacture_year", "manufactureyear"),
@@ -118,7 +118,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="manufacture_month",
-        feishu_name="manufacture_month",
+        feishu_name="生产月份",
         pydantic_name="manufactureMonth",
         sql_type="INTEGER",
         excel_aliases=("生产月份", "制造月份", "出厂月份", "月份", "month", "manufacture_month", "manufacturemonth"),
@@ -127,7 +127,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="exterior_color",
-        feishu_name="exterior_color",
+        feishu_name="外饰颜色",
         pydantic_name="exteriorColor",
         sql_type="TEXT",
         excel_aliases=("外观颜色", "车身颜色", "外观", "颜色", "color", "exteriorcolor"),
@@ -136,7 +136,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="interior_color",
-        feishu_name="interior_color",
+        feishu_name="内饰颜色",
         pydantic_name="interiorColor",
         sql_type="TEXT",
         excel_aliases=("内饰颜色", "内饰", "interiorcolor"),
@@ -145,7 +145,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="stock_quantity",
-        feishu_name="stock_quantity",
+        feishu_name="库存",
         pydantic_name="stockQuantity",
         sql_type="INTEGER",
         excel_aliases=("库存", "数量", "台数", "可订数量", "qty", "在库数量", "现货", "stockquantity"),
@@ -154,7 +154,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="min_quantity",
-        feishu_name="min_quantity",
+        feishu_name="起订数量",
         pydantic_name="minQuantity",
         sql_type="INTEGER",
         excel_aliases=("起订量", "最小起订量", "minquantity"),
@@ -163,7 +163,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="max_quantity",
-        feishu_name="max_quantity",
+        feishu_name="满订数量",
         pydantic_name="maxQuantity",
         sql_type="INTEGER",
         excel_aliases=("最大量", "上限", "maxquantity"),
@@ -181,7 +181,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="order_wait_days",
-        feishu_name="order_wait_days",
+        feishu_name="下单后需要等待天数",
         pydantic_name="orderWaitDays",
         sql_type="INTEGER",
         excel_aliases=("等待天数", "交期天数", "等待周期", "订车周期", "等待时间", "交期", "货期", "orderwaitdays", "orderwaitingperiod"),
@@ -190,7 +190,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="steering_setup",
-        feishu_name="steering_setup",
+        feishu_name="左右舵",
         pydantic_name="steeringSetup",
         sql_type="TEXT",
         excel_aliases=("左右舵", "方向盘", "舵向", "steeringsetup"),
@@ -199,7 +199,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="version_type",
-        feishu_name="version_type",
+        feishu_name="国际国内版本（多选）",
         pydantic_name="marketRegion",
         sql_type="TEXT",
         excel_aliases=("版本分类", "规格版本", "市场版本", "versiontype"),
@@ -208,7 +208,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="status_vehicle",
-        feishu_name="status_vehicle",
+        feishu_name="库存状态",
         pydantic_name="statusVehicle",
         sql_type="TEXT",
         excel_aliases=("车辆状态", "状态", "status", "statusvehicle"),
@@ -217,7 +217,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="supplier_price_cny",
-        feishu_name="supplier_price_cny",
+        feishu_name="人民币指导价",
         pydantic_name="supplierPriceCny",
         sql_type="INTEGER",
         excel_aliases=("对标国内指导价", "国内指导价", "市场指导价", "官方指导价", "指导价", "建议零售价", "msrp", "supplierpricecny", "officialpricecny"),
@@ -226,7 +226,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="cost_exw_usd",
-        feishu_name="cost_exw_usd",
+        feishu_name="EXW美金价",
         pydantic_name="costExwUsd",
         sql_type="INTEGER",
         excel_aliases=("出厂价", "exw", "exw价格", "出厂报价", "工厂价", "裸车价", "不含税价", "含税价", "国内价格", "单价", "价格", "costexwusd"),
@@ -235,7 +235,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="cost_fob_usd",
-        feishu_name="cost_fob_usd",
+        feishu_name="FOB美金价",
         pydantic_name="costFobUsd",
         sql_type="INTEGER",
         excel_aliases=("fob", "fob价格", "fob价", "离岸价", "costfobusd"),
@@ -244,7 +244,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="cost_fca_usd",
-        feishu_name="cost_fca_usd",
+        feishu_name="FCA美金价",
         pydantic_name="costFcaUsd",
         sql_type="INTEGER",
         excel_aliases=("fca", "fca价格", "costfcausd"),
@@ -253,7 +253,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="location",
-        feishu_name="location",
+        feishu_name="车源地点",
         pydantic_name="location",
         sql_type="TEXT",
         excel_aliases=("提货地", "发货地", "仓库", "地点", "发运地", "出发港", "港口", "location"),
@@ -262,7 +262,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="confidence",
-        feishu_name="confidence",
+        feishu_name="AI置信度",
         pydantic_name="confidence",
         sql_type="REAL",
         excel_aliases=("confidence", "ocr_confidence", "置信度", "识别置信度"),
@@ -271,7 +271,7 @@ VEHICLE_FIELDS: tuple[FieldSpec, ...] = (
     ),
     FieldSpec(
         db_column="notes",
-        feishu_name="notes",
+        feishu_name="经验",
         pydantic_name="notes",
         sql_type="TEXT",
         excel_aliases=("备注", "说明", "notes", "remark"),
