@@ -50,17 +50,29 @@
       "EXW报价",
       "工厂交货价",
       "出厂价",
-      "裸车价"
+      "裸车价",
+      "exw_price_usd",
+      "exw_price_rmb",
+      "exw_usd",
+      "exw_price"
     ],
     "priceFob": [
       "FOB",
       "FOB报价",
-      "离岸价"
+      "离岸价",
+      "fob_price_usd",
+      "fob_price_rmb",
+      "fob_usd",
+      "fob_price"
     ],
     "priceFca": [
       "FCA",
       "FCA报价",
-      "货运承运人价"
+      "货运承运人价",
+      "fca_price_usd",
+      "fca_price_rmb",
+      "fca_usd",
+      "fca_price"
     ],
     "supplierPriceCny": [
       "采购价",
@@ -291,8 +303,8 @@
     "tolerance_usd": 400
   },
   "telemetry": {
-    "total_runs": 75,
-    "deterministic_hits": 14515,
+    "total_runs": 90,
+    "deterministic_hits": 23424,
     "ai_fallbacks": 0
   }
 }

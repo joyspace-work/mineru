@@ -1,0 +1,12 @@
+mineru==3.4.4
+paddleocr==3.7.0
+openpyxl==3.1.5
+python-dotenv==1.2.2
+requests==2.34.2
+python-docx==1.2.0
+python-pptx==1.0.2
+accelerate==1.14.0
+pydantic>=2.0.0
+
+[dev]
+pytest==9.1.1

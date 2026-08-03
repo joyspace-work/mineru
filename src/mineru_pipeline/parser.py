@@ -378,6 +378,10 @@ def parse_excel_file(file_path: str | Path) -> list[dict[str, Any]]:
                 if cell_value is not None:
                     if col_idx in header_map:
                         field = header_map[col_idx]
+                        if field == "supplier" and meta.get("supplier"):
+                            clean_cell = str(cell_value).strip()
+                            if not clean_cell or clean_cell in ("未识别", "未知", "None", "null", "unknown", "无"):
+                                cell_value = meta["supplier"]
                         row_dict[field] = cell_value
                     if col_idx in raw_header_map:
                         r_head = raw_header_map[col_idx]

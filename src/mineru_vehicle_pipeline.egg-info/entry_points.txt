@@ -1,0 +1,2 @@
+[console_scripts]
+mineru-pipeline = mineru_pipeline.cli:main

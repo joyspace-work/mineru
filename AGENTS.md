@@ -105,14 +105,21 @@
 
 ---
 
-## 4. 飞书多维表格写入参数
+## 4. 飞书多维表格写入参数与红线安全规则
+
+> [!CAUTION]
+> **🚨 核心安全红线规则：生产环境表格绝对只读！**
+> - **生产环境表格 ID**: `tblte61W3fKoXmSw` （URL: `https://ecn4k98ibq2i.feishu.cn/base/Is6Xb3btbazhFhsDXgFcqFG1nRc?table=tblte61W3fKoXmSw`）
+> - **原则与约束**：**该生产环境表格仅用于 AI 读取参考字段格式或拉取线索，绝对严禁任何形式的写入（Create）、修改（Update）、清空（Clear）或删除（Delete）操作！避免造成生产数据事故！**
+> - **唯一可写/同步目标**：所有调试、测试、手动同步、CLI `sync` 操作**必须且只能作用于开发测试表格 `tblgSRsRQ3zFr0fz`**。
 
 * **授权应用**:
   * `app_id`: `cli_aab1f0eeb0fa9cc0`
   * `app_secret`: (详见本地 .env 文件中的 FEISHU_APP_SECRET)
 * **目标位置**:
   * Base Token: `Is6Xb3btbazhFhsDXgFcqFG1nRc`
-  * Table ID: `tblgSRsRQ3zFr0fz`
+  * **开发测试表格 (可读写)**: `tblgSRsRQ3zFr0fz`
+  * **生产环境表格 (🚨 仅只读/绝对严禁写删)**: `tblte61W3fKoXmSw`
 
 ---
 

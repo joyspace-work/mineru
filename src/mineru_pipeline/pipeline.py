@@ -136,19 +136,41 @@ def to_number(value: Any) -> int | None:
 
 
 def parse_wait_days(value: Any) -> int | None:
-    text = str(value or "")
-    range_week = re.search(r"(\d+)\s*[-~至]\s*(\d+)\s*周", text)
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    if any(k in text for k in ("现车", "现货", "即提", "立即可提", "有车")) or text in ("0", "0天"):
+        return 0
+
+    range_week = re.search(r"(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*周", text)
     if range_week:
-        return int(range_week.group(2)) * 7
-    single_week = re.search(r"(\d+)\s*周", text)
+        return int(float(range_week.group(2)) * 7)
+    single_week = re.search(r"(\d+(?:\.\d+)?)\s*周", text)
     if single_week:
-        return int(single_week.group(1)) * 7
+        return int(float(single_week.group(1)) * 7)
+
+    range_month = re.search(r"(\d+(?:\.\d+)?)\s*[-~至]\s*(\d+(?:\.\d+)?)\s*个?月", text)
+    if range_month:
+        return int(float(range_month.group(2)) * 30)
+    single_month = re.search(r"(\d+(?:\.\d+)?)\s*个?月", text)
+    if single_month:
+        return int(float(single_month.group(1)) * 30)
+
+    range_days = re.search(r"(\d+)\s*[-~至]\s*(\d+)\s*天", text)
+    if range_days:
+        return int(range_days.group(2))
     days = re.search(r"(\d+)\s*天", text)
     if days:
         return int(days.group(1))
-    months = re.search(r"(\d+)\s*个?月", text)
-    if months:
-        return int(months.group(1)) * 30
+
+    if text.isdigit():
+        return int(text)
+
     return None
 
 
@@ -533,19 +555,42 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
                 parts.append(f"{key_text} {value_text}")
         return " ".join(parts)
 
-    def explicit_cny_context(term: str) -> bool:
+    def explicit_usd_context(term: str) -> bool:
         context = term_context(term)
-        return bool(re.search(r"(人民币|RMB|CNY|¥|￥)", context, re.IGNORECASE))
+        return bool(re.search(r"(美金|美元|USD|\$)", context, re.IGNORECASE))
+
+    def is_cny_term_price(term: str, val: int | None) -> bool:
+        if val is None:
+            return False
+        context = term_context(term)
+        if re.search(r"(人民币|RMB|CNY|¥|￥)", context, re.IGNORECASE):
+            return True
+        if explicit_usd_context(term):
+            return False
+        return val >= 35000
 
     price_notes: list[str] = []
 
-    raw_exw = value_for(("costExwUsd", "cost_exw_usd", "priceExw"))
-    raw_fob = value_for(("costFobUsd", "cost_fob_usd", "priceFob"))
-    raw_fca = value_for(("costFcaUsd", "cost_fca_usd", "priceFca"))
+    raw_exw = value_for(("costExwUsd", "cost_exw_usd", "priceExw", "exw_price_usd", "exw_usd", "exw_price_rmb", "exw_rmb"))
+    raw_fob = value_for(("costFobUsd", "cost_fob_usd", "priceFob", "fob_price_usd", "fob_usd", "fob_price_rmb", "fob_rmb"))
+    raw_fca = value_for(("costFcaUsd", "cost_fca_usd", "priceFca", "fca_price_usd", "fca_usd", "fca_price_rmb", "fca_rmb"))
 
-    exw = None if raw_exw is not None and explicit_cny_context("EXW") else raw_exw
-    fob = None if raw_fob is not None and explicit_cny_context("FOB") else raw_fob
-    fca = None if raw_fca is not None and explicit_cny_context("FCA") else raw_fca
+    # Rule 6: If explicit CNY context or unlabelled value >= 35,000, convert to USD using fixed rate 6.7
+    if raw_exw is not None:
+        exw = round(raw_exw / 6.7) if is_cny_term_price("EXW", raw_exw) else raw_exw
+    else:
+        exw = None
+
+    if raw_fob is not None:
+        fob = round(raw_fob / 6.7) if is_cny_term_price("FOB", raw_fob) else raw_fob
+    else:
+        fob = None
+
+    if raw_fca is not None:
+        fca = round(raw_fca / 6.7) if is_cny_term_price("FCA", raw_fca) else raw_fca
+    else:
+        fca = None
+
     cny = to_number(
         row.get("supplierPriceCny") or row.get("supplier_price_cny")
         or row.get("officialPrice") or row.get("officialPriceCny")
@@ -554,8 +599,8 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
         or row.get("国内指导价") or row.get("市场指导价") or row.get("建议零售价")
     )
     for term, raw_value in (("EXW", raw_exw), ("FCA", raw_fca), ("FOB", raw_fob)):
-        if raw_value is not None and explicit_cny_context(term):
-            price_notes.append(f"{term}人民币: {raw_value}")
+        if raw_value is not None and is_cny_term_price(term, raw_value):
+            price_notes.append(f"{term}人民币: {raw_value} (按6.7汇率折算USD: {round(raw_value / 6.7)})")
             if cny is None:
                 cny = raw_value
 
@@ -616,7 +661,8 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
             val = int(m.group(1))
             if 500 <= val < 2000000:
                 if re.search(r"EXW[^;\n\r]{0,20}(人民币|RMB|CNY|¥|￥)", combo_text, re.IGNORECASE):
-                    price_notes.append(f"EXW人民币: {val}")
+                    price_notes.append(f"EXW人民币: {val} (按6.7汇率折算USD: {round(val / 6.7)})")
+                    exw = round(val / 6.7)
                     if cny is None:
                         cny = val
                 else:
@@ -628,7 +674,8 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
             val = int(m.group(1))
             if 500 <= val < 2000000:
                 if re.search(r"FOB[^;\n\r]{0,20}(人民币|RMB|CNY|¥|￥)", combo_text, re.IGNORECASE):
-                    price_notes.append(f"FOB人民币: {val}")
+                    price_notes.append(f"FOB人民币: {val} (按6.7汇率折算USD: {round(val / 6.7)})")
+                    fob = round(val / 6.7)
                     if cny is None:
                         cny = val
                 else:
@@ -640,7 +687,8 @@ def extract_trade_term_prices_and_location(row: dict[str, Any]) -> dict[str, Any
             val = int(m.group(1))
             if 500 <= val < 2000000:
                 if re.search(r"FCA[^;\n\r]{0,20}(人民币|RMB|CNY|¥|￥)", combo_text, re.IGNORECASE):
-                    price_notes.append(f"FCA人民币: {val}")
+                    price_notes.append(f"FCA人民币: {val} (按6.7汇率折算USD: {round(val / 6.7)})")
+                    fca = round(val / 6.7)
                     if cny is None:
                         cny = val
                 else:
@@ -730,7 +778,7 @@ def clean_variant_and_extract_notes(
             if detail not in equipment_details:
                 equipment_details.append(detail)
             c_line = re.sub(r"[（\(][^）\)]+[）\)]", "", line).strip()
-            if c_line and not LV_LEVEL_ONLY_RE.fullmatch(c_line) and c_line not in clean_parts:
+            if c_line and c_line not in clean_parts:
                 clean_parts.append(c_line)
         elif any(kw in line for kw in ["空调", "EPS", "ABS", "显示屏", "扬声器", "悬挂", "悬架", "铝合金", "雷达", "天窗", "快充", "座椅", "退税", "关税", "内饰", "座", "门"]):
             if line not in equipment_details:
@@ -738,7 +786,7 @@ def clean_variant_and_extract_notes(
             m_short = re.match(r"^([^\s,，、；;]+)", line, re.IGNORECASE)
             if m_short:
                 c_part = m_short.group(1).strip()
-                if c_part and not LV_LEVEL_ONLY_RE.fullmatch(c_part) and VARIANT_KEEP_RE.search(c_part) and c_part not in clean_parts:
+                if c_part and VARIANT_KEEP_RE.search(c_part) and c_part not in clean_parts:
                     clean_parts.append(c_part)
         else:
             if line not in clean_parts:
@@ -919,12 +967,10 @@ def clean_variant(trim_val: Any, brand: str, model: str, raw_brand: Any = None, 
     # 0. Strip parenthetical equipment detail lists
     trim_str = re.sub(r"[（\(][^）\)]*[）\)]", "", trim_str).strip()
     trim_str, _ = _remove_variant_noise_segments(trim_str)
-    if LV_LEVEL_ONLY_RE.fullmatch(trim_str):
+    if not trim_str:
         return None
 
     # 1. Filter out technical parameter / dimension / chassis noise and trade term price suffixes
-    trim_str = re.sub(r"\b(LV\d+)\s+\1\b", r"\1", trim_str, flags=re.IGNORECASE)
-    trim_str = LV_LEVEL_RE.sub("", trim_str).strip()
     trim_str = re.sub(r"(?:的)?(?:EXW|FOB|FCA)[^\d]*\d+.*$", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"\b(?:EXW|FOB|FCA)\b.*$", "", trim_str, flags=re.IGNORECASE).strip()
     trim_str = re.sub(r"[$￥¥]?\s*\b\d{5,7}\b\s*(?:元|人民币|RMB|CNY|USD|美元|美金)?", "", trim_str, flags=re.IGNORECASE).strip()
@@ -1083,30 +1129,35 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                 if found_series.lower() not in curr_trim.lower():
                     trim_val = f"{found_series} {curr_trim}".strip()
 
-        wait_days = to_number(row.get("orderWaitDays") or row.get("order_wait_days")) or parse_wait_days(row.get("leadTimeText") or row.get("orderWaitingPeriod"))
+        # Comprehensive wait days & inventory status logic (Convert weeks/months to days)
+        search_wait_scope = f"{row.get('orderWaitDays') or ''} {row.get('order_wait_days') or ''} {row.get('leadTimeText') or ''} {row.get('orderWaitingPeriod') or ''} {row.get('statusVehicle') or ''} {row.get('status_vehicle') or ''} {row.get('ocr_raw') or ''} {row.get('raw') or ''} {row.get('notes') or ''}"
+        
+        wait_days = parse_wait_days(search_wait_scope)
+        if wait_days is None:
+            direct_num = to_number(row.get("orderWaitDays") or row.get("order_wait_days"))
+            if direct_num is not None:
+                wait_days = int(direct_num)
+
+        # Inventory status deduction from wait_days and text tokens
+        if wait_days == 0 or any(k in search_wait_scope for k in ("现车", "现货", "即提", "立即可提", "有车")) or "stock" in search_wait_scope.lower():
+            status_v = "现车"
+            if wait_days is None:
+                wait_days = 0
+        elif wait_days is not None and wait_days > 0:
+            status_v = "在途"
+        else:
+            status_v = "无具体信息"
         version_raw = f"{row.get('marketRegion') or ''} {row.get('version_type') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('variant') or row.get('trimName') or ''} {row.get('_source_file') or ''}"
-        version_type = None
-        if "国内" in version_raw or "中规" in version_raw or "DOMESTIC" in version_raw.upper():
-            version_type = "国内版"
-        elif any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")) or "INTERNATIONAL" in version_raw.upper():
+        if any(token in version_raw for token in ("国际", "出口", "海外", "欧标", "美规")) or "INTERNATIONAL" in version_raw.upper():
             version_type = "国际版"
+        else:
+            version_type = "国内版"
 
         steering_raw = f"{row.get('steeringSetup') or ''} {row.get('steering_setup') or ''} {row.get('ocr_raw') or row.get('raw') or ''} {row.get('notes') or ''} {row.get('variant') or row.get('trimName') or ''}".upper()
         if "右舵" in steering_raw or "RHD" in steering_raw:
             steering = "右舵"
-        elif "左舵" in steering_raw or "LHD" in steering_raw:
-            steering = "左舵"
-        elif version_type == "国内版":
-            steering = "左舵"
         else:
-            steering = None
-        status_raw = str(row.get("statusVehicle") or row.get("status_vehicle") or "").lower()
-        if "现车" in status_raw or "stock" in status_raw:
-            status_v = "现车"
-        elif "在途" in status_raw or "transit" in status_raw:
-            status_v = "在途"
-        else:
-            status_v = "无具体信息" if status_raw else None
+            steering = "左舵"
 
         model_id = row.get("model_id") or row.get("modelId") or get_or_create_model_id(final_brand, final_model, model_index)
 
@@ -1157,20 +1208,6 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
         variant_id = row.get("variant_id") or row.get("variantId") or row.get("trim_config_id") or resolve_variant_id(model_id, variant_val, variant_index)
 
-        conf_raw = row.get("confidence") or row.get("ocr_confidence") or row.get("_confidence")
-        if conf_raw is not None:
-            conf_val = round(float(conf_raw), 2)
-        else:
-            # Field extraction completeness & quality score
-            score = 1.00
-            if official_price is None and exw_usd is None and fob_usd is None and fca_usd is None:
-                score -= 0.15
-            if not row.get("exteriorColor") and not row.get("exterior_color"):
-                score -= 0.05
-            if not variant_val:
-                score -= 0.05
-            conf_val = round(max(0.50, score), 2)
-
         m_year, m_month = parse_manufacture_year_month(row)
 
         raw_ext_col = row.get("exteriorColor") or row.get("exterior_color") or row.get("color")
@@ -1181,6 +1218,39 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
         stock_qty = to_number(row.get("stockQuantity") or row.get("stock_quantity") or row.get("quantity"))
         if stock_qty is None and extracted_qty is not None:
             stock_qty = extracted_qty
+
+        sup_val = (
+            row.get("supplier") if row.get("supplier") and str(row.get("supplier")).strip() not in ("未识别", "未知", "None", "null", "unknown", "无")
+            else (row.get("supplierName") or row.get("_path_supplier"))
+        )
+
+        conf_raw = row.get("confidence") or row.get("ocr_confidence") or row.get("_confidence")
+        if conf_raw is not None:
+            conf_val = round(float(conf_raw), 2)
+        else:
+            # Phase 1: Graduated Weighted Confidence Scoring Model
+            # Base score: 1.00
+            # Blockers (-0.25): Trade Price, Trim Variant
+            # Key Basics (-0.15): Brand, Model, Supplier
+            # Secondary (-0.06): Location, Steering, Version Type
+            score = 1.00
+            if not sup_val or str(sup_val).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.15
+            if not final_brand or str(final_brand).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.15
+            if not final_model or str(final_model).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.15
+            if not variant_val or str(variant_val).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.25
+            if not final_loc or str(final_loc).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.06
+            if exw_usd is None and fob_usd is None and fca_usd is None:
+                score -= 0.25
+            if not steering or str(steering).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.06
+            if not version_type or str(version_type).strip() in ("未识别", "未知", "None", "null", "unknown", "无"):
+                score -= 0.06
+            conf_val = round(max(0.00, score), 2)
 
         item = {
             "model_id": model_id,
@@ -1208,7 +1278,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
             "cost_fca_usd": fca_usd,
             "location": final_loc,
             "confidence": conf_val,
-            "supplier": row.get("supplierName") or row.get("supplier"),
+            "supplier": sup_val,
             "notes": final_notes,
             "source_file": row.get("_source_file") or row.get("source_file"),
             "content_hash": row.get("_content_hash") or row.get("content_hash"),
@@ -1225,6 +1295,7 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
                 new_item = dict(item)
                 m_part = re.match(r"^(\d+)\s*([\u4e00-\u9fa5A-Za-z]+)(?:/([\u4e00-\u9fa5A-Za-z]+))?$", part)
                 if m_part:
+                    new_item["color_stock"] = int(m_part.group(1))
                     new_item["stock_quantity"] = int(m_part.group(1))
                     new_item["exterior_color"] = m_part.group(2)
                     if m_part.group(3):
@@ -1287,12 +1358,12 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 FEISHU_FIELD_MAP = get_feishu_field_map()
 
 FEISHU_TABLE_ALLOWED_FIELDS = {
-    "record_id", "supplier", "brand", "model", "model_id", "variant", "variant_id",
-    "manufacture_year", "manufacture_month", "exterior_color", "interior_color",
-    "stock_quantity", "min_quantity", "max_quantity", "supplier_price_cny",
-    "cost_exw_usd", "cost_fob_usd", "cost_fca_usd", "location", "steering_setup",
-    "version_type", "status_vehicle", "confidence", "notes", "order_wait_days",
-    "lead_time", "source_file", "sync_batch_id",
+    "供应商", "品牌", "型号", "model_id", "细分型号", "variant_id",
+    "生产年份", "生产月份", "外饰颜色", "内饰颜色", 
+    "单车型总库存", "细分车型库存", "颜色库存", "起订数量", "满订数量",
+    "下单后需要等待天数", "左右舵", "国际国内版本（多选）",
+    "库存状态（逐步废弃）", "人民币指导价", "EXW美金价", "FCA美金价", "FOB美金价",
+    "车源地点", "AI置信度", "经验", "素材源文件路径", "sync_batch_id",
 }
 
 
@@ -1305,19 +1376,16 @@ def record_to_feishu_fields(record: dict[str, Any]) -> dict[str, Any]:
         if val not in (None, ""):
             fields[feishu_col] = val
 
-    if not fields.get("record_id") and record.get("id"):
-        fields["record_id"] = str(record["id"])
+    if record.get("source_file") and "素材源文件路径" in FEISHU_TABLE_ALLOWED_FIELDS:
+        fields["素材源文件路径"] = str(record["source_file"])
 
-    # Pass through extra fields not in VEHICLE_FIELDS but needed for Feishu
-    for extra_key in ("source_file", "sync_batch_id"):
-        val = record.get(extra_key)
-        if val not in (None, ""):
-            fields[extra_key] = val
+    if record.get("sync_batch_id") and "sync_batch_id" in FEISHU_TABLE_ALLOWED_FIELDS:
+        fields["sync_batch_id"] = str(record["sync_batch_id"])
 
-    if "brand" in fields and isinstance(fields["brand"], list):
-        fields["brand"] = fields["brand"][0] if fields["brand"] else None
-        if not fields["brand"]:
-            fields.pop("brand", None)
+    if "品牌" in fields and isinstance(fields["品牌"], list):
+        fields["品牌"] = fields["品牌"][0] if fields["品牌"] else None
+        if not fields["品牌"]:
+            fields.pop("品牌", None)
 
     return fields
 
@@ -1538,6 +1606,9 @@ def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_del
 
 
 def clear_feishu_table(access_token: str, app_token: str, table_id: str) -> int:
+    if table_id == "tblte61W3fKoXmSw":
+        print("🚨 SAFETY GUARD: Production table tblte61W3fKoXmSw is READ-ONLY! Aborting clear operation.")
+        return 0
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     deleted_count = 0
     while True:
@@ -1567,8 +1638,14 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False, clea
         return True
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
-    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN")
-    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES")
+    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN") or "Is6Xb3btbazhFhsDXgFcqFG1nRc"
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or "tblgSRsRQ3zFr0fz"
+
+    # Production Table Write-Protection Guard (STRICT SAFETY)
+    if table_id == "tblte61W3fKoXmSw":
+        print("🚨 SAFETY GUARD: Production table tblte61W3fKoXmSw is READ-ONLY! Refusing write/sync operation.")
+        return False
+
     if not all([app_id, app_secret, app_token, table_id]):
         print("Feishu is not configured; records remain pending.")
         return False
@@ -1728,8 +1805,8 @@ def _get_feishu_credentials() -> tuple[str, str, str] | None:
     """Returns (access_token, app_token, table_id) or None if not configured."""
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
-    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN")
-    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES")
+    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN") or "Is6Xb3btbazhFhsDXgFcqFG1nRc"
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or "tblte61W3fKoXmSw"
     if not all([app_id, app_secret, app_token, table_id]):
         return None
     try:
