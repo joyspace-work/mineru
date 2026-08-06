@@ -303,8 +303,8 @@
     "tolerance_usd": 400
   },
   "telemetry": {
-    "total_runs": 90,
-    "deterministic_hits": 23424,
+    "total_runs": 95,
+    "deterministic_hits": 24050,
     "ai_fallbacks": 0
   }
 }

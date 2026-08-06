@@ -8,6 +8,17 @@ from typing import Any, Literal, Sequence
 import re
 from pydantic import BaseModel, Field
 
+# ==============================================================================
+# FEISHU BITABLE TABLE BOUNDARIES (STRICT SAFETY & ISOLATION)
+# ==============================================================================
+FEISHU_BASE_APP_TOKEN = "Is6Xb3btbazhFhsDXgFcqFG1nRc"
+
+# 🚨 生产环境表格 (严格只读，绝对禁止任何 API 写入/清空/删除操作)
+FEISHU_READONLY_PROD_TABLE_ID = "tblte61W3fKoXmSw"
+
+# ✅ 开发测试表格 (唯一授权的 API 自动解析与同步写入目标)
+FEISHU_WRITABLE_DEV_TABLE_ID = "tblAxwCCmDIG4xfx"
+
 class VehicleCandidateModel(BaseModel):
     brand: str | None = None
     modelName: str | None = None

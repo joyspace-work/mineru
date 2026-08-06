@@ -20,6 +20,9 @@ from dotenv import load_dotenv
 
 from .parser import parse_excel_file
 from .schema import (
+    FEISHU_BASE_APP_TOKEN,
+    FEISHU_READONLY_PROD_TABLE_ID,
+    FEISHU_WRITABLE_DEV_TABLE_ID,
     VEHICLE_FIELDS,
     get_allowed_edit_keys,
     get_brand_model_mapping,
@@ -1615,9 +1618,11 @@ def fetch_with_retry(method: str, url: str, *, max_retries: int = 3, initial_del
 
 
 def clear_feishu_table(access_token: str, app_token: str, table_id: str) -> int:
-    if table_id == "tblte61W3fKoXmSw":
-        print("🚨 SAFETY GUARD: Production table tblte61W3fKoXmSw is READ-ONLY! Aborting clear operation.")
-        return 0
+    if table_id == FEISHU_READONLY_PROD_TABLE_ID:
+        raise PermissionError(
+            f"🚨 SAFETY HARD-LOCK GUARD TRIPPED: Production table ({FEISHU_READONLY_PROD_TABLE_ID}) is STRICTLY READ-ONLY! "
+            f"Refusing any clear/delete operation. Allowed target is development table ({FEISHU_WRITABLE_DEV_TABLE_ID})."
+        )
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     deleted_count = 0
     while True:
@@ -1647,13 +1652,15 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False, clea
         return True
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
-    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN") or "Is6Xb3btbazhFhsDXgFcqFG1nRc"
-    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or "tblAxwCCmDIG4xfx"
+    app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN") or FEISHU_BASE_APP_TOKEN
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or FEISHU_WRITABLE_DEV_TABLE_ID
 
     # Production Table Write-Protection Guard (STRICT SAFETY)
-    if table_id == "tblte61W3fKoXmSw":
-        print("🚨 SAFETY GUARD: Production table tblte61W3fKoXmSw is READ-ONLY! Refusing write/sync operation.")
-        return False
+    if table_id == FEISHU_READONLY_PROD_TABLE_ID:
+        raise PermissionError(
+            f"🚨 SAFETY HARD-LOCK GUARD TRIPPED: Production table ({FEISHU_READONLY_PROD_TABLE_ID}) is STRICTLY READ-ONLY! "
+            f"Refusing any write/sync operation. Allowed target is development table ({FEISHU_WRITABLE_DEV_TABLE_ID})."
+        )
 
     if not all([app_id, app_secret, app_token, table_id]):
         print("Feishu is not configured; records remain pending.")
@@ -1725,7 +1732,10 @@ def list_pending(db: sqlite3.Connection) -> list[sqlite3.Row]:
     existing_cols = {row["name"] for row in db.execute("PRAGMA table_info(source_candidates)").fetchall()}
     v_col = "variant" if "variant" in existing_cols else "trim_config"
     v_id_col = "variant_id" if "variant_id" in existing_cols else "trim_config_id"
-    return db.execute(f"SELECT id, supplier, brand, model, model_id, {v_col} AS variant, {v_id_col} AS variant_id, manufacture_year, manufacture_month, stock_quantity, cost_exw_usd, notes, status FROM source_candidates WHERE status = 'pending'").fetchall()
+    stock_col = "stock_quantity" if "stock_quantity" in existing_cols else "NULL AS stock_quantity"
+    m_year_col = "manufacture_year" if "manufacture_year" in existing_cols else "NULL AS manufacture_year"
+    m_month_col = "manufacture_month" if "manufacture_month" in existing_cols else "NULL AS manufacture_month"
+    return db.execute(f"SELECT id, supplier, brand, model, model_id, {v_col} AS variant, {v_id_col} AS variant_id, {m_year_col}, {m_month_col}, {stock_col}, cost_exw_usd, notes, status FROM source_candidates WHERE status = 'pending'").fetchall()
 
 
 def action_list() -> int:

@@ -28,13 +28,26 @@ python -m mineru_pipeline list
 python -m mineru_pipeline sync
 ```
 
-需要指定飞书表时，在 `.env` 中配置：
+## 🛡️ 飞书多维表格隔离与安全硬防线 (Table Safety Boundaries)
+
+> [!CAUTION]
+> **🚨 核心生产安全红线：生产环境表格绝对只读！**
+> 任何开发者、脚本或 AI Agent 必须严格遵守读写隔离原则，违反将触发代码级 `PermissionError` 强行终止！
+
+* **Base Token**: `Is6Xb3btbazhFhsDXgFcqFG1nRc`
+* **🚨 生产环境表格 (`tblte61W3fKoXmSw`)**:
+  - **权限**: **严格只读 (READ-ONLY)**
+  - **用途**: 仅用于 AI 或开发者读取参考最新字段 Schema、枚举定义及对齐标准。
+  - **禁令**: 任何 API 自动写入 (`Create`)、修改 (`Update`)、清空 (`Clear`) 或删除 (`Delete`) 均被代码级安全熔断锁死！
+* **✅ 开发测试表格 (`tblAxwCCmDIG4xfx`)**:
+  - **权限**: **可读可写 (READ-WRITE)**
+  - **用途**: 所有的 CLI 调试、全量解析测试、`python -m mineru_pipeline sync` 自动写入的目标表格。
 
 ```env
-FEISHU_APP_ID=...
-FEISHU_APP_SECRET=...
+# .env 默认表配置 (切勿修改为生产表 ID tblte61W3fKoXmSw)
 FEISHU_BITABLE_APP_TOKEN=Is6Xb3btbazhFhsDXgFcqFG1nRc
-FEISHU_BITABLE_TABLE_ID=<vehicle_sources table id>
+FEISHU_BITABLE_TABLE_ID=tblAxwCCmDIG4xfx
+FEISHU_TABLE_VEHICLES=tblAxwCCmDIG4xfx
 ```
 
 人工修改必须走 CLI，不能直接改 SQLite：

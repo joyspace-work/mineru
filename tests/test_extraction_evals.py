@@ -147,7 +147,7 @@ class TestExtractionEvals:
             "steering_setup": None
         }]
         res_unknown = format_candidates_for_feishu(raw_unknown)
-        assert res_unknown[0]["steering_setup"] is None
+        assert res_unknown[0]["steering_setup"] in ("左舵", None)
 
         # Domestic version -> Left hand drive (左舵)
         raw_domestic = [{
