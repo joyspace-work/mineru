@@ -118,7 +118,7 @@
   * `app_secret`: (详见本地 .env 文件中的 FEISHU_APP_SECRET)
 * **目标位置**:
   * Base Token: `Is6Xb3btbazhFhsDXgFcqFG1nRc`
-  * **开发测试表格 (可读写)**: `tblgSRsRQ3zFr0fz`
+  * **全新开发测试表格 (可读写)**: `tblAxwCCmDIG4xfx`
   * **生产环境表格 (🚨 仅只读/绝对严禁写删)**: `tblte61W3fKoXmSw`
 
 ---

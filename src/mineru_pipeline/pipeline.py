@@ -1161,15 +1161,24 @@ def format_candidates_for_feishu(rows: list[dict[str, Any]]) -> list[dict[str, A
 
         model_id = row.get("model_id") or row.get("modelId") or get_or_create_model_id(final_brand, final_model, model_index)
 
-        trim_val = row.get("variant") or row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+        # Prioritize filename stem for variant (细分型号 = 文件名) if filename is specific
+        source_file_str = str(row.get("source_file") or row.get("_source_file") or "").strip()
+        filename_stem = Path(source_file_str).stem if source_file_str else ""
+        generic_name_tokens = ("价格", "报价", "未命名", "车源", "单价")
+        
+        if filename_stem and not any(t in filename_stem for t in generic_name_tokens):
+            trim_val = filename_stem
+        else:
+            trim_val = row.get("variant") or row.get("trimName") or row.get("trimConfig") or row.get("trim_config")
+
         if model_raw and str(model_raw).strip():
             m_raw_str = str(model_raw).strip()
             if m_raw_str.lower() != str(final_model).lower() and m_raw_str.lower() != str(final_brand).lower():
-                if trim_val:
+                if trim_val and trim_val != filename_stem:
                     t_str = str(trim_val).strip()
                     if m_raw_str not in t_str and t_str not in m_raw_str:
                         trim_val = f"{m_raw_str} {t_str}"
-                else:
+                elif not trim_val:
                     trim_val = m_raw_str
         
         # Enhanced price & location extraction
@@ -1359,10 +1368,10 @@ FEISHU_FIELD_MAP = get_feishu_field_map()
 
 FEISHU_TABLE_ALLOWED_FIELDS = {
     "供应商", "品牌", "型号", "model_id", "细分型号", "variant_id",
-    "生产年份", "生产月份", "外饰颜色", "内饰颜色", 
-    "单车型总库存", "细分车型库存", "颜色库存", "起订数量", "满订数量",
+    "生产年份", "生产月份", "供应商报价年份", "供应商报价月份",
+    "外饰颜色", "内饰颜色", "颜色库存", "起订数量", "满订数量",
     "下单后需要等待天数", "左右舵", "国际国内版本（多选）",
-    "库存状态（逐步废弃）", "人民币指导价", "EXW美金价", "FCA美金价", "FOB美金价",
+    "人民币指导价", "EXW美金价", "FCA美金价", "FOB美金价",
     "车源地点", "AI置信度", "经验", "素材源文件路径", "sync_batch_id",
 }
 
@@ -1639,7 +1648,7 @@ def sync_to_feishu(candidates: list[dict[str, Any]], dry_run: bool = False, clea
     app_id = os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID")
     app_secret = os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET")
     app_token = os.getenv("FEISHU_BITABLE_APP_TOKEN") or "Is6Xb3btbazhFhsDXgFcqFG1nRc"
-    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or "tblgSRsRQ3zFr0fz"
+    table_id = os.getenv("FEISHU_BITABLE_TABLE_ID") or os.getenv("FEISHU_TABLE_VEHICLES") or "tblAxwCCmDIG4xfx"
 
     # Production Table Write-Protection Guard (STRICT SAFETY)
     if table_id == "tblte61W3fKoXmSw":
